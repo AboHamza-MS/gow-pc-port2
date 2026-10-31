@@ -1,0 +1,13 @@
+[package]
+name = "fake-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Stand-in for gow-2005 used by the launcher's end-to-end tests: prints what it was started with."
+
+[dependencies]
+
+[dev-dependencies]
+gow-core = { path = "../gow-core" }
+tempfile = "3"

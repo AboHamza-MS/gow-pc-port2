@@ -1,0 +1,163 @@
+//! `ps2-tools <command> ...`: see the usage text below.
+
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use ps2_tools::{elfcheck, iso, vu1};
+
+const USAGE: &str = "usage:
+  ps2-tools verify-elf ELF [--map funcmap.csv] [--allow-modified]
+  ps2-tools iso-extract ISO [OUTDIR] [--list] [--only NAME,NAME] [--layout]
+  ps2-tools vu1-manifest apply ELF MANIFEST OUTDIR
+  ps2-tools vu1-manifest verify ELF MANIFEST CAPTURES
+  ps2-tools vu1-manifest extend ELF MANIFEST CAPTURES OUT
+  ps2-tools vu1-programs apply ELF MANIFEST OUTDIR
+  ps2-tools vu1-programs report ELF MANIFEST
+  ps2-tools iop-gen DUMPDIR OUTDIR [--overrides FILE]
+  ps2-tools vu1n-gen OUTDIR INPUT... [--heads heads.txt] [--parts N]";
+
+fn flag(args: &[String], name: &str) -> bool {
+    args.iter().any(|arg| arg == name)
+}
+
+fn option(args: &[String], name: &str) -> Option<String> {
+    args.iter().position(|arg| arg == name).and_then(|index| args.get(index + 1)).cloned()
+}
+
+/// The arguments that are neither a `--flag` nor the value of `--map`/`--only`.
+fn positionals(args: &[String]) -> Vec<&String> {
+    let mut result = Vec::new();
+    let mut skip = false;
+    for arg in args {
+        if skip {
+            skip = false;
+        } else if arg == "--map" || arg == "--only" {
+            skip = true;
+        } else if !arg.starts_with("--") {
+            result.push(arg);
+        }
+    }
+    result
+}
+
+fn verify_elf(args: &[String]) -> i32 {
+    let positional = positionals(args);
+    let Some(elf) = positional.first() else {
+        eprintln!("{USAGE}");
+        return 2;
+    };
+    let map = option(args, "--map")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("RustPortPS2/games/scus-97399/funcmap.csv"));
+    let report = match elfcheck::inspect(&PathBuf::from(elf), &map) {
+        Ok(report) => report,
+        Err(message) => {
+            eprintln!("[gow-elf] {message}");
+            return 1;
+        }
+    };
+    println!("{}", report.to_json());
+    if !report.known_edition() {
+        let warning = "[gow-elf] Modified ELF: the map fits, but its compatibility is NOT verified.";
+        if !flag(args, "--allow-modified") {
+            eprintln!("{warning} Use --allow-modified only for experimental tests.");
+            return 2;
+        }
+        println!("{warning}");
+    }
+    0
+}
+
+fn iso_extract(args: &[String]) -> i32 {
+    let positional = positionals(args);
+    let Some(iso_path) = positional.first() else {
+        eprintln!("{USAGE}");
+        return 2;
+    };
+    let options = iso::Options {
+        iso: PathBuf::from(iso_path),
+        output: positional.get(1).map(PathBuf::from),
+        list: flag(args, "--list"),
+        only: option(args, "--only").map(|names| names.to_uppercase().split(',').map(str::to_owned).collect()),
+        layout: flag(args, "--layout"),
+    };
+    match iso::run(&options) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("[iso-extract] {error}");
+            1
+        }
+    }
+}
+
+fn run(args: &[String]) -> Result<i32, String> {
+    let Some((command, rest)) = args.split_first() else {
+        return Err(USAGE.to_owned());
+    };
+    match (command.as_str(), rest) {
+        ("verify-elf", rest) => Ok(verify_elf(rest)),
+        ("iso-extract", rest) => Ok(iso_extract(rest)),
+        ("iop-gen", [dump, output, rest @ ..]) => {
+            let overrides = match option(rest, "--overrides") {
+                Some(path) => std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?,
+                None => ps2_tools::iop_gen::DEFAULT_OVERRIDES.to_owned(),
+            };
+            ps2_tools::iop_gen::run(&PathBuf::from(dump), &PathBuf::from(output), &overrides)?;
+            Ok(0)
+        }
+        ("vu1n-gen", [output, rest @ ..]) => {
+            let mut inputs = Vec::new();
+            let (mut heads, mut parts) = (None, 6usize);
+            let mut index = 0;
+            while index < rest.len() {
+                match rest[index].as_str() {
+                    "--heads" => {
+                        heads = Some(PathBuf::from(rest.get(index + 1).ok_or(USAGE)?));
+                        index += 2;
+                    }
+                    "--parts" => {
+                        parts = rest.get(index + 1).and_then(|n| n.parse().ok()).ok_or(USAGE)?;
+                        index += 2;
+                    }
+                    other => {
+                        inputs.push(PathBuf::from(other));
+                        index += 1;
+                    }
+                }
+            }
+            let options = ps2_tools::vu1n_gen::Options { output: PathBuf::from(output), inputs, heads, parts };
+            println!("{}", ps2_tools::vu1n_gen::run(&options)?);
+            Ok(0)
+        }
+        ("vu1-manifest", [sub, elf, manifest, captures]) => match sub.as_str() {
+            "apply" => vu1::apply_manifest(&PathBuf::from(elf), &PathBuf::from(manifest), &PathBuf::from(captures)),
+            "verify" => vu1::verify_manifest(&PathBuf::from(elf), &PathBuf::from(manifest), &PathBuf::from(captures)),
+            _ => Err(USAGE.to_owned()),
+        },
+        ("vu1-manifest", [sub, elf, manifest, captures, output]) if sub == "extend" => vu1::extend_manifest(
+            &PathBuf::from(elf),
+            &PathBuf::from(manifest),
+            &PathBuf::from(captures),
+            &PathBuf::from(output),
+        ),
+        ("vu1-programs", [sub, elf, manifest, rest @ ..]) => match (sub.as_str(), rest) {
+            ("apply", [folder]) => {
+                vu1::apply_programs(&PathBuf::from(elf), &PathBuf::from(manifest), &PathBuf::from(folder))
+            }
+            ("report", []) => vu1::report_programs(&PathBuf::from(elf), &PathBuf::from(manifest)),
+            _ => Err(USAGE.to_owned()),
+        },
+        _ => Err(USAGE.to_owned()),
+    }
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match run(&args) {
+        Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
+        Err(message) => {
+            eprintln!("{message}");
+            ExitCode::from(2)
+        }
+    }
+}

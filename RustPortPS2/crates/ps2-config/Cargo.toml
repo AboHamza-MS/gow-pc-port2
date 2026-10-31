@@ -1,0 +1,13 @@
+[package]
+name = "ps2-config"
+description = "TOML configuration and Ghidra function map of the PlayStation 2 recompiler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ps2-elf.workspace = true
+toml.workspace = true

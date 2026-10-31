@@ -1,0 +1,16 @@
+[package]
+name = "ps2-tools"
+description = "The installer's helper tools: ELF identity, disc extraction, VU1 microcode images and the AOT code generators"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ps2-tools"
+path = "src/main.rs"
+
+[dependencies]
+ps2-parity.workspace = true

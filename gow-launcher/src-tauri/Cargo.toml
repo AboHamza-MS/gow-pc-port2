@@ -1,0 +1,21 @@
+[package]
+name = "gow-launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "God of War (2005): PC Launcher"
+
+[lib]
+name = "gow_launcher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dependencies]
+gow-core = { version = "0.1.0", path = "../crates/gow-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tauri = { version = "2.12.5", features = [] }
+tauri-plugin-dialog = "2.8.3"
+tauri-plugin-single-instance = "2.5.4"

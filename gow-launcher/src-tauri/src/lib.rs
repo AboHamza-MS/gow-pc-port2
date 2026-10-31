@@ -1,0 +1,695 @@
+//! Tauri shell of the launcher: commands and events over `gow-core`. No launcher logic lives here.
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use gow_core::credential;
+use gow_core::game::{self, DataState, DetectedPaths, ExecutableState, GameState};
+use gow_core::gamepad::{self, Capture, CaptureResult};
+use gow_core::gpu::{self, GraphicsCard};
+use gow_core::installer::{self, InstallRequest, Installation};
+use gow_core::iso::{self, IsoValidation};
+use gow_core::launch::LaunchError;
+use gow_core::optimizer::{self, Optimizer, OptimizerSnapshot};
+use gow_core::paths::AppPaths;
+use gow_core::process::{self, GameSession, StartOptions};
+use gow_core::settings::{DisplayInfo, Settings};
+use gow_core::{display, kit, legacy, shortcut, textures};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+
+const ICON: &[u8] = include_bytes!("../../assets/icon-source.png");
+
+struct AppState {
+    paths: AppPaths,
+    settings: Mutex<Settings>,
+    game: Mutex<Option<GameSession>>,
+    installation: Mutex<Option<Installation>>,
+    optimizer: Optimizer,
+    gamepad_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    searching: AtomicBool,
+    textures_running: AtomicBool,
+}
+
+impl AppState {
+    /// Applies `change` to the settings, writes the file and returns the new value.
+    fn update(&self, change: impl FnOnce(&mut Settings)) -> Settings {
+        let mut settings = self.settings.lock().unwrap();
+        change(&mut settings);
+        let _ = settings.save(&self.paths.settings_file());
+        settings.clone()
+    }
+
+    fn snapshot(&self) -> Settings {
+        self.settings.lock().unwrap().clone()
+    }
+}
+
+fn launcher_dir() -> PathBuf {
+    std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)).unwrap_or_default()
+}
+
+fn install_script(state: &AppState) -> Option<PathBuf> {
+    installer::find_install_script(&state.paths.kit_dir(), &launcher_dir())
+}
+
+fn display_info(window: &WebviewWindow) -> DisplayInfo {
+    let size = window.primary_monitor().ok().flatten().map(|monitor| *monitor.size());
+    let fallback = DisplayInfo::default();
+    DisplayInfo {
+        width_px: size.map_or(fallback.width_px, |s| s.width),
+        height_px: size.map_or(fallback.height_px, |s| s.height),
+        hz: display::refresh_rate(),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------- bootstrap
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LaunchArguments {
+    play: bool,
+    wizard: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Bootstrap {
+    settings: Settings,
+    version: &'static str,
+    platform: &'static str,
+    display: DisplayInfo,
+    graphics_cards: Vec<GraphicsCard>,
+    data_directory: String,
+    arguments: LaunchArguments,
+}
+
+/// First call of the interface: migrates the settings (needs the system language and the display) and returns
+/// everything it needs to draw.
+#[tauri::command]
+fn bootstrap(window: WebviewWindow, state: State<'_, AppState>, locale: String) -> Bootstrap {
+    let display = display_info(&window);
+    let settings = state.update(|settings| settings.migrate(locale.to_lowercase().starts_with("pt"), &display));
+    let arguments: Vec<String> = std::env::args().collect();
+    Bootstrap {
+        settings,
+        version: env!("CARGO_PKG_VERSION"),
+        platform: if cfg!(windows) { "windows" } else { "linux" },
+        display,
+        graphics_cards: gpu::graphics_cards(),
+        data_directory: state.paths.data_dir().to_string_lossy().into_owned(),
+        arguments: LaunchArguments {
+            play: arguments.iter().any(|a| a == "--play"),
+            wizard: arguments.iter().any(|a| a == "--wizard"),
+        },
+    }
+}
+
+/// Merges a partial settings object, saves it and returns the whole.
+#[tauri::command]
+fn patch_settings(state: State<'_, AppState>, patch: serde_json::Value) -> Result<Settings, String> {
+    let serde_json::Value::Object(patch) = patch else {
+        return Err("the patch must be an object".into());
+    };
+    let reconfigure = patch.keys().any(|key| key.starts_with("optimiz"));
+    let mut error = None;
+    let settings = state.update(|settings| {
+        let mut value = serde_json::to_value(&*settings).unwrap_or_default();
+        if let serde_json::Value::Object(map) = &mut value {
+            map.extend(patch);
+        }
+        match serde_json::from_value::<Settings>(value) {
+            Ok(merged) => *settings = merged,
+            Err(failure) => error = Some(failure.to_string()),
+        }
+    });
+    if let Some(error) = error {
+        return Err(error);
+    }
+    if reconfigure {
+        configure_optimizer(&state, &settings);
+    }
+    Ok(settings)
+}
+
+fn configure_optimizer(state: &AppState, settings: &Settings) {
+    state.optimizer.configure(
+        &settings.optimization_destination,
+        settings.optimization_enabled,
+        settings.optimize_during_game,
+        settings.optimization_compiled,
+    );
+}
+
+#[tauri::command]
+fn reset_game_options(window: WebviewWindow, state: State<'_, AppState>) -> Settings {
+    let display = display_info(&window);
+    state.update(|settings| settings.reset_game_options(&display))
+}
+
+// ---------------------------------------------------------------------------------------------- game files
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GameStatus {
+    game: GameState,
+    data: DataState,
+    executable: ExecutableState,
+    ready: bool,
+}
+
+#[tauri::command]
+fn game_status(state: State<'_, AppState>) -> GameStatus {
+    let settings = state.snapshot();
+    let game = game::check_game(&settings.elf, &settings.executable);
+    let data = game::check_data(&settings.elf, &settings.iso);
+    let executable = game::check_executable(&settings.executable);
+    let ready = game.valid && data.ok && executable.executable;
+    GameStatus { game, data, executable, ready }
+}
+
+/// Looks for the ELF and the runner. Without `force`, only the empty fields are filled.
+#[tauri::command]
+fn detect_paths(state: State<'_, AppState>, force: bool) -> Settings {
+    let found: DetectedPaths = game::detected_paths(&launcher_dir(), &gow_core::paths::default_destination());
+    state.update(|settings| {
+        if (force || settings.elf.is_empty()) && !found.elf.is_empty() {
+            settings.elf = found.elf.clone();
+        }
+        if (force || settings.executable.is_empty()) && !found.executable.is_empty() {
+            settings.executable = found.executable.clone();
+        }
+    })
+}
+
+#[tauri::command]
+fn detected_iso() -> String {
+    game::detected_paths(&launcher_dir(), &gow_core::paths::default_destination()).iso
+}
+
+#[tauri::command]
+fn memory_card_directory(elf: String) -> String {
+    game::memory_card_directory(&elf)
+}
+
+// ---------------------------------------------------------------------------------------------- playing
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CommandError {
+    key: String,
+    detail: String,
+}
+
+impl From<LaunchError> for CommandError {
+    fn from(error: LaunchError) -> Self {
+        Self { key: error.key().to_string(), detail: error.detail().to_string() }
+    }
+}
+
+#[tauri::command]
+fn start_game(app: AppHandle, window: WebviewWindow, state: State<'_, AppState>) -> Result<(), CommandError> {
+    if state.game.lock().unwrap().is_some() {
+        return Ok(());
+    }
+    // If a rebuild finished since last time, the active copy of the executable is updated before opening.
+    state.optimizer.prepare_to_play();
+    let settings = state.snapshot();
+    let options = StartOptions { vu1_capture: state.optimizer.capture_directory() };
+    let finished_app = app.clone();
+    let session = process::start(&settings, &options, &state.paths, move |finished| {
+        let state = finished_app.state::<AppState>();
+        *state.game.lock().unwrap() = None;
+        let updated = state.update(|s| {
+            s.seconds_played += finished.seconds;
+            s.last_session = finished.seconds;
+        });
+        state.optimizer.game_state_changed(false);
+        if let Some(window) = finished_app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+        let _ = finished_app.emit("settings-changed", updated);
+        let _ = finished_app.emit("game-running", false);
+        let _ = finished_app.emit("game-finished", finished);
+    })?;
+    *state.game.lock().unwrap() = Some(session);
+    state.optimizer.game_state_changed(true);
+    let _ = app.emit("game-running", true);
+    if settings.minimize_on_play {
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(600));
+            if app.state::<AppState>().game.lock().unwrap().is_some() {
+                let _ = window.minimize();
+            }
+        });
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_game(state: State<'_, AppState>) {
+    if let Some(session) = *state.game.lock().unwrap() {
+        session.stop();
+    }
+}
+
+#[tauri::command]
+fn is_game_running(state: State<'_, AppState>) -> bool {
+    state.game.lock().unwrap().is_some()
+}
+
+/// Closes the window for good, skipping the check that holds it open while a texture pack is being installed. The
+/// interface calls it after the player confirmed (see `close-blocked`).
+#[tauri::command]
+fn force_close(window: WebviewWindow) {
+    let _ = window.destroy();
+}
+
+// ---------------------------------------------------------------------------------------------- shell helpers
+
+#[tauri::command]
+fn open_log(state: State<'_, AppState>) {
+    let log = state.paths.last_log();
+    let target = if log.exists() { log } else { state.paths.logs_dir() };
+    let _ = shortcut::open_path(&target);
+}
+
+#[tauri::command]
+fn open_install_log(state: State<'_, AppState>) {
+    let _ = shortcut::open_path(&state.paths.logs_dir().join("install.log"));
+}
+
+#[tauri::command]
+fn open_optimizer_log(state: State<'_, AppState>) {
+    let _ = shortcut::open_path(&state.paths.logs_dir().join("optimize.log"));
+}
+
+#[tauri::command]
+fn open_directory(path: String) {
+    let target = shortcut::folder_of(Path::new(&path));
+    let _ = std::fs::create_dir_all(&target);
+    let _ = shortcut::open_path(&target);
+}
+
+/// Opens the `textures` folder of the installation (creating it with its `replacements` folder, as the installer does).
+/// False when no game files are set yet.
+#[tauri::command]
+fn open_textures_folder(state: State<'_, AppState>) -> bool {
+    let elf = state.snapshot().elf;
+    let (Some(folder), Some(replacements)) = (game::textures_folder(&elf), game::texture_replacements_folder(&elf))
+    else {
+        return false;
+    };
+    let _ = std::fs::create_dir_all(&replacements);
+    shortcut::open_path(&folder).is_ok()
+}
+
+/// Size/date of the community pack and what is installed now. The metadata request leaves the UI thread.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TexturePackInfo {
+    meta: Option<textures::PackMeta>,
+    status: textures::PackStatus,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TexturePackOutcome {
+    ok: bool,
+    status: Option<textures::PackStatus>,
+    error: Option<String>,
+    /// Stable code the interface turns into a translated message.
+    code: Option<String>,
+}
+
+#[tauri::command]
+async fn texture_pack_info(state: State<'_, AppState>) -> Result<TexturePackInfo, String> {
+    let elf = state.snapshot().elf;
+    let source = textures::PackSource::default();
+    let (meta, status) =
+        tauri::async_runtime::spawn_blocking(move || (textures::meta(&source).ok(), textures::status(&elf)))
+            .await
+            .map_err(|error| error.to_string())?;
+    Ok(TexturePackInfo { meta, status })
+}
+
+/// Downloads the pack, extracts it over `textures/replacements` and deletes the archive, reporting progress as events.
+#[tauri::command]
+fn texture_pack_install(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let elf = state.snapshot().elf;
+    if state.textures_running.swap(true, Ordering::SeqCst) {
+        return Err("a texture download is already running".into());
+    }
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let source = textures::PackSource::default();
+        let progress_app = handle.clone();
+        let result = textures::install(&elf, &source, &|progress| {
+            let _ = progress_app.emit("texture-pack-progress", progress);
+        });
+        handle.state::<AppState>().textures_running.store(false, Ordering::SeqCst);
+        let outcome = match result {
+            Ok(status) => TexturePackOutcome { ok: true, status: Some(status), error: None, code: None },
+            Err(error) => TexturePackOutcome {
+                ok: false,
+                status: None,
+                error: Some(error.to_string()),
+                code: Some(error.code().into()),
+            },
+        };
+        let _ = handle.emit("texture-pack-done", outcome);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn create_shortcut(state: State<'_, AppState>, desktop: bool) -> bool {
+    let Ok(executable) = std::env::current_exe() else { return false };
+    shortcut::create(&executable, &state.paths.icon(), desktop).is_ok()
+}
+
+// ---------------------------------------------------------------------------------------------- RetroAchievements
+
+#[tauri::command]
+fn ra_has_credential(user: String) -> bool {
+    credential::has_retro_achievements(&user)
+}
+
+#[tauri::command]
+fn ra_save_credential(user: String, password: String) -> bool {
+    credential::save_retro_achievements(&user, &password)
+}
+
+#[tauri::command]
+fn ra_clear_credential() -> bool {
+    credential::clear_retro_achievements()
+}
+
+// ---------------------------------------------------------------------------------------------- gamepad
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct GamepadFailure {
+    reason: &'static str,
+}
+
+#[tauri::command]
+fn gamepad_begin(app: AppHandle, state: State<'_, AppState>) -> bool {
+    if !gamepad::supported() {
+        let _ = app.emit("gamepad-failed", GamepadFailure { reason: "unsupported" });
+        return false;
+    }
+    let cancel = Arc::new(AtomicBool::new(false));
+    if let Some(previous) = state.gamepad_cancel.lock().unwrap().replace(cancel.clone()) {
+        previous.store(true, Ordering::Relaxed);
+    }
+    std::thread::spawn(move || {
+        let mut capture = Capture::new();
+        while !cancel.load(Ordering::Relaxed) {
+            if let Some(result) = capture.poll(gamepad::read_buttons(), Instant::now()) {
+                match result {
+                    CaptureResult::Captured(captured) => {
+                        let _ = app.emit("gamepad-captured", captured);
+                    }
+                    CaptureResult::Unknown => {
+                        let _ = app.emit("gamepad-failed", GamepadFailure { reason: "unknown" });
+                    }
+                }
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    });
+    true
+}
+
+#[tauri::command]
+fn gamepad_cancel(state: State<'_, AppState>) {
+    if let Some(cancel) = state.gamepad_cancel.lock().unwrap().take() {
+        cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------- installation wizard
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WizardInfo {
+    environment: installer::Environment,
+    has_manifest: bool,
+    default_destination: String,
+}
+
+#[tauri::command]
+fn wizard_info(state: State<'_, AppState>) -> WizardInfo {
+    let script = install_script(&state);
+    WizardInfo {
+        environment: installer::check_environment(script.as_deref()),
+        has_manifest: script.as_deref().is_some_and(installer::has_manifest),
+        default_destination: installer::default_destination(),
+    }
+}
+
+#[tauri::command]
+fn validate_iso(path: String) -> IsoValidation {
+    iso::validate_iso(&path)
+}
+
+#[tauri::command]
+fn validate_destination(path: String) -> installer::DestinationValidation {
+    installer::validate_destination(&path)
+}
+
+/// Searches the PC for the original ISO in the background; reports through `iso-searching` and `iso-found`.
+#[tauri::command]
+fn find_iso(app: AppHandle, state: State<'_, AppState>) {
+    if state.searching.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let _ = app.emit("iso-searching", true);
+    std::thread::spawn(move || {
+        let found = iso::find_original_iso();
+        app.state::<AppState>().searching.store(false, Ordering::Relaxed);
+        let _ = app.emit("iso-searching", false);
+        if let Some(found) = found {
+            let _ = app.emit("iso-found", found.to_string_lossy().into_owned());
+        }
+    });
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallArguments {
+    iso: String,
+    destination: String,
+    install_tools: bool,
+    vu1_memory_limit_gb: u8,
+}
+
+#[tauri::command]
+fn install_start(app: AppHandle, state: State<'_, AppState>, arguments: InstallArguments) -> Result<(), String> {
+    if state.installation.lock().unwrap().is_some() {
+        return Err("an installation is already running".into());
+    }
+    let script = install_script(&state).ok_or("install.ps1 was not found next to the launcher.")?;
+    let request = InstallRequest {
+        script,
+        iso: arguments.iso,
+        destination: arguments.destination,
+        install_tools: arguments.install_tools,
+        vu1_memory_limit_gb: arguments.vu1_memory_limit_gb,
+        log_file: state.paths.logs_dir().join("install.log"),
+    };
+    let (progress_app, done_app) = (app.clone(), app);
+    let installation = installer::start(
+        request,
+        move |progress| {
+            let _ = progress_app.emit("install-progress", progress);
+        },
+        move |outcome| {
+            *done_app.state::<AppState>().installation.lock().unwrap() = None;
+            let _ = done_app.emit("install-done", outcome);
+        },
+    )
+    .map_err(|error| format!("Could not start PowerShell: {error}"))?;
+    *state.installation.lock().unwrap() = Some(installation);
+    Ok(())
+}
+
+#[tauri::command]
+fn install_cancel(state: State<'_, AppState>) {
+    if let Some(installation) = state.installation.lock().unwrap().as_ref() {
+        installation.cancel();
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompleteArguments {
+    destination: String,
+    elf: String,
+    executable: String,
+}
+
+/// The wizard succeeded: the game now runs from a copy (`<destination>/active`), so the optimizer can rebuild without
+/// locking the executable. The ISO is no longer needed.
+#[tauri::command]
+fn install_complete(state: State<'_, AppState>, arguments: CompleteArguments) -> Settings {
+    let active = optimizer::register_installation(Path::new(&arguments.executable), Path::new(&arguments.destination));
+    state.optimizer.registered(&arguments.destination);
+    let compiled = state.optimizer.snapshot().compiled;
+    let settings = state.update(|settings| {
+        settings.optimization_destination = arguments.destination.clone();
+        settings.optimization_compiled = compiled;
+        settings.elf = arguments.elf.clone();
+        settings.executable = active.to_string_lossy().into_owned();
+        settings.iso.clear();
+    });
+    configure_optimizer(&state, &settings);
+    settings
+}
+
+// ---------------------------------------------------------------------------------------------- optimizer
+
+#[tauri::command]
+fn optimizer_snapshot(state: State<'_, AppState>) -> OptimizerSnapshot {
+    state.optimizer.snapshot()
+}
+
+#[tauri::command]
+fn optimize_now(state: State<'_, AppState>) {
+    state.optimizer.optimize_now();
+}
+
+// ---------------------------------------------------------------------------------------------- startup
+
+fn prepare_data_directory(paths: &AppPaths) {
+    let _ = std::fs::create_dir_all(paths.logs_dir());
+    if !paths.icon().exists() {
+        let _ = std::fs::write(paths.icon(), ICON);
+    }
+}
+
+/// The installation kit travels inside the launcher's installer (a Tauri resource); it is extracted into the data
+/// folder, which `install.ps1` can write to. Not bundled (development): the kit is found in the repository instead.
+fn extract_kit(app: &tauri::App, paths: &AppPaths) {
+    let Ok(resources) = app.path().resource_dir() else { return };
+    let bundled = resources.join("kit");
+    if bundled.is_dir() {
+        let _ = kit::sync(&bundled, &paths.kit_dir(), env!("CARGO_PKG_VERSION"));
+    }
+}
+
+fn load_settings(paths: &AppPaths) -> Settings {
+    if paths.settings_file().exists() {
+        return Settings::load(&paths.settings_file());
+    }
+    // First run of this launcher: bring over what the Qt launcher stored.
+    let imported = legacy::import_previous().unwrap_or_default();
+    let _ = imported.save(&paths.settings_file());
+    imported
+}
+
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _arguments, _directory| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
+        .setup(|app| {
+            let paths = AppPaths::system();
+            prepare_data_directory(&paths);
+            extract_kit(app, &paths);
+            let settings = load_settings(&paths);
+
+            let (notify_app, compiled_app) = (app.handle().clone(), app.handle().clone());
+            let optimizer = Optimizer::new(
+                paths.logs_dir().join("optimize.log"),
+                move |snapshot| {
+                    let _ = notify_app.emit("optimizer", snapshot);
+                },
+                move |compiled| {
+                    let state = compiled_app.state::<AppState>();
+                    let updated = state.update(|s| s.optimization_compiled = compiled);
+                    let _ = compiled_app.emit("settings-changed", updated);
+                },
+            );
+            let state = AppState {
+                paths,
+                settings: Mutex::new(settings.clone()),
+                game: Mutex::new(None),
+                installation: Mutex::new(None),
+                optimizer,
+                gamepad_cancel: Mutex::new(None),
+                searching: AtomicBool::new(false),
+                textures_running: AtomicBool::new(false),
+            };
+            state.optimizer.set_script(install_script(&state));
+            configure_optimizer(&state, &settings);
+            state.optimizer.spawn_timer();
+            app.manage(state);
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // A texture pack takes minutes to install and a close (the X, Alt+F4, the taskbar) would throw it away: the
+            // window stays open and the interface asks the player first.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.app_handle().state::<AppState>().textures_running.load(Ordering::SeqCst) {
+                    api.prevent_close();
+                    let _ = window.emit("close-blocked", ());
+                }
+            }
+            if let tauri::WindowEvent::Destroyed = event {
+                let state = window.app_handle().state::<AppState>();
+                // The game stays open if the launcher is closed; the build tools do not.
+                state.optimizer.shutdown();
+                let installation = state.installation.lock().unwrap();
+                if let Some(installation) = installation.as_ref() {
+                    installation.cancel();
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            bootstrap,
+            patch_settings,
+            reset_game_options,
+            game_status,
+            detect_paths,
+            detected_iso,
+            memory_card_directory,
+            start_game,
+            stop_game,
+            is_game_running,
+            force_close,
+            open_log,
+            open_install_log,
+            open_optimizer_log,
+            open_directory,
+            open_textures_folder,
+            texture_pack_info,
+            texture_pack_install,
+            create_shortcut,
+            ra_has_credential,
+            ra_save_credential,
+            ra_clear_credential,
+            gamepad_begin,
+            gamepad_cancel,
+            wizard_info,
+            validate_iso,
+            validate_destination,
+            find_iso,
+            install_start,
+            install_cancel,
+            install_complete,
+            optimizer_snapshot,
+            optimize_now,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running the launcher");
+}

@@ -1,0 +1,93 @@
+// GOW-Port: entry points of the God of War overrides (SCUS-97399). Each module (gow_*.cpp in this folder) defines the
+// ones of its area; gow_overrides.cpp binds them to the game's addresses.
+//
+// Every override has the signature of a recompiled function. It calls the original for everything it does not
+// replace, and when the call comes back with `ctx->pc` different from the entry (a resumption after an EE
+// checkpoint) it calls the original without further ado.
+#pragma once
+
+#include "gow_guest.h"
+#include <cstddef>
+#include <string>
+
+namespace gow_game
+{
+    // ---- pad (gow_pad2.cpp, gow_pad_test.cpp, gow_warp.cpp) -------------------------------------------------------
+    void gowPad2Init(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowPad2CreateSocket(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowPad2DeleteSocket(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowPad2GetState(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowPad2GetButtonProfile(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowPad2Read(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowVibGetProfile(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowVibSetActParam(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+
+    // GOW_PAD_TEST=1: scripted input and captures; `state` is the 32-byte pad status the script edits.
+    bool padSmokeTestEnabled();
+    void padSmokeTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint8_t (&state)[32]);
+
+    // GOW_WARP: called from the pad read, once per frame. gowCurrentZone is the name of the zone Kratos is in.
+    void gowWarpPoll(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    std::string gowCurrentZone(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+
+    // ---- replacements of system calls (gow_system.cpp, gow_display.cpp) ---------------------------------------------
+    void gowIpuInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowRand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowCdReadDvdDualInfo(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowLoadStartModuleBuffer(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDelayThread(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowTimerSystemNoop(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void configureGowCdImage();
+
+    void gowDisplaySetup(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowGsFinishHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowGsFinishInstall(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowRenderServerDispatch(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+
+    // ---- object guard and heap (gow_heap_guard.cpp) -----------------------------------------------------------------
+    void gowOperatorNew(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowOperatorDelete(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowGuardTimelineChannels(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowGuardNodeDestructor(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowGuardCloneList(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowHeapZeroAlloc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowFlashQueueDrain(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowFlashQueueAppend(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+
+    // ---- movies (gow_movie.cpp) ---------------------------------------------------------------------------------------
+    void gowSkipMovieLoad(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowSkipMovieStart(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowSkipMovieReady(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowSkipMovieNoop(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowMovieOverrideLoad(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowMovieStreamService(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowMovieVideoRingWrite(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowMovieNodata(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagBonusMovie(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagStreamRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    size_t movieOverrideCount(); // entries of GOW_MOVIE_OVERRIDE
+
+    // ---- diagnostics (gow_diag_*.cpp): each logs what it reads and then runs the original ---------------------------------
+    void gowDiagPathSelect(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagAttachNode(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowSnd989SendCommand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagSoundGroups(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+
+    void gowDiagCalcWorldMatrix(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagController(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagBlend(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagFlashReady(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagAnimationTime(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagAnimationDuration(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+
+    void gowDiagFilteredCopy(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagInitUnpack(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagUpdateAddress(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagPrimContext(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagModelServer(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagGrobMaster(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagModelContext(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagProcessModel(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagModelClip(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowDiagPrimPoll(uint8_t *rdram, double seconds); // GOW_EE_PRIM_DIAG samples, called from the pad read
+}

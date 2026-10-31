@@ -1,0 +1,125 @@
+#pragma once
+
+#include "iop_cpu.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <map>
+
+namespace ps2x::iop::detail
+{
+    class IopMemory;
+
+    enum class IopThreadState : uint8_t
+    {
+        Dormant,
+        Ready,
+        Running,
+        Sleep,
+        Delay,
+        Semaphore,
+        EventFlag,
+        Suspended,
+        Dead,
+    };
+
+    struct IopThread
+    {
+        int id = 0;
+        IopThreadState state = IopThreadState::Dormant;
+        IopCpuState cpu;
+        uint32_t entry = 0;
+        uint32_t stackBase = 0;
+        uint32_t stackSize = 0;
+        uint32_t priority = 0x40;
+        uint32_t initialPriority = 0x40;
+        uint32_t option = 0;
+        uint32_t attr = 0;
+        uint64_t wakeCycle = 0;
+        int waitId = 0;
+        uint32_t waitBits = 0;
+        uint32_t waitMode = 0;
+        uint32_t waitResultAddress = 0;
+        int wakeupCount = 0;
+    };
+
+    class IopKernel
+    {
+    public:
+        explicit IopKernel(IopMemory &memory) noexcept;
+
+        void reset();
+
+        [[nodiscard]] bool dispatchThreadImport(uint16_t ordinal, IopCpuState &cpu, uint64_t currentCycle);
+        [[nodiscard]] bool dispatchSemaphoreImport(uint16_t ordinal, IopCpuState &cpu);
+        [[nodiscard]] bool dispatchEventImport(uint16_t ordinal, IopCpuState &cpu);
+
+        [[nodiscard]] int createInternalEventFlag(uint32_t attr, uint32_t option, uint32_t bits);
+        [[nodiscard]] bool setInternalEventFlag(int id, uint32_t bits);
+
+        void sleepCurrent(IopCpuState &cpu);
+        void delayCurrentUntil(uint64_t wakeCycle, IopCpuState &cpu);
+
+        [[nodiscard]] IopThread *beginNextReady(uint64_t currentCycle);
+        [[nodiscard]] uint64_t nextWakeCycle(uint64_t fallback) const;
+        void endTimeslice(IopThread &thread, uint32_t returnSentinel);
+        void cleanupDeadThreads();
+        void terminateThreadsInRange(uint32_t base, uint32_t size);
+
+        // GOW-Port: wait outside a thread (RPC server or callback run without a current thread). The emulator
+        // lets the ready threads run until the condition is met; it returns whether it was met.
+        using OutsideThreadWait = std::function<bool(const std::function<bool()> &)>;
+        void setOutsideThreadWait(OutsideThreadWait wait) { m_outsideThreadWait = std::move(wait); }
+
+        [[nodiscard]] size_t threadCount() const noexcept { return m_threads.size(); }
+        // GOW-Port: there is some thread ready to run (used by IopRpcBridge after every RPC).
+        [[nodiscard]] bool hasReadyThread() const noexcept
+        {
+            for (const auto &[id, thread] : m_threads)
+                if (thread.state == IopThreadState::Ready)
+                    return true;
+            return false;
+        }
+
+    private:
+        struct Semaphore
+        {
+            int id = 0;
+            uint32_t attr = 0;
+            uint32_t option = 0;
+            int current = 0;
+            int maximum = 1;
+        };
+
+        struct EventFlag
+        {
+            int id = 0;
+            uint32_t bits = 0;
+            uint32_t attr = 0;
+            uint32_t option = 0;
+        };
+
+        [[nodiscard]] bool referThreadStatus(int id, uint32_t outputAddress);
+        void wakeOneSemaphore(int id);
+        [[nodiscard]] static bool eventSatisfied(const EventFlag &event, uint32_t bits, uint32_t mode);
+        void wakeEventWaiters(EventFlag &event);
+
+        IopMemory &m_memory;
+        std::map<int, IopThread> m_threads;
+        std::map<int, Semaphore> m_semaphores;
+        std::map<int, EventFlag> m_eventFlags;
+        uint32_t m_nextThreadId = 1;
+        uint32_t m_nextSemaphoreId = 1;
+        uint32_t m_nextEventFlagId = 1;
+        IopThread *m_currentThread = nullptr;
+        OutsideThreadWait m_outsideThreadWait;
+        // GOW-Port: the EE advances the IOP ~1.5 million times per second by a few cycles, almost always
+        // with no ready threads. m_version changes with every operation that can change the threads; if it has not changed
+        // since the last beginNextReady with no ready threads, the result is the same until m_idleUntil (the
+        // first wake-up of a thread in Delay) and there is no need to walk m_threads.
+        uint64_t m_version = 1;
+        uint64_t m_idleVersion = 0;
+        uint64_t m_idleUntil = 0;
+    };
+}

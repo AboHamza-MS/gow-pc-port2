@@ -1,0 +1,86 @@
+# Status and known limitations
+
+What the port does today, what it does not, and how much of it has actually been exercised. This page is deliberately
+blunt: you should hear about a limitation before you spend an evening fighting it.
+
+Last reviewed: October 2026, against the code in this repository.
+
+## Platform support
+
+| | Windows | Linux |
+|---|---|---|
+| Installer (`install.ps1` / `install.sh`) | Yes | Yes |
+| Builds `gow-2005` | Yes | Yes |
+| Played and measured | Yes | Yes, but not re-measured recently |
+| Automated coverage of the runtime or the installers | **None** | **None** |
+| Launcher and setup wizard | Launcher + wizard are the main path | Launcher builds; the wizard drives `install.sh` but has never run on a real Linux machine |
+| Rumble | Yes | No |
+| Save-file validation | Loading and saving verified; a **hang after saving** is open (see below) | Not re-verified recently |
+
+> [!WARNING]
+> **Linux is experimental.** Everything needed is in the repository (`install.sh`, the GLFW/GL presentation path,
+> `run_gow.sh`, the `.deb`/AppImage packaging and the loader/scheduler work), and the game builds and runs there. What
+> is missing is proof: no CI job compiles the runtime or runs an installer on any platform, the latest Linux
+> builds have not been measured, vibration is not implemented, the launcher's setup wizard drives
+> `install.sh` with its own arguments and `--check-deps` (unit-tested, never run on a real Linux machine), and the Windows
+> installer is the only one that records `game-elf.sha256` for the launcher's fingerprint check. Don't treat a Linux
+> report as a supported configuration yet.
+
+> **Windows** is the platform the port is developed and measured on. That doesn't mean everything is proven: saves,
+> long sessions and most areas are still unvalidated, and the hang after saving is open. Treat both platforms as work
+> in progress, with Linux further behind.
+
+## What works
+
+- **The whole game is recompiled**, not emulated: about 6,400 functions of `SCUS_973.99` become C++ and run natively.
+- **Rendering** is a native OpenGL renderer with GPU render targets, internal resolution 1×–6× (2× recommended),
+  bicubic/bilinear/pixel scaling, FXAA, 480p progressive mode, Hor+ widescreen (4:3, 16:9, 16:10, 21:9).
+- **Movies** play natively with their sound (MPEG-2 through libmpeg2), including the game's widescreen `.PSW` versions.
+- **Sound** runs on a native sound engine fed by the game's own IOP libraries; there is no SPU2 emulation.
+- **Memory card** is a PCSX2-compatible image; loading and saving work, with thumbnails and dates.
+- **Input**: keyboard and mouse with a full remappable layout, gamepads with the PS2 or the modern layout, vibration on
+  Windows.
+- **PC features**: cheat menu (F2), target lock (Alt), agile combat, custom texture packs, RetroAchievements,
+  background optimization, launcher in English and Brazilian Portuguese.
+- **Verification**: the recompiler's output is compared byte for byte against PS2Recomp's C++ recompiler, and the GS,
+  VU1 and EE have replay/oracle tests that do not need the game.
+
+## Known limitations
+
+| Area | Limitation |
+|---|---|
+| Frame rate | The game's logic is tied to the PS2's 60 Hz VBlank and never runs faster. 120/144 FPS modes speed up the **presentation** only. Heavy scenes on integrated GPUs drop below 60 |
+| Multi-threading | The VU1 thread is the CPU bottleneck in combat. The optimization pass converts more of it to native code over time |
+| Window | At 3× and above, presentation can stall behind the GPU on mid-range cards; the launcher caps presentation at 60 FPS there |
+| Widescreen | With Hor+ on, the HUD and 2D screens are stretched horizontally (the PCSX2 patch does not correct them) |
+| Upscaling | The "Pixel" option currently behaves as a bilinear stretch (no nearest-neighbour shader) |
+| Rendering corner cases | The GS backend does **not** apply the per-primitive alpha test (PABE), counts points as skipped, and does not use the game's mip levels (MIPTBP). Textures read through a CLAMP region are not replaced |
+| Camera | The camera is scripted by the game and cannot be locked or moved freely; the target lock only aims attacks |
+| Second controller | Port 2 is not connected |
+| Custom textures | Textures read through a CLAMP region and textures sampled from render targets are not replaced; there is no texture dump |
+| Blank memory card | Creating a save on a card that was never formatted was not verified; start from a PCSX2 card |
+| RetroAchievements | The account password is stored in the Windows Credential Manager only; on Linux the sign-in cannot be saved. Hardcore mode disables all cheats |
+| Second language | Only English and Brazilian Portuguese; the game's own text is untouched |
+| Disc | Only the USA release (`SCUS-97399`) is supported. Translated, patched or other-region discs are rejected on purpose |
+
+## Open problems
+
+- **Hang after saving (Windows):** after a save completes, a sequence of events can freeze the game. It has been
+  diagnosed down to the VIF/DMA path but not fixed. If it happens, the log ends in the middle of a save; see
+  [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) for what to collect.
+- **Windows Release build:** the default installer configuration (no whole-program optimization, AVX2 off) has never
+  been compared in game against the faster development build. Numbers measured in a development build may
+  not carry over.
+- **Linux:** no recent measurement, no vibration, and the launcher's setup wizard has never run on a real Linux machine.
+  The script is the reference way to install.
+- **Portable zip:** assembled by the release workflow (the launcher, its `kit/` and a README), and the workflow checks
+  that the kit is complete. It has not been run from a published release yet, so the first one is its first test. It
+  does not remove the SmartScreen warning by itself: the executable is still unsigned (see [`INSTALL.md`](INSTALL.md#windows-the-portable-zip)).
+- **Coverage of areas:** no systematic play-through validation exists. Zones beyond the ones tested while developing the
+  port may still show visual or audio defects.
+
+## What this page does *not* claim
+
+It is not a per-level compatibility list, and it is not a promise of support. If something here doesn't match your
+machine, the log described in [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) is the fastest way to make the problem
+actionable.

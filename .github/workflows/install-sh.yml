@@ -1,0 +1,29 @@
+# Checks of the Linux installer (install.sh): its dependency detection (distribution, packages, libraries) and its disk
+# and memory checks, with fake programs and no installation. See scripts/ci/test-install-sh.sh.
+#
+# Nothing here builds the game: that needs the retail disc, which cannot be uploaded.
+name: install-sh
+
+on:
+  push:
+    paths: ['install.sh', 'scripts/ci/test-install-sh.sh', '.github/workflows/install-sh.yml']
+  pull_request:
+    paths: ['install.sh', 'scripts/ci/test-install-sh.sh', '.github/workflows/install-sh.yml']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependency and resource checks
+        run: bash scripts/ci/test-install-sh.sh
+      - name: The help text prints
+        run: bash install.sh --help
+      # Real machine: whether the runner has every development file or not, the command must finish with 0 or 2.
+      - name: The dependency report of this runner
+        run: |
+          set +e
+          bash install.sh --check-deps
+          status=$?
+          echo "exit code: $status"
+          [ "$status" -eq 0 ] || [ "$status" -eq 2 ]

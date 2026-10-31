@@ -1,0 +1,17 @@
+[package]
+name = "ps2-recomp-cli"
+description = "The ps2_recomp command line: translates a PS2 ELF to C++ like the C++ recompiler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ps2_recomp"
+path = "src/main.rs"
+
+[dependencies]
+ps2-config.workspace = true
+ps2-recomp.workspace = true

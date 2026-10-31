@@ -1,0 +1,318 @@
+@import 'tailwindcss';
+
+/*
+ * Parchment theme. The sprites in src/assets/theme are the nine-slice plates the classes of this file draw.
+ * The old token names are kept so the pages and the wizard inherit the new look: "ink" is now dark brown on parchment,
+ * "gold" is bronze, "accent" is blood red.
+ */
+@theme {
+  --color-bg: #d8c6a2;
+  --color-elevated: #e4d4b5;
+  --color-panel: #dccaa6;
+  --color-panel-light: #ead9ba;
+  --color-field: #dcc9a6;
+  --color-line: #8a6a42;
+  --color-line-light: #6f5233;
+  --color-gold: #8a5c26;
+  --color-gold-light: #7d1710;
+  --color-gold-dark: #5a3a1a;
+  --color-accent: #a3190f;
+  --color-ink: #2a1a10;
+  --color-ink-soft: #3d2b1b;
+  --color-ink-muted: #5a4631;
+  --color-cream: #f3e4c3;
+  --color-ok: #2f6a20;
+  --color-warn: #8f5200;
+  --color-bad: #a8261a;
+  --font-sans: 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  --font-title: var(--font-sans);
+  --font-serif: var(--font-sans);
+  --animate-pulse-soft: pulse-soft 1.4s ease-in-out infinite;
+  /* Segoe UI has no 500: "medium" would fall back to the thin regular, which is hard to read on parchment. */
+  --font-weight-medium: 600;
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #1a110b;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: #a98a5f; border-radius: 5px; border: 1px solid #6f5233; }
+::-webkit-scrollbar-thumb:hover { background: #8f6e44; }
+::-webkit-scrollbar-track { background: rgba(90, 58, 26, 0.12); border-radius: 5px; }
+
+:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+/* ----------------------------------------------------------------------------------------------- window */
+
+.gow-window {
+  background: #d8c6a2 url('./assets/theme/bg.webp') center top / cover no-repeat;
+}
+
+/* A bronze frame with ornamented corners drawn over the element; the middle stays transparent (the window shows through). */
+.gow-frame {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border: 30px solid transparent;
+  border-image: url('./assets/theme/frame.webp') 62 / 30px stretch;
+  filter: drop-shadow(0 2px 3px rgba(40, 20, 8, 0.35));
+}
+
+/* Light parchment behind the content of a framed panel, so the text stays readable over the window art. */
+.gow-fill {
+  pointer-events: none;
+  position: absolute;
+  inset: 7px;
+  border-radius: 6px;
+  background: linear-gradient(rgba(232, 217, 187, 0.9), rgba(224, 206, 173, 0.92));
+  box-shadow: inset 0 0 18px rgba(110, 76, 38, 0.28);
+}
+
+/* The navigation fades out below the tabs so the spartan helmet of the window art shows through. */
+.gow-fill-fade {
+  background: linear-gradient(rgba(232, 217, 187, 0.92) 0%, rgba(228, 211, 180, 0.9) 64%, rgba(226, 208, 176, 0) 90%);
+  box-shadow: none;
+}
+
+/* Soft parchment halo for text that sits directly over the window art. */
+.gow-glow { text-shadow: 0 0 6px rgba(236, 222, 192, 0.95), 0 0 2px rgba(236, 222, 192, 0.95); }
+
+.gow-rule {
+  height: 8px;
+  background: url('./assets/theme/rule.webp') center / 100% 100% no-repeat;
+}
+
+/* ----------------------------------------------------------------------------------------------- rows */
+
+/* The strip is drawn on a pseudo-element: hover only changes its filter, so the sprite never has to be swapped
+   (swapping the border-image source made the row flash and disappear). */
+.gow-row,
+.gow-card {
+  position: relative;
+  isolation: isolate;
+}
+.gow-row:has([aria-expanded='true']) { z-index: 40; }
+
+/* Disabled: washed out, with a lock instead of the icon, so it reads as unavailable at a glance. */
+.gow-row[aria-disabled='true'] {
+  cursor: not-allowed;
+  filter: grayscale(1) contrast(0.8);
+  opacity: 0.5;
+}
+.gow-row[aria-disabled='true'] > * { pointer-events: none; }
+.gow-row[aria-disabled='true'] .gow-select,
+.gow-row[aria-disabled='true'] .gow-switch { box-shadow: none; }
+.gow-row::before,
+.gow-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border: 1px solid transparent;
+  border-image: url('./assets/theme/row.webp') 34 46 fill / 14px 22px stretch;
+  transition: filter 140ms, transform 140ms;
+}
+.gow-row:not([aria-disabled='true']):hover::before,
+.gow-row:not([aria-disabled='true']):focus-within::before {
+  filter: brightness(1.12) saturate(1.2) drop-shadow(0 0 5px rgba(163, 25, 15, 0.45));
+}
+.gow-row::after {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 14px;
+  bottom: 14px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--color-accent);
+  opacity: 0;
+  transition: opacity 140ms;
+}
+.gow-row:not([aria-disabled='true']):hover::after,
+.gow-row:not([aria-disabled='true']):focus-within::after { opacity: 0.9; }
+
+/* Dropdown trigger: parchment pressed into a bronze bezel. */
+.gow-select {
+  padding: 0 12px;
+  border: 2px solid #5f4326;
+  border-radius: 8px;
+  background: linear-gradient(#efdfc0, #ddc7a1);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 244, 218, 0.65),
+    inset 0 -2px 3px rgba(90, 58, 26, 0.22),
+    0 1px 0 rgba(255, 240, 205, 0.7),
+    0 2px 5px rgba(50, 28, 8, 0.35);
+  transition: border-color 120ms, box-shadow 120ms, background 120ms;
+}
+.gow-select:hover:not(:disabled) {
+  border-color: #8c1f14;
+  background: linear-gradient(#f6e8cb, #e5d0aa);
+}
+.gow-select:focus-visible,
+.gow-select[aria-expanded='true'] {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 244, 218, 0.65),
+    0 0 0 2px rgba(163, 25, 15, 0.4),
+    0 2px 5px rgba(50, 28, 8, 0.35);
+}
+
+/* Secondary button: the parchment banner of the sprites as a nine-slice plate, the same idea as the red one below.
+   Only the ornamented ends keep their width (--end); the middle stretches with the label. */
+.gow-button {
+  --end: 44px;
+  padding: 0 10px;
+  border: solid transparent;
+  border-width: 6px var(--end);
+  border-image: url('./assets/theme/banner-parchment.webp') 30 96 fill / 6px var(--end) stretch;
+  color: var(--color-ink);
+  font-weight: 700;
+  text-shadow: 0 1px 0 rgba(255, 238, 205, 0.6);
+  transition: filter 120ms;
+}
+.gow-button:hover:not(:disabled) { filter: brightness(1.07) saturate(1.05); }
+.gow-button:focus-visible {
+  outline: none;
+  filter: brightness(1.07) drop-shadow(0 0 3px rgba(163, 25, 15, 0.85));
+}
+
+.gow-list {
+  color: var(--color-ink);
+  background: linear-gradient(#ead9bb, #dfcba5);
+  border: 2px solid #7a5a36;
+  border-radius: 7px;
+  box-shadow: 0 10px 26px rgba(30, 14, 4, 0.55), inset 0 0 0 1px rgba(255, 240, 210, 0.5);
+}
+/* Hovered/keyboard option: flat blood red with cream text (about 9:1), no texture so nothing competes with the label. */
+.gow-option-active {
+  background: linear-gradient(#a21e15, #7a130d);
+  color: var(--color-cream);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(255, 220, 190, 0.25);
+}
+.gow-option-selected { background: rgba(163, 25, 15, 0.12); }
+
+/* ----------------------------------------------------------------------------------------------- buttons */
+
+/* The secondary button is the parchment banner (see .gow-button above); here only its behaviour. */
+.gow-button { white-space: nowrap; }
+/* Destructive action: the red plate, so it reads as dangerous before the label is read. */
+.gow-button-danger {
+  --end: 26px;
+  border-width: 8px var(--end);
+  border-image: url('./assets/theme/button-red.webp') 30 fill / 8px var(--end) stretch;
+  color: #fff6e2;
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+.gow-button-danger:hover:not(:disabled) { filter: brightness(1.1); }
+.gow-button:active:not(:disabled) { transform: translateY(1px); }
+
+.gow-button-red {
+  border: 10px solid transparent;
+  border-image: url('./assets/theme/button-red.webp') 30 fill / 10px stretch;
+  color: #fff6e2;
+  font-weight: 700;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 3px rgba(0, 0, 0, 0.6);
+  transition: filter 120ms;
+}
+.gow-button-red:hover:not(:disabled) { filter: brightness(1.08) saturate(1.1); }
+.gow-button-red:active:not(:disabled) { filter: brightness(0.9); }
+
+/* Only the ornamented ends are scaled with the height (--end is their width); the middle stretches.
+   --pad is how much of each end the content has to leave free (defaults to the whole end). */
+.gow-plaque {
+  --end: 56px;
+  border: solid transparent;
+  border-width: 0 var(--pad, var(--end));
+  border-image: url('./assets/theme/plaque-red.webp') 0 96 fill / 0 var(--end) stretch;
+  transition: filter 120ms;
+  text-shadow: 0 2px 3px rgba(0, 0, 0, 0.65);
+}
+.gow-plaque:hover:not(:disabled) { filter: brightness(1.14) saturate(1.1); }
+.gow-plaque:active:not(:disabled) { filter: brightness(0.92); }
+.gow-plaque:disabled { filter: grayscale(0.6) brightness(0.75); }
+
+.gow-switch {
+  background: url('./assets/theme/switch-off.webp') center / 100% 100% no-repeat;
+  transition: filter 120ms;
+}
+.gow-switch[aria-checked='true'] { background-image: url('./assets/theme/switch-on.webp'); }
+.gow-switch:hover { filter: brightness(1.07); }
+
+/* ----------------------------------------------------------------------------------------------- slider */
+
+input[type='range'] { -webkit-appearance: none; appearance: none; background: transparent; }
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 28px;
+  width: 28px;
+  border: 0;
+  background: url('./assets/theme/slider-thumb.webp') center / 100% 100% no-repeat;
+  margin-top: -9px;
+  transition: transform 100ms;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.45));
+}
+input[type='range']:hover::-webkit-slider-thumb { transform: scale(1.1); }
+input[type='range']::-webkit-slider-runnable-track { height: 10px; background: transparent; }
+
+.gow-track {
+  border: 2px solid #5f4326;
+  border-radius: 6px;
+  background: linear-gradient(#9d8760, #b8a276);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 235, 195, 0.35);
+}
+.gow-track-fill {
+  border-radius: 4px 0 0 4px;
+  background: url('./assets/theme/slider-fill.webp') left center / auto 100% repeat-x;
+}
+
+/* ----------------------------------------------------------------------------------------------- dialogs */
+
+.gow-panel {
+  border: 30px solid transparent;
+  border-image: url('./assets/theme/panel.webp') 28 fill / 30px stretch;
+  filter: drop-shadow(0 16px 30px rgba(0, 0, 0, 0.6));
+}
+
+.gow-text-shadow { text-shadow: 0 1px 0 rgba(255, 238, 205, 0.55); }
+
+.gow-row > svg:first-child { transition: color 140ms; }
+.gow-row:not([aria-disabled='true']):hover > svg:first-child { color: var(--color-accent); }
+
+.gow-select:disabled,
+.gow-button:disabled {
+  background: #cbbfa6;
+  border-color: #8a7c64;
+  box-shadow: none;
+}

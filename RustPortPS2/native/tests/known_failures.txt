@@ -1,0 +1,49 @@
+# ps2x_tests tests (RustPortPS2/native) that were already failing; format "suite :: test".
+# ps2-dev validate-tests does not fail for them, but does for any other. Remove a line when it is fixed.
+# 46 tests that fail (stale expectations after the Waffle runtime integration); the recompiler tests that used to be here moved to the Rust crates.
+PS2GS :: CT32 raster writes alias cleanly into later CT32 texture sampling
+PS2GS :: FBA forces the framebuffer alpha high bit on CT32 writes
+PS2GS :: FST sprite 1:1 CT32 copies preserve source texels at the right and bottom edges
+PS2GS :: GIF IMAGE packet writes host-to-local data into GS VRAM
+PS2GS :: GIF REGLIST NREG=0 is treated as sixteen descriptors
+PS2GS :: GIF REGLIST with odd register count consumes 128-bit padding before next tag
+PS2GS :: GIF load-image packet uses native upload fast path
+PS2GS :: GS CLAMP modes transform texture coordinates before sampling
+PS2GS :: GS CT24 host-local-host transfer preserves 24-bit RGB payload
+PS2GS :: GS CT32 upload aliases cleanly into later PSMT8 sampling
+PS2GS :: GS DATE and DATM inspect the framebuffer-format alpha bit
+PS2GS :: GS HIGHLIGHT adds vertex alpha into RGB and texture alpha into A
+PS2GS :: GS HIGHLIGHT2 keeps texture alpha while adding vertex alpha into RGB
+PS2GS :: GS PSMT4 host-local upload keeps position across split IMAGE packets
+PS2GS :: GS PSMT4 host-local-host keeps nibble packing stable
+PS2GS :: GS PSMT4 local-local copy respects swizzled page layout
+PS2GS :: GS RGB_ONLY falls back to FB_ONLY outside CT32
+PS2GS :: GS STQ triangle interpolation divides homogeneous coordinates after DDA
+PS2GS :: GS T4 CSM1 CLUT cache survives source VRAM reuse
+PS2GS :: GS T4 CSM1 preserves CSA bit 4 for CT16 CLUTs
+PS2GS :: GS T4 triangle sampling reads manual-layout texels from a 512x512 atlas
+PS2GS :: GS T4HL/T4HH sampling reads only its own plane through independent CLUTs
+PS2GS :: GS T4HL/T4HH shared-plane upload preserves both index planes via RMW
+PS2GS :: GS T8 CSM1 applies CSA and masks CSA bit 4 for CT32 CLUTs
+PS2GS :: GS T8 CT32-uploaded CSM1 CLUT follows swizzled palette layout
+PS2GS :: GS TCC=0 MODULATE uses texture RGB and keeps vertex alpha
+PS2GS :: GS TEX0 dimensions saturate at 1024 pixels
+PS2GS :: GS TEX1 linear filter blends T4 STQ triangle samples
+PS2GS :: GS TEX2 updates CLUT state independently from TEX0
+PS2GS :: GS TEXA expands CT24 alpha and honors AEM for black texels
+PS2GS :: GS TEXCLUT offsets T8 CLUT fetch coordinates
+PS2GS :: GS ZMSK suppresses depth without suppressing framebuffer writes
+PS2GS :: GS alpha-test AFAIL independently masks framebuffer and depth
+PS2GS :: GS fog blends the shaded color toward FOGCOL before framebuffer blending
+PS2GS :: GS texture page buffer hides local-memory writes until TEXFLUSH
+PS2GS :: sceGsExecLoadImage and sceGsExecStoreImage roundtrip and free guest packets
+PS2GS :: sceGsSetDefDBuffDc accepts trailing args from the recompiler register ABI
+PS2GS :: sceGsSetDefDBuffDc seeds a clear packet and swap clears the draw buffer
+PS2Memory :: GIF DMA chain REF keeps CT32 image data after paletted upload
+PS2Memory :: VIF1 DIRECT finds an image continuation after packed setup
+PS2Memory :: VIF1 DIRECT image tag continues in the next DIRECT payload
+PS2Memory :: VIF1 DMA DIRECT image packet reaches GS through arbiter
+PS2Memory :: VIF1 fragmented DIRECT IMAGE updates VRAM and preserves following MARK
+PS2Memory :: VIF1 image continuation preserves intervening commands and following GIF tags
+PS2RuntimeExpansion :: sceMpegDemuxPssRing dispatches registered video and audio stream callbacks [MPEG:AddCallback] mpeg=0x123000 type=0 func=0x124000 data=0xdead0000
+PS2VU1 :: MSCAL can start a VU1 XGKICK program and update GS VRAM

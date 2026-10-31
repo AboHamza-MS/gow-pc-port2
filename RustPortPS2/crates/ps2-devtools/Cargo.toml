@@ -1,0 +1,18 @@
+[package]
+name = "ps2-devtools"
+description = "Developer tools of the port: config and test validators, profile summaries, capture inspectors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ps2-dev"
+path = "src/main.rs"
+
+[dependencies]
+toml.workspace = true
+serde_json.workspace = true
+ps2-parity.workspace = true

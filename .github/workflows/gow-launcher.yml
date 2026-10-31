@@ -1,0 +1,172 @@
+# CI and releases of the launcher (gow-launcher/: Rust + Tauri + React).
+#
+# - Every push / pull request that touches gow-launcher/ runs the tests on Windows and Linux.
+# - Pushing a tag `launcher-vX.Y.Z` builds the installers (NSIS on Windows; deb and AppImage on Linux) with the
+#   installation kit inside, and attaches them to a draft GitHub release, together with a portable zip for Windows
+#   (the launcher and its kit, nothing to install) and the SHA-256 of every file (SHA256SUMS-<os>.txt).
+#
+# No game files are involved: the kit is staged from tracked files only (scripts/stage-kit.mjs refuses anything that
+# looks like game data).
+name: gow-launcher
+
+on:
+  push:
+    branches: [main]
+    tags: ['launcher-v*']
+    paths: ['gow-launcher/**', 'RustPortPS2/**', '.github/workflows/gow-launcher.yml', 'install.*']
+  pull_request:
+    paths: ['gow-launcher/**', 'RustPortPS2/**', '.github/workflows/gow-launcher.yml']
+
+defaults:
+  run:
+    working-directory: gow-launcher
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gow-launcher/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gow-launcher
+      - name: Linux libraries for Tauri
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev patchelf
+      - run: npm ci
+      - name: Type-check, build and test the interface
+        run: |
+          npm run build
+          npm test
+      - name: Stage the kit and check it is complete
+        run: npm run check-kit
+      - name: Check the Windows installer contract
+        run: npm run check-windows-installer
+      # `--all` would also format the path dependencies (the vendored Rabbitizer under RustPortPS2/): list the crates.
+      - run: cargo fmt -p gow-core -p gow-cli -p fake-runner -p gow-launcher -- --check
+      - name: Test the Rust workspace
+        run: cargo test --workspace --locked
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/launcher-v')
+    needs: test
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bundles: nsis
+          - os: ubuntu-latest
+            bundles: deb,appimage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gow-launcher/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gow-launcher
+      - name: Linux libraries for Tauri
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev patchelf
+      - run: npm ci
+      - name: Check the Windows installer contract
+        if: runner.os == 'Windows'
+        run: npm run check-windows-installer
+      # The kit carries the Rust tools (RustPortPS2/): the installers use bin/ps2_recomp[.exe] and bin/ps2-tools[.exe] from
+      # it, and there is nothing else to fall back to. stage-kit.mjs copies the files named by PS2_RECOMP_BIN and PS2_TOOLS_BIN.
+      - name: Build the Rust tools for the kit
+        working-directory: .
+        shell: bash
+        run: |
+          cargo build --release --locked -p ps2-recomp-cli -p ps2-tools --manifest-path RustPortPS2/Cargo.toml
+          if [ "$RUNNER_OS" = "Windows" ]; then ext=".exe"; else ext=""; fi
+          echo "PS2_RECOMP_BIN=$GITHUB_WORKSPACE/RustPortPS2/target/release/ps2_recomp$ext" >> "$GITHUB_ENV"
+          echo "PS2_TOOLS_BIN=$GITHUB_WORKSPACE/RustPortPS2/target/release/ps2-tools$ext" >> "$GITHUB_ENV"
+      # Code signing is not set up yet: Windows will show SmartScreen's "unknown publisher" warning.
+      - uses: tauri-apps/tauri-action@v0
+        id: tauri
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: gow-launcher
+          tagName: ${{ github.ref_name }}
+          releaseName: 'God Of War Launcher ${{ github.ref_name }}'
+          releaseBody: 'Installer of the God of War (2005) native port. It contains no game files: you supply your own ISO. Windows also has a portable zip (unzip and run, no installer); check any download against the SHA256SUMS files of this release.'
+          releaseDraft: true
+          prerelease: false
+          args: --bundles ${{ matrix.bundles }}
+      # Portable copy for Windows: the launcher and its kit side by side, which is all the installer puts on disk. The
+      # launcher extracts the kit from <exe folder>/kit on its first run (extract_kit in src-tauri/src/lib.rs). Whoever
+      # distrusts an unsigned installer can unzip and run it instead (the zip still carries the web mark, see its README).
+      # The WebView2 runtime is not in the zip; the README says so. Linux needs no zip: the AppImage is already portable.
+      - name: Portable zip (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#launcher-v}"
+          folder="God Of War - PC Launcher_${version}_x64-portable"
+          mkdir -p "portable-build/$folder" release-files
+          cp target/release/gow-launcher.exe "portable-build/$folder/God Of War - PC Launcher.exe"
+          cp -r src-tauri/kit "portable-build/$folder/kit"
+          cp portable/README.txt "portable-build/$folder/README.txt"
+          # The kit must be complete and free of game data, exactly as in the installer.
+          test -f "portable-build/$folder/kit/install.ps1"
+          test -f "portable-build/$folder/kit/bin/ps2_recomp.exe"
+          test -f "portable-build/$folder/kit/bin/ps2-tools.exe"
+          pwsh -NoProfile -Command "Compress-Archive -Path 'portable-build/$folder' -DestinationPath 'release-files/God-Of-War-PC-Launcher_${version}_x64-portable.zip' -CompressionLevel Optimal"
+          ls -l release-files
+      # SHA-256 of everything this job built, attached to the release so a download can be checked.
+      - name: Checksums
+        shell: bash
+        run: |
+          mkdir -p release-files
+          for file in target/release/bundle/nsis/*-setup.exe target/release/bundle/deb/*.deb target/release/bundle/appimage/*.AppImage; do
+            [ -f "$file" ] && cp "$file" release-files/
+          done
+          cd release-files
+          sha256sum -- * > "SHA256SUMS-$(echo "$RUNNER_OS" | tr 'A-Z' 'a-z').txt"
+          cat SHA256SUMS-*.txt
+      # The installers are attached by tauri-action; the zip and the checksums go to the same draft release by its id.
+      - name: Attach the portable zip and the checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.tauri.outputs.releaseId }}
+        run: |
+          test -n "$RELEASE_ID"
+          cd release-files
+          for file in *.zip SHA256SUMS-*.txt; do
+            [ -f "$file" ] || continue
+            curl --fail --silent --show-error -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Content-Type: application/octet-stream" \
+              --data-binary @"$file" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$file"
+            echo "attached $file"
+          done

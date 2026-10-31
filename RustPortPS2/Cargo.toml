@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ps2-config",
+    "crates/ps2-elf",
+    "crates/ps2-r5900",
+    "crates/ps2-recomp",
+    "crates/ps2-recomp-cli",
+    "crates/ps2-parity",
+    "crates/ps2-tools",
+    "crates/ps2-devtools",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "GPL-3.0-only"
+repository = "https://github.com/danielalves96/Gow-pc-port"
+publish = false
+
+[workspace.dependencies]
+ps2-config = { path = "crates/ps2-config" }
+ps2-elf = { path = "crates/ps2-elf" }
+ps2-r5900 = { path = "crates/ps2-r5900" }
+ps2-recomp = { path = "crates/ps2-recomp" }
+ps2-parity = { path = "crates/ps2-parity" }
+toml = "0.8"
+serde_json = { version = "1", features = ["preserve_order"] }
+
+# The recompiler is a batch tool: keep the release profile small and fast, and
+# make debug builds usable for the 6,400-function translation.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.dev]
+opt-level = 1

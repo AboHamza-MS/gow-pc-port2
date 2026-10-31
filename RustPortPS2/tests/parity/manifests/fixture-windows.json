@@ -1,0 +1,28 @@
+{
+  "generator": "ps2_recomp",
+  "generator_version": "fixture-cpp-baseline",
+  "operating_system": "windows",
+  "elf_sha256": "5aa854a67fb6cf7b271f30e026dc205bf0918cce078712ddea76765ff9c2999f",
+  "files": [
+    { "path": "FlushCache_0x10c4ec.cpp", "size": 364, "sha256": "14c20940cb591e7d6cb7b66a588a6e304845fee18d751d6e6718d2edd78585f4" },
+    { "path": "fx_cop0_0x101748.cpp", "size": 62126, "sha256": "136d89ac821a13c7676c8bb9054e0d53e69f54dcc270f59575a612a3a31d8fc3" },
+    { "path": "fx_cop1_0x101d70.cpp", "size": 379008, "sha256": "e5399326118a397a8c7ef67544bd2c65595d2c5d2607150b1872b47fe02172c1" },
+    { "path": "fx_cop2_0x104198.cpp", "size": 959854, "sha256": "a8f50b97cce241fb4d25a2a26c42c22914a5c49784243038363b0a0dd8351881" },
+    { "path": "fx_fall_through_0x1001c8.cpp", "size": 866, "sha256": "b969f4fe38500f8330e30a3ba36186d248f8a4bc11a9906edeefe48884c67fb9" },
+    { "path": "fx_flow_0x100190.cpp", "size": 4794, "sha256": "878673f88b6db95c8559d586ea767a9682e44f28b25906dc7db9767dc2cdb514" },
+    { "path": "fx_gif_dma_0x100164.cpp", "size": 2468, "sha256": "9fd1d65fe080c10adffaf68b3cdacdf39c952ac26fa828fc3fbdaec524af7e9a" },
+    { "path": "fx_jump_table_0x100100.cpp", "size": 5665, "sha256": "ea241e2bcd27595f1ebcc16110ed8223f9b770f6b540c1bbc45f0ef3a4af352d" },
+    { "path": "fx_leaf_0x100000.cpp", "size": 1181, "sha256": "f25fa8d1597a218cacdb9c418d608db939acf8ef4b28e30722373528d451c39a" },
+    { "path": "fx_memory_0x10b1c8.cpp", "size": 157157, "sha256": "12ae58c59c1374291a5eff58b158320ab46b004826f0b5e373de52c7a4cab98a" },
+    { "path": "fx_mmi_0x1091c0.cpp", "size": 342668, "sha256": "a63d0d834763e54dccab78d5dc8e9c27861c683fc5d0f0a7fb9e8e7cccdcfdc5" },
+    { "path": "fx_primary_0x1001d0.cpp", "size": 95984, "sha256": "1c9bd1accf371a65d9133457fc80f7edeab1cf46395c198335d56b91a40199ce" },
+    { "path": "fx_regimm_0x101340.cpp", "size": 43418, "sha256": "82db7fd0b8dfa4e20cdc688b1ec289d52f60591c6febc41187768202011ff3f2" },
+    { "path": "fx_skipped_0x10c4f8.cpp", "size": 375, "sha256": "4a84135382d0a1b0e462817af395efdbbeb98ce556b7e2a87500793104422418" },
+    { "path": "fx_special_0x100b38.cpp", "size": 107303, "sha256": "dd687773a5d867bd3ae5d5801b573825b756c7e2c83a9973071ad4265958838f" },
+    { "path": "memcpy_0x10c4e0.cpp", "size": 349, "sha256": "485c8b3c80cb01b9c439962c0d57045b58557784b3f10da89bc8f338fc61d3d1" },
+    { "path": "ps2_recompiled_functions.h", "size": 1490, "sha256": "3b6ee1ead2bcd3217ab39d8b7979fde08744cec3db736f3cf0649c755d3b04f9" },
+    { "path": "ps2_recompiled_stubs.h", "size": 336, "sha256": "9db0d5ee4d294c12e64123f6ef515947e838d29e5714b4ccd765ed90f9cc9ca6" },
+    { "path": "register_functions.cpp", "size": 45842, "sha256": "8aea0ada001901893e39f561e4f1ea2bf8438fc7f545e82e25a3fb07c16979bb" }
+  ],
+  "counts": { "functions": 16, "stubs": 2, "skips": 1, "unresolved": 4 }
+}

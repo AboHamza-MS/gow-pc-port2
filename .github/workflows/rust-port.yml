@@ -1,0 +1,42 @@
+# CI of the Rust port of the recompiler (RustPortPS2/).
+#
+# Covers every crate: configuration, ELF loading, the decoder, the translators, the recompiler driver, the CLI, the
+# parity tool and ps2-tools (ISO/ELF/VU1/IOP generators). No game files are involved: the tests build their ELF images in memory, and the parity gate runs on a
+# synthetic fixture whose expected tree is a committed manifest (see RustPortPS2/docs/PARITY.md).
+#
+# The byte-identical gate against the retail ELF runs locally, because the game cannot be uploaded.
+name: rust-port
+
+on:
+  push:
+    paths: ['RustPortPS2/**', '.github/workflows/rust-port.yml']
+  pull_request:
+    paths: ['RustPortPS2/**', '.github/workflows/rust-port.yml']
+
+defaults:
+  run:
+    working-directory: RustPortPS2
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: RustPortPS2
+      # `--all` also formats local path dependencies, which would rewrite the
+      # vendored Rabbitizer (third_party/rabbitizer); list the crates instead (add new ones here).
+      - run: cargo fmt -p ps2-config -p ps2-elf -p ps2-r5900 -p ps2-recomp -p ps2-recomp-cli -p ps2-parity -p ps2-tools -p ps2-devtools -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace

@@ -1,0 +1,2 @@
+# The root .gitignore ignores generated/; the C decoder needs these headers (upstream commits them).
+!generated/

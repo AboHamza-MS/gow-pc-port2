@@ -1,0 +1,13 @@
+[package]
+name = "gow-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "gow-cli"
+path = "src/main.rs"
+
+[dependencies]
+gow-core = { path = "../gow-core" }
+serde_json = "1.0.154"

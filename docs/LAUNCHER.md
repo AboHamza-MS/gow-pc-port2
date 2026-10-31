@@ -1,0 +1,148 @@
+# The launcher
+
+*God Of War - PC Launcher* is the front end of the port: it installs the game, stores your settings and starts it with
+the right environment. It is a native application (Rust + Tauri + React), not a wrapper around a command line. This
+page describes what every tab does and where the launcher keeps its files.
+
+If you just want to play, set **Graphics → render resolution 2×** and **Performance → FPS mode 60**, then press
+**PLAY**.
+
+## Tabs
+
+### Graphics
+
+| Control | Default | What it does |
+|---|---|---|
+| Display mode | Fullscreen | Fullscreen or windowed. **F11** toggles it in game |
+| Widescreen (Hor+) | On | PCSX2's widescreen patch: widens the camera to the sides at the chosen aspect. Off gives you the game's original 4:3 picture, with side bars in a wide window |
+| Aspect ratio | Your display's | 4:3, 16:9, 16:10 or 21:9 (ultrawide, experimental) |
+| Resolution | Native | Fullscreen always uses the display's native mode; this is the initial window size |
+| Render resolution | 2× | Internal render scale, 1× to 6×. 2× is recommended: **from 3× up the game gets heavy**, and 4×–6× are experimental |
+| Upscaling | Bilinear (soft) | How the image is fitted to the screen: **Bicubic (sharp)** (bicubic + contrast-adaptive sharpening), **Bilinear (soft)** or **Pixel**. The "Pixel" option currently resolves to a bilinear stretch, not nearest-neighbour. If the render is larger than the screen it is downsampled by area averaging |
+| Sharpness | 0.8 | Only for Bicubic: how much contrast-adaptive sharpening is applied |
+| Anti-aliasing (FXAA) | On | Smooths jagged edges before upscaling |
+| Progressive scan (480p) | On | The game's sharp 480p mode. Off uses its interlaced mode with the anti-flicker filter (softer) |
+
+### Textures
+
+| Control | Default | What it does |
+|---|---|---|
+| Custom textures | Off | Draws PCSX2-format replacement textures from `textures/replacements` |
+| Load textures asynchronously | On | Reads replacements in the background and keeps the game's own texture until each is ready. Off waits for every file (each new texture may pause the game briefly) |
+| Textures folder → Open | - | Opens the folder where a pack goes |
+| Texture pack | - | Downloads and installs the community pack. The card disappears once a pack is installed; **it replaces whatever was in the folder**. While it installs, the other sections, PLAY and these options are off and closing the window asks first |
+
+A pack applies the next time the game starts. [`TEXTURES.md`](TEXTURES.md) explains the format and the file names.
+
+### Performance
+
+| Control | Default | What it does |
+|---|---|---|
+| Graphics card | Automatic | On Windows: Power saving (integrated) or High performance (dedicated); on Linux the launcher sets the PRIME variables. The game always renders on the card that drives the window, so a dedicated GPU is much faster |
+| FPS mode | 60 | 60 is the native game rate. **120 and 144 only speed up the window presentation**: the game logic stays at 60 Hz, so the game never runs faster than on a PS2 |
+| Vertical sync | Off | Prevents tearing; locks the presentation to the display refresh |
+| FPS counter | Off | Shows game and window frame rates in a corner |
+| Background optimization | On | Recompiles the parts of the game you have reached, in the background, after you close the game |
+| Also while playing | **Off** | Rebuilds with the game open. It competes for the CPU and freezes the picture for tens of seconds, so leave it off unless you are debugging |
+| Optimize now | - | Runs one optimization pass immediately |
+
+### Files
+
+| Field | What it is |
+|---|---|
+| Game executable (`SCUS_973.99`) | The PS2 program from your disc. Verified by CRC; "Modified ELF · experimental build" means the file was changed |
+| Disc image (ISO) | Optional: if it is empty, an `.iso` beside the game or the already-extracted files are used. The field disappears once the game data is in place |
+| Port runner (`gow-2005`) | The compiled game program |
+| Memory card | Read-only: the folder next to `SCUS_973.99` (`mc0`). Saves themselves live in `Mcd001.ps2` (see [`PLAYING.md`](PLAYING.md#saves-and-the-memory-card)) |
+
+**Find files automatically** looks next to the launcher, in a repository checkout above it and in the default
+installation folder. **Setup wizard** reopens the installer.
+
+### Controls
+
+Keyboard and mouse mapping (two keys per action), gamepad layout (Classic PS2 or Modern DMC5), the four face-button
+swaps, **Agile combat** and **ESC closes the game**. The default layout and what each action does are in
+[`PLAYING.md`](PLAYING.md#keyboard-and-mouse).
+
+Click a slot, then press the new key or click a mouse button. Right click clears it. **Esc** cancels. Keys are bound by
+physical position. F1/F2/F11 are reserved and marked as such.
+
+### Cheats
+
+The nine cheats that start enabled (the same list is available in game with **F2**), plus the gamepad button or
+two-button combo that opens the cheat menu. Details: [`PLAYING.md`](PLAYING.md#cheat-menu-f2).
+
+### Achievements
+
+RetroAchievements: enable, username and password, hardcore mode and in-game notifications. The password is kept in the
+**Windows Credential Manager**, not in the settings file; on Linux the store does not exist yet, so the sign-in cannot
+be saved. Hardcore disables all cheats. See [`PLAYING.md`](PLAYING.md#achievements-retroachievements).
+
+### Other
+
+Language (English / Brazilian Portuguese), **Skip FMV videos**, **Fast boot** (cuts the intro animation and may cut the
+opening lines; not recommended), **Minimize the launcher while playing**, shortcuts, **Last game log**, **Restore
+defaults** (resets graphics, performance, controls and cheats; your file paths are kept) and the About box.
+
+## The setup wizard
+
+The wizard opens by itself the first time, or from **Files → Setup wizard**.
+
+1. **ISO**: the launcher looks for your God of War (USA, `SCUS-97399`) ISO (Home, Downloads, Desktop, Documents,
+   `~/Games` and the drive roots) and verifies it. Drag and drop or **Browse** also work. Translated, patched or
+   other-region ISOs are rejected: the game must be the original USA image.
+2. **Location**: where the extracted game and the build go. The path must be **ASCII only** and needs **30 GB free**.
+   The default is `C:\Users\<you>\GodOfWar-PC`.
+3. **Components**: shown only when something is missing. Visual Studio 2022 Build Tools (C++, about 6 GB, needs
+   administrator permission, 15–30 minutes) and portable Git (about 50 MB, stays inside the install folder).
+4. **Install**: one button; the progress bar has eight stages and a cancel button. **Finished steps are kept**, so if
+   you cancel and try again, the install resumes instead of starting over. The full log is `logs/install.log`.
+
+On Linux the wizard runs `install.sh` instead, with the same steps. It can't install system packages (that needs your
+password), so when something is missing it lists the packages and the command for your distribution, and waits until
+**Check again** finds nothing missing. The Linux path is experimental and has never run on a real Linux machine (see
+[`INSTALL.md`](INSTALL.md#linux-experimental)).
+
+> During the optimization stage the game opens by itself for a few minutes with automatic button presses. Do not touch
+> the keyboard or the controller while that happens.
+
+## Where the launcher keeps things
+
+The data folder is `%APPDATA%\GOW_PC\Launcher` on Windows and `~/.local/share/GOW_PC/Launcher` on Linux.
+`GOW_LAUNCHER_DATA_DIR=<folder>` moves everything into another folder (portable use).
+
+| What | Where |
+|---|---|
+| Settings | `settings.json` in the data folder |
+| Last game log (stdout + stderr) | `logs/last.log` (the previous run becomes `logs/previous.log`) |
+| Installer and optimizer logs | `logs/install.log`, `logs/optimize.log` |
+| Installation kit shipped with the launcher | `kit/` in the data folder |
+| Window icon | `icon.png` in the data folder |
+| GL shader cache | `%LOCALAPPDATA%\GOW_PC\Launcher\cache\shaders` / `~/.cache/GOW_PC/Launcher/shaders` |
+| Game data, build and saves | inside your installation folder (`game/`, `build/`, `game/Mcd001.ps2`) |
+
+The game runs with the data folder as its working directory. After a successful install the launcher keeps the runner
+it verified in `<installation>/active/gow-2005`, so a rebuild in `build/` cannot break a session that is already
+configured.
+
+## What happens when you press PLAY
+
+1. The files are checked again (runner executable, ELF present, CRC).
+2. The game starts as `<gow-2005> <SCUS_973.99>` with the settings translated into environment variables, with its
+   stdout and stderr going to `logs/last.log`.
+3. The launcher can minimize itself and reappears when the game exits.
+4. On exit you get the session length, or an error with the last lines of the log and a button to open it.
+
+The launcher also pauses a background rebuild while the game is running, and resumes it afterwards.
+
+## Installing the launcher
+
+- **Windows**: `God Of War - PC Launcher_<version>_x64-setup.exe` from the Releases page. It installs for your user
+  (no administrator permission), bundles WebView2 so it works on a clean Windows 10/11, and carries the installation
+  kit. This is the supported path. The same release has a **portable zip** (the launcher and its kit, no installer);
+  see [`INSTALL.md`](INSTALL.md#windows-the-portable-zip).
+- **Linux (experimental)**: `.deb` or AppImage from the same Releases page. The wizard drives `install.sh` there
+  (unverified on a real Linux machine); `./install.sh` from a checkout also works, and the launcher finds its files.
+  Vibration is not implemented on Linux.
+
+The launcher is GPL-3.0; its sources are in [`gow-launcher/`](../gow-launcher).

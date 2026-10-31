@@ -1,0 +1,14 @@
+[package]
+name = "ps2-recomp"
+description = "Translation of R5900 instructions to C++ (the recompiler's code generator)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ps2-config.workspace = true
+ps2-elf.workspace = true
+ps2-r5900.workspace = true

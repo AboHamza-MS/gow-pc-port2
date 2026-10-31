@@ -1,0 +1,20 @@
+[package]
+name = "ps2-parity"
+description = "Byte-for-byte comparison of generated trees and the parity manifests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ps2-parity"
+path = "src/main.rs"
+
+[dependencies]
+
+[dev-dependencies]
+ps2-config.workspace = true
+ps2-elf.workspace = true
+ps2-recomp.workspace = true
