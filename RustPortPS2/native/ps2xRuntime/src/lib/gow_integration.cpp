@@ -45,6 +45,7 @@ namespace ps2_stubs
 // names below are also called from ps2_pad.cpp, ps2_runtime.cpp, Kernel/EeScheduler.cpp and gs/gs_host_present.cpp,
 // which are outside this clean-up pass's scope, so they keep their current names for now.
 bool PCKeyboardSticks(uint8_t (&sticks)[4]); // ps2_pad.cpp (configurable keyboard)
+void gowPadDiagFrame();                       // ps2_pad.cpp (GOW_PAD_DIAG)
 void gowCheatsInstall(PS2Runtime &runtime, const std::string &elfPath);
 void gowVideoInstall(PS2Runtime &runtime, const std::string &elfPath);
 void gowTargetingInstall(PS2Runtime &runtime, const std::string &elfPath);
@@ -537,6 +538,7 @@ void gowFrameInput()
 {
     if (IsKeyPressed(KEY_F11))
         toggleFullscreen();
+    gowPadDiagFrame();                   // GOW_PAD_DIAG: what GLFW and raylib see of the joysticks
     gowCheatsMenuInput(escClosesGame()); // F2, cheat menu
     gowTargetingInput();                     // Alt locks the target, the mouse switches it
 }

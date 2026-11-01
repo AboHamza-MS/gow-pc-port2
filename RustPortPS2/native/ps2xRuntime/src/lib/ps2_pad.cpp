@@ -1,6 +1,9 @@
 #include "runtime/ps2_pad.h"
 #include "ps2_host_backend.h"
+#include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -167,6 +170,196 @@ namespace
     uint8_t axisValue(bool negative, bool positive)
     {
         return negative == positive ? kPadStickCenter : (negative ? 0u : 255u);
+    }
+}
+
+// GOW-Port: GOW_PAD_DIAG=1 settles "my pad does nothing" reports. Every [gow-paddiag] line says what GLFW and raylib see for
+// each joystick (name, GUID, SDL mapping, then raw buttons / hats / axes, the mapped state and raylib's buttons as they
+// change) and what the game's pad read returns. Without the variable nothing is logged and nothing is called. GLFW is linked
+// into raylib; its header is not on this file's include path on Windows, so the few calls used are declared here.
+extern "C"
+{
+    struct GLFWgamepadstate
+    {
+        unsigned char buttons[15];
+        float axes[6];
+    };
+    int glfwJoystickPresent(int jid);
+    int glfwJoystickIsGamepad(int jid);
+    const char *glfwGetJoystickName(int jid);
+    const char *glfwGetJoystickGUID(int jid);
+    const char *glfwGetGamepadName(int jid);
+    const float *glfwGetJoystickAxes(int jid, int *count);
+    const unsigned char *glfwGetJoystickButtons(int jid, int *count);
+    const unsigned char *glfwGetJoystickHats(int jid, int *count);
+    int glfwGetGamepadState(int jid, GLFWgamepadstate *state);
+}
+
+namespace
+{
+    bool padDiagEnabled()
+    {
+        static const bool enabled = [] {
+            const char *value = std::getenv("GOW_PAD_DIAG");
+            return value && *value && std::strcmp(value, "0") != 0;
+        }();
+        return enabled;
+    }
+
+    constexpr int kDiagJoysticks = 16;  // GLFW_JOYSTICK_LAST + 1
+    constexpr int kDiagMaxButtons = 32;
+    constexpr int kDiagMaxHats = 8;
+    constexpr int kDiagMaxAxes = 12;
+    constexpr int kDiagMaxLines = 600; // a flood guard: a drifting stick must not fill the log
+
+    struct JoystickDiag
+    {
+        bool known = false;
+        unsigned char buttons[kDiagMaxButtons]{};
+        unsigned char hats[kDiagMaxHats]{};
+        float axes[kDiagMaxAxes]{};
+        GLFWgamepadstate mapped{};
+        bool mappedValid = false;
+    };
+
+    // Names of the SDL-mapped buttons, in GLFW_GAMEPAD_BUTTON_* order.
+    constexpr const char *kMappedButtons[15] = {"A", "B", "X", "Y", "LB", "RB", "Back", "Start", "Guide", "LThumb", "RThumb",
+                                                "DUp", "DRight", "DDown", "DLeft"};
+    constexpr const char *kMappedAxes[6] = {"LX", "LY", "RX", "RY", "LT", "RT"};
+
+    int g_diagLines = 0;
+    int g_diagInputChanges = 0;
+
+    // One log line; `change` marks a button / hat / axis change (as opposed to the device description).
+    void diagLine(bool change, const char *format, ...)
+    {
+        if (change)
+            ++g_diagInputChanges;
+        if (g_diagLines > kDiagMaxLines)
+            return;
+        if (g_diagLines++ == kDiagMaxLines)
+        {
+            std::fprintf(stderr, "[gow-paddiag] line limit reached, no more changes are logged\n");
+            return;
+        }
+        va_list args;
+        va_start(args, format);
+        std::vfprintf(stderr, format, args);
+        va_end(args);
+    }
+}
+
+// GOW-Port: window loop (gowFrameInput), the thread that owns the raylib window: GLFW's joystick calls belong to it.
+void gowPadDiagFrame()
+{
+    if (!padDiagEnabled())
+        return;
+    static JoystickDiag joysticks[kDiagJoysticks];
+    static bool idleReported = false;
+    static bool headerPrinted = false;
+    const double now = GetTime();
+    if (!headerPrinted)
+    {
+        headerPrinted = true;
+        const char *keys = std::getenv("PC_KEYS");
+        const char *face = std::getenv("PC_PAD_FACE_MAP");
+        const char *dmc5 = std::getenv("PC_DMC5_CONTROLS");
+        std::fprintf(stderr, "[gow-paddiag] started: PC_KEYS=%s PC_DMC5_CONTROLS=%s PC_PAD_FACE_MAP=%s; with a gamepad available the "
+                             "game ignores the keyboard (F1/F2 and the cheat menu are host features, not game input)\n",
+                     keys && *keys ? "set" : "unset", dmc5 ? dmc5 : "unset", face && *face ? face : "unset");
+    }
+    int present = 0;
+    for (int jid = 0; jid < kDiagJoysticks; ++jid)
+    {
+        JoystickDiag &joy = joysticks[jid];
+        if (!glfwJoystickPresent(jid))
+        {
+            if (joy.known)
+                diagLine(false, "[gow-paddiag] t=%.2f joystick %d disconnected\n", now, jid);
+            joy = JoystickDiag{};
+            continue;
+        }
+        ++present;
+        int buttonCount = 0, hatCount = 0, axisCount = 0;
+        const unsigned char *buttons = glfwGetJoystickButtons(jid, &buttonCount);
+        const unsigned char *hats = glfwGetJoystickHats(jid, &hatCount);
+        const float *axes = glfwGetJoystickAxes(jid, &axisCount);
+        buttonCount = buttons ? std::min(buttonCount, kDiagMaxButtons) : 0;
+        hatCount = hats ? std::min(hatCount, kDiagMaxHats) : 0;
+        axisCount = axes ? std::min(axisCount, kDiagMaxAxes) : 0;
+        GLFWgamepadstate mapped{};
+        const bool isGamepad = glfwJoystickIsGamepad(jid) != 0;
+        const bool mappedValid = isGamepad && glfwGetGamepadState(jid, &mapped) != 0;
+        if (!joy.known)
+        {
+            joy.known = true;
+            const char *name = glfwGetJoystickName(jid);
+            const char *guid = glfwGetJoystickGUID(jid);
+            const char *mapping = isGamepad ? glfwGetGamepadName(jid) : nullptr;
+            diagLine(false, "[gow-paddiag] t=%.2f joystick %d: name=\"%s\" guid=%s sdl_mapping=%s (%s) buttons=%d hats=%d axes=%d raylib_slot_available=%d\n",
+                now, jid, name ? name : "?", guid ? guid : "?", isGamepad ? "yes" : "NO", mapping ? mapping : "-", buttonCount, hatCount,
+                axisCount, jid < 4 ? static_cast<int>(IsGamepadAvailable(jid)) : -1);
+            std::string rest = "[gow-paddiag]   resting axes:";
+            for (int a = 0; a < axisCount; ++a)
+                rest += " " + std::to_string(a) + "=" + std::to_string(axes[a]).substr(0, 5);
+            std::fprintf(stderr, "%s\n", rest.c_str());
+            std::memset(joy.buttons, 0, sizeof(joy.buttons));
+            std::memset(joy.hats, 0, sizeof(joy.hats));
+            for (int a = 0; a < kDiagMaxAxes; ++a)
+                joy.axes[a] = a < axisCount ? axes[a] : 0.0f;
+            joy.mapped = mapped;
+            joy.mappedValid = mappedValid;
+            if (!isGamepad)
+                std::fprintf(stderr, "[gow-paddiag]   GLFW has no SDL mapping for this device: raylib lists it as a gamepad "
+                                     "(it only checks that the joystick is present) but every mapped button reads as released\n");
+        }
+        for (int b = 0; b < buttonCount; ++b)
+            if (buttons[b] != joy.buttons[b])
+            {
+                diagLine(true, "[gow-paddiag] t=%.2f joystick %d raw button %d %s\n", now, jid, b, buttons[b] ? "down" : "up");
+                joy.buttons[b] = buttons[b];
+            }
+        for (int h = 0; h < hatCount; ++h)
+            if (hats[h] != joy.hats[h])
+            {
+                diagLine(true, "[gow-paddiag] t=%.2f joystick %d raw hat %d = 0x%x\n", now, jid, h, static_cast<unsigned>(hats[h]));
+                joy.hats[h] = hats[h];
+            }
+        for (int a = 0; a < axisCount; ++a)
+            if (std::fabs(axes[a] - joy.axes[a]) >= 0.25f)
+            {
+                diagLine(true, "[gow-paddiag] t=%.2f joystick %d raw axis %d = %.2f\n", now, jid, a, static_cast<double>(axes[a]));
+                joy.axes[a] = axes[a];
+            }
+        if (mappedValid)
+        {
+            for (int b = 0; b < 15; ++b)
+                if (mapped.buttons[b] != joy.mapped.buttons[b])
+                    diagLine(true, "[gow-paddiag] t=%.2f joystick %d mapped button %s %s\n", now, jid, kMappedButtons[b], mapped.buttons[b] ? "down" : "up");
+            for (int a = 0; a < 6; ++a)
+                if (std::fabs(mapped.axes[a] - joy.mapped.axes[a]) >= 0.25f)
+                    diagLine(true, "[gow-paddiag] t=%.2f joystick %d mapped axis %s = %.2f\n", now, jid, kMappedAxes[a], static_cast<double>(mapped.axes[a]));
+            joy.mapped = mapped;
+        }
+        joy.mappedValid = mappedValid;
+    }
+    // What raylib reports for its four gamepad slots (the ones the game reads).
+    static bool raylibDown[4][GAMEPAD_BUTTON_RIGHT_THUMB + 1]{};
+    for (int slot = 0; slot < 4; ++slot)
+        if (IsGamepadAvailable(slot))
+            for (int button = GAMEPAD_BUTTON_LEFT_FACE_UP; button <= GAMEPAD_BUTTON_RIGHT_THUMB; ++button)
+            {
+                const bool down = IsGamepadButtonDown(slot, button);
+                if (down != raylibDown[slot][button])
+                {
+                    diagLine(true, "[gow-paddiag] t=%.2f raylib gamepad %d button %d %s\n", now, slot, button, down ? "down" : "up");
+                    raylibDown[slot][button] = down;
+                }
+            }
+    if (!idleReported && now >= 20.0 && g_diagInputChanges == 0)
+    {
+        idleReported = true;
+        std::fprintf(stderr, "[gow-paddiag] t=%.2f no joystick input change seen yet (%d joystick(s) present)\n", now, present);
     }
 }
 
@@ -443,6 +636,23 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
 
     data[2] = static_cast<uint8_t>(btns & 0xFF);
     data[3] = static_cast<uint8_t>(btns >> 8);
+
+    // GOW-Port: GOW_PAD_DIAG=1: what this read hands to the game, whenever the source or the buttons change (buttons are
+    // active-low: ffff = nothing pressed). source "keyboard" means no gamepad was available.
+    if (padDiagEnabled())
+    {
+        static int s_diagSource = -3;
+        static uint16_t s_diagButtons = 0;
+        const int source = useGamepad ? kGamepad : (keyMap().enabled ? -2 : -1);
+        if (source != s_diagSource || btns != s_diagButtons)
+        {
+            s_diagSource = source;
+            s_diagButtons = btns;
+            const std::string name = useGamepad ? "gamepad " + std::to_string(kGamepad) : (source == -2 ? "keyboard (PC_KEYS map)" : "keyboard (fixed keys)");
+            std::fprintf(stderr, "[gow-paddiag] game read: source=%s buttons=%04x sticks(rx,ry,lx,ly)=%u,%u,%u,%u\n", name.c_str(),
+                         static_cast<unsigned>(btns), data[4], data[5], data[6], data[7]);
+        }
+    }
 
     if (kGamepad != m_activeGamepad)
     {

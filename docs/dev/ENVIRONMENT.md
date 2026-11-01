@@ -79,6 +79,7 @@ arrives as `GOW_SHARPEN` and the render scale as `PS2X_GS_HW_SCALE`.
 | `GOW_FAST_BOOT=1` | Skips the entry animation |
 | `GOW_TEXTURE_REPLACE`, `GOW_TEXTURE_REPLACE_SYNC`, `GOW_TEXTURE_REPLACE_{CPU,GPU}_MB`, `GOW_TEXTURE_REPLACE_UPLOAD_MB`, `GOW_TEXTURE_REPLACE_DIAG` | Custom texture packs |
 | `GOW_PAD_TEST`, `GOW_PAD_TEST_NO_CAPTURE`, `GOW_PAD_SCRIPT`, `GOW_PAD_CAPTURES`, `GOW_PAD_LOG` | Automated pad input and GS frame captures |
+| `GOW_PAD_DIAG=1` | `[gow-paddiag]` lines for "my pad does nothing" reports: every joystick GLFW lists (name, GUID, SDL mapping, resting axes), raw and mapped button/hat/axis changes, raylib's gamepad buttons, and what the game's pad read receives (source and buttons) |
 | `GOW_HOST_SHOT`, `GOW_HOST_SHOT_ON_CHANGE` | Window screenshots at a frame number |
 
 ## Instrumentation

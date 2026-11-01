@@ -74,6 +74,7 @@ The game log is plain text. Lines starting with `[gow-`, `[gs`, `[vu1` and `[iop
 | F2 does not open the cheat menu | The game window must have focus. With a pad, only the captured button/combo opens it |
 | No rumble | Vibration is implemented on **Windows only** |
 | Gamepad not detected | Only controller port 1 is connected. Reconnect the pad before starting the game |
+| Pad (and keyboard) do nothing in the game | While any gamepad is listed, the game ignores the keyboard; F1/F2 are window features and still work. Close Steam, DS4Windows and similar tools, then try the pad over USB. To report it, set `GOW_PAD_DIAG=1` before starting the launcher, press buttons for ~10 s and attach `logs/last.log` (the `[gow-paddiag]` lines) |
 | Target lock does nothing | Alt must be pressed and released alone, with the window focused, and there must be an enemy within range |
 | Custom textures do nothing | **Textures → Custom textures** must be on, the files must be in `textures/replacements`, and the game must be restarted |
 | Achievements not recognized | The ISO must be the original (or an unmodified `SCUS_973.99`). Hardcore mode turns cheats off by design |
