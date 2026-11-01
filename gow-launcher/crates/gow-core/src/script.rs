@@ -111,6 +111,8 @@ pub fn run(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Keeps the AppImage's bundled libraries away from cmake and the compilers.
+    crate::system::sanitize_child_environment(&mut command);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
