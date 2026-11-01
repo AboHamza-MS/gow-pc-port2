@@ -346,6 +346,7 @@
   "wizComponentRequired": "Tick every component to continue.",
   "wizCompVs": "Visual Studio Build Tools (C++)",
   "wizCompVsDesc": "Microsoft's C++ compiler. Downloaded from Microsoft under its license; Windows asks for administrator permission and it takes 15 to 30 minutes.",
+  "wizCompVsOldDesc": "This PC has Visual Studio, but no CMake that can build the game (3.21 or newer): the one bundled with an old Visual Studio is too old. Visual Studio 2022 Build Tools is installed next to it, and your current one is not removed. Downloaded from Microsoft under its license; Windows asks for administrator permission and it takes 15 to 30 minutes.",
   "wizCompGit": "Portable Git",
   "wizCompGitDesc": "Downloads the project libraries (raylib, imgui...). Stays inside the install folder; nothing is installed in Windows.",
   "wizNoInstaller": "The installer script (install.ps1 on Windows, install.sh on Linux) was not found next to the repository. Run the launcher from the project folder.",

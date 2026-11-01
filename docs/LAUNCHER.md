@@ -94,7 +94,10 @@ The wizard opens by itself the first time, or from **Files → Setup wizard**.
 2. **Location**: where the extracted game and the build go. The path must be **ASCII only** and needs **30 GB free**.
    The default is `C:\Users\<you>\GodOfWar-PC`.
 3. **Components**: shown only when something is missing. Visual Studio 2022 Build Tools (C++, about 6 GB, needs
-   administrator permission, 15–30 minutes) and portable Git (about 50 MB, stays inside the install folder).
+   administrator permission, 15–30 minutes) and portable Git (about 50 MB, stays inside the install folder). Build Tools
+   are also offered when the PC has a Visual Studio but no usable CMake (3.21 or newer, with `cmcldeps.exe` next to it),
+   which is the case with Visual Studio 2017 and early 2019: they are installed next to the old ones. With a usable CMake,
+   from Visual Studio or from `PATH`, nothing is shown.
 4. **Install**: one button; the progress bar has eight stages and a cancel button. **Finished steps are kept**, so if
    you cancel and try again, the install resumes instead of starting over. The full log is `logs/install.log`.
 

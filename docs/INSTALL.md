@@ -42,7 +42,9 @@ installer works around it by moving the generated code to `%SystemDrive%\PCGen`)
       **Browse**.
    2. **Location**: where the game goes (`C:\Users\<you>\GodOfWar-PC` by default), ASCII path, 30 GB free.
    3. **Components**: only if something is missing. Visual Studio 2022 Build Tools (C++, about 6 GB, asks for
-      administrator permission, 15–30 minutes) and portable Git (about 50 MB, stays inside the install folder).
+      administrator permission, 15–30 minutes) and portable Git (about 50 MB, stays inside the install folder). Build
+      Tools are also offered when you have an older Visual Studio (2017, 2019) and no CMake 3.21 or newer on the PC: the
+      new ones are installed next to the old ones, which are not removed. If a usable CMake exists, nothing is offered.
    4. **Install**: a progress bar and a cancel button. Finished steps are kept, so you can cancel and resume later.
 3. Press **PLAY**. Check **Files** once: the executable, the runner and the memory card should all be detected.
 
@@ -86,7 +88,7 @@ install.cmd -Destination "D:\GodOfWar"               # keep the game data and th
 |---|---|
 | `-Iso <file>` | The disc image. Without it, the first `.iso` in `game\` and then in the repository root is used |
 | `-Destination <folder>` | Where `game\`, `build\`, `build-gen\` and `vu1_captures\` go. The generated C++ still lands in the repository |
-| `-InstallTools` | Downloads Microsoft's Build Tools installer (signature checked) and installs the C++ workload |
+| `-InstallTools` | Downloads Microsoft's Build Tools installer (signature checked) and installs the C++ workload, when Visual Studio is missing or no usable CMake exists (see below) |
 | `-NoOptimize` / `-Optimize` | Skip / force the optimization pass (see below) |
 | `-Seconds <n>` | Duration of the optimization run (default 240 s) |
 | `-Jobs <n>` | Parallel compiler processes (default: cores, at most one per 2 GB of RAM) |

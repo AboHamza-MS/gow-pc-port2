@@ -48,6 +48,10 @@ pub struct Environment {
     /// The C++ toolchain: Microsoft's compiler (Build Tools or Visual Studio) on Windows; on Linux, compiler, CMake,
     /// Ninja and the development libraries (`install.sh --check-deps` found nothing missing).
     pub vs: bool,
+    /// Windows: there is a Visual Studio but no CMake that can configure the build, neither in PATH nor bundled with it (an old
+    /// Visual Studio bundles an old one). The wizard then offers Visual Studio 2022 Build Tools next to it; when a usable CMake
+    /// exists, the installer finds it by itself and nothing is offered.
+    pub cmake_unusable: bool,
     pub git: bool,
     /// `install.ps1` / `install.sh` found.
     pub installer: bool,
@@ -92,9 +96,31 @@ fn linux_dependencies(script: &Path) -> DependencyReport {
         .unwrap_or_default()
 }
 
+/// `true` if the output of `cmake --version` (`cmake version 3.31.12`) is 3.21 or newer, the least the build requires.
+pub fn cmake_version_is_enough(output: &str) -> bool {
+    let version = output.lines().next().unwrap_or("").rsplit(' ').next().unwrap_or("");
+    let mut parts = version.trim().split('.').map(|part| part.parse::<u32>().ok());
+    match (parts.next().flatten(), parts.next().flatten()) {
+        (Some(major), Some(minor)) => (major, minor) >= (3, 21),
+        _ => false,
+    }
+}
+
+/// Windows: whether this `cmake.exe` can configure the build, with the same rule as `install.ps1`'s `CmakeUsable`: 3.21 or
+/// newer, and `cmcldeps.exe` next to it (a CMake from another toolchain can lack it, and the resource compiler then fails).
+fn cmake_is_usable(cmake: &Path) -> bool {
+    if !cmake.parent().is_some_and(|directory| directory.join("cmcldeps.exe").is_file()) {
+        return false;
+    }
+    let mut command = Command::new(cmake);
+    command.arg("--version");
+    system::output_with_timeout(command, Duration::from_secs(8)).is_some_and(|out| cmake_version_is_enough(&out))
+}
+
 pub fn check_environment(script: Option<&Path>) -> Environment {
     let mut environment = Environment {
         vs: false,
+        cmake_unusable: false,
         git: false,
         installer: script.is_some(),
         missing: Vec::new(),
@@ -112,18 +138,40 @@ pub fn check_environment(script: Option<&Path>) -> Environment {
         if let Some(program_files) = std::env::var_os("ProgramFiles(x86)") {
             let vswhere = Path::new(&program_files).join("Microsoft Visual Studio/Installer/vswhere.exe");
             if vswhere.is_file() {
-                let mut command = Command::new(vswhere);
-                command.args([
-                    "-latest",
-                    "-products",
-                    "*",
-                    "-requires",
-                    "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-                    "-property",
-                    "installationPath",
-                ]);
-                environment.vs = system::output_with_timeout(command, Duration::from_secs(8))
-                    .is_some_and(|out| !out.trim().is_empty());
+                let query = |property: &str| {
+                    let mut command = Command::new(&vswhere);
+                    command.args([
+                        "-latest",
+                        "-products",
+                        "*",
+                        "-requires",
+                        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                        "-property",
+                        property,
+                    ]);
+                    system::output_with_timeout(command, Duration::from_secs(8))
+                };
+                let installation =
+                    query("installationPath").map(|out| out.lines().next().unwrap_or("").trim().to_string());
+                environment.vs = installation.as_deref().is_some_and(|path| !path.is_empty());
+                // GOW-Port: the installer uses the CMake in PATH or the one bundled with Visual Studio, whichever works
+                // (install.ps1 explains it); only when neither does is something offered to install.
+                if let Some(path) = installation.filter(|path| !path.is_empty()) {
+                    let bundled =
+                        Path::new(&path).join(r"Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe");
+                    let in_path = std::env::var_os("PATH")
+                        .map(|path| {
+                            std::env::split_paths(&path)
+                                .map(|directory| directory.join("cmake.exe"))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    environment.cmake_unusable = !in_path
+                        .into_iter()
+                        .chain(Some(bundled))
+                        .filter(|candidate| candidate.is_file())
+                        .any(|cmake| cmake_is_usable(&cmake));
+                }
             }
         }
         environment.git =
@@ -408,6 +456,20 @@ mod tests {
         let unknown = parse_dependency_report("[missing] g++\n");
         assert_eq!((unknown.missing.len(), unknown.packages.len(), unknown.install_command.as_str()), (1, 0, ""));
         assert_eq!(parse_dependency_report(""), DependencyReport::default());
+    }
+
+    #[test]
+    fn the_build_needs_cmake_3_21_or_newer() {
+        assert!(cmake_version_is_enough(
+            "cmake version 3.31.12\r\n\r\nCMake suite maintained and supported by Kitware"
+        ));
+        assert!(cmake_version_is_enough("cmake version 3.21.0"));
+        assert!(cmake_version_is_enough("cmake version 4.4.4"));
+        assert!(cmake_version_is_enough("cmake version 4.0.0-rc1"));
+        assert!(!cmake_version_is_enough("cmake version 3.20.6"));
+        assert!(!cmake_version_is_enough("cmake version 3.12.18081601-MSVC_2"));
+        assert!(!cmake_version_is_enough(""));
+        assert!(!cmake_version_is_enough("garbage"));
     }
 
     #[test]

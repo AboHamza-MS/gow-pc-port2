@@ -13,7 +13,7 @@ the same `gow-2005`.
 | | Windows | Linux |
 |---|---|---|
 | Compiler | MSVC 2022 (Build Tools; `vcvars64.bat` loaded) | GCC 13+ or Clang 17+ |
-| Build system | CMake 3.20+, Ninja | CMake 3.20+, Ninja |
+| Build system | CMake 3.21+ with `cmcldeps.exe` next to it (any official build has it), Ninja | CMake 3.21+, Ninja |
 | Rust | stable (for the recompiler and the tools) | stable |
 | Launcher | Node 22+, Rust stable, Tauri prerequisites | Node 22+, Rust stable, `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev patchelf` |
 
