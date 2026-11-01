@@ -2,13 +2,14 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import { createMockApi, setApi, type MockApi } from './lib/backend';
+import { availableUpdate, createMockApi, setApi, type MockApi } from './lib/backend';
+import type { UpdateState } from './lib/types';
 import { readBindings } from './lib/keys';
 
 let api: MockApi;
 
-function boot(ready: boolean) {
-  api = createMockApi({ ready });
+function boot(ready: boolean, update?: UpdateState) {
+  api = createMockApi({ ready, update });
   setApi(api);
   return render(<App />);
 }
@@ -360,5 +361,156 @@ describe('texture pack installation', () => {
     // A second click on the disabled button does nothing.
     await user.click(screen.getByRole('button', { name: 'Downloading…' }));
     expect(install).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('launcher update notice', () => {
+  const notice = () => screen.queryByText(/Version 0\.2\.0 is available/);
+  const publish = (state: UpdateState) => act(() => api.emit('update-state', state));
+
+  it('shows nothing when there is no newer release', async () => {
+    boot(true);
+    await screen.findByRole('button', { name: 'PLAY' });
+    expect(notice()).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Update' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open release page' })).not.toBeInTheDocument();
+  });
+
+  it('shows the version and an Update button that stay put when the section changes', async () => {
+    boot(true, availableUpdate());
+    const user = userEvent.setup();
+    expect(await screen.findByText('Version 0.2.0 is available')).toBeInTheDocument();
+    const button = screen.getByRole('button', { name: 'Update' });
+    expect(button).toBeEnabled();
+    const titleBar = button.closest('header');
+    for (const section of ['Performance', 'Controls', 'Other']) {
+      await user.click(screen.getByRole('button', { name: section }));
+      expect(screen.getByRole('button', { name: 'Update' }).closest('header')).toBe(titleBar);
+    }
+  });
+
+  it('appears when the check finishes after the window opened', async () => {
+    boot(true);
+    await screen.findByRole('button', { name: 'PLAY' });
+    publish(availableUpdate());
+    expect(await screen.findByRole('button', { name: 'Update' })).toBeEnabled();
+  });
+
+  it('downloads, shows the progress and then the restart', async () => {
+    boot(true, availableUpdate());
+    const install = vi.spyOn(api, 'updateInstall');
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Update' }));
+    expect(install).toHaveBeenCalledTimes(1);
+    publish({ ...availableUpdate(), phase: 'downloading', done: 50, total: 200 });
+    expect(screen.getByText('Downloading the update: 25 %')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Update progress' })).toHaveAttribute('aria-valuenow', '25');
+    expect(screen.queryByRole('button', { name: 'Update' })).not.toBeInTheDocument();
+    publish({ ...availableUpdate(), phase: 'installing', done: 200, total: 200 });
+    expect(screen.getByText('Installing the update, the launcher will restart')).toBeInTheDocument();
+  });
+
+  it('keeps the bar moving without a known size', async () => {
+    boot(true);
+    await screen.findByRole('button', { name: 'PLAY' });
+    publish({ ...availableUpdate(), phase: 'downloading', done: 1000, total: 0 });
+    expect(screen.getByText('Downloading the update')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Update progress' })).not.toHaveAttribute('aria-valuenow');
+  });
+
+  it('says what went wrong and retries', async () => {
+    boot(true);
+    await screen.findByRole('button', { name: 'PLAY' });
+    publish({ ...availableUpdate(), phase: 'error', error: 'Download request failed with status: 503' });
+    expect(screen.getByText('Could not update to 0.2.0')).toBeInTheDocument();
+    expect(screen.getByText('Could not update to 0.2.0').parentElement).toHaveAttribute('title', 'Download request failed with status: 503');
+    const install = vi.spyOn(api, 'updateInstall');
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Retry' }));
+    expect(install).toHaveBeenCalledTimes(1);
+    publish({ ...availableUpdate(), phase: 'downloading', done: 1, total: 100 });
+    expect(screen.queryByText('Could not update to 0.2.0')).not.toBeInTheDocument();
+  });
+
+  it('reports a refusal of the backend instead of failing silently', async () => {
+    boot(true, availableUpdate());
+    vi.spyOn(api, 'updateInstall').mockRejectedValue('busy:installation');
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Update' }));
+    expect(await screen.findByText('Finish the installation first.')).toBeInTheDocument();
+  });
+
+  it('disables the button, with the reason, while the game runs', async () => {
+    boot(true, availableUpdate());
+    const install = vi.spyOn(api, 'updateInstall');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'PLAY' }));
+    await screen.findByRole('button', { name: 'RUNNING' });
+    expect(screen.getByRole('button', { name: 'Update' })).toBeDisabled();
+    expect(screen.getByText('Close the game to update.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Update' }));
+    expect(install).not.toHaveBeenCalled();
+    // The mock game closes by itself: the button comes back.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Update' })).toBeEnabled(), { timeout: 5000 });
+    expect(screen.queryByText('Close the game to update.')).not.toBeInTheDocument();
+  });
+
+  it('disables the button while an installation, an optimization or a texture pack runs', async () => {
+    boot(true, availableUpdate());
+    await screen.findByRole('button', { name: 'Update' });
+    act(() => api.emit('install-progress', { stage: 2, stageProgress: 0.1, recentLines: [] }));
+    expect(screen.getByRole('button', { name: 'Update' })).toBeDisabled();
+    expect(screen.getByText('Finish the installation first.')).toBeInTheDocument();
+    act(() => api.emit('install-done', { ok: true, cancelled: false, error: '', elf: '', executable: '' }));
+    expect(screen.getByRole('button', { name: 'Update' })).toBeEnabled();
+
+    act(() => api.emit('optimizer', { configured: true, compiling: true, captured: 1, compiled: 1, completionRatio: 0.5, buildProgress: 0.2, status: 'compiling' }));
+    expect(screen.getByRole('button', { name: 'Update' })).toBeDisabled();
+    expect(screen.getByText('Wait for the optimization to finish.')).toBeInTheDocument();
+    act(() => api.emit('optimizer', { configured: true, compiling: false, captured: 1, compiled: 1, completionRatio: 1, buildProgress: -1, status: 'idle' }));
+    expect(screen.getByRole('button', { name: 'Update' })).toBeEnabled();
+
+    act(() => api.emit('texture-pack-progress', { stage: 'downloading', done: 1, total: 100, overall: 0.1 }));
+    expect(screen.getByRole('button', { name: 'Update' })).toBeDisabled();
+    expect(screen.getByText('Wait for the texture pack to install.')).toBeInTheDocument();
+  });
+
+  it('opens the release page, and says why, for a portable copy', async () => {
+    boot(true, availableUpdate('portable'));
+    const install = vi.spyOn(api, 'updateInstall');
+    const open = vi.spyOn(api, 'updateOpenRelease');
+    expect(await screen.findByText('Version 0.2.0 is available')).toBeInTheDocument();
+    expect(screen.getByText(/This portable copy cannot update itself/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Update' })).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Open release page' }));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it('opens the release page when the release cannot be installed in place', async () => {
+    boot(true, availableUpdate('manual'));
+    expect(await screen.findByText('Download it from the release page.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open release page' })).toBeEnabled();
+  });
+
+  it('is in Portuguese when the language is', async () => {
+    boot(true, availableUpdate());
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Other' }));
+    await user.click(screen.getByRole('combobox', { name: 'Language' }));
+    await user.click(screen.getByRole('option', { name: 'Português (Brasil)' }));
+    expect(await screen.findByText('A versão 0.2.0 está disponível')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Atualizar' })).toBeEnabled();
+  });
+});
+
+describe('automatic updates setting', () => {
+  it('is off by default and saved when turned on', async () => {
+    boot(true);
+    const patch = vi.spyOn(api, 'patchSettings');
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Other' }));
+    const toggle = screen.getByRole('switch', { name: 'Automatic updates' });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+    await waitFor(() => expect(patch).toHaveBeenCalledWith({ autoUpdate: true }));
+    expect(screen.getByRole('switch', { name: 'Automatic updates' })).toBeChecked();
   });
 });

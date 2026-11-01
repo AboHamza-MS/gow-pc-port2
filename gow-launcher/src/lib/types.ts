@@ -46,6 +46,8 @@ export interface Settings {
   optimizationEnabled: boolean;
   optimizeDuringGame: boolean;
   optimizationCompiled: number;
+  /** Install a newer launcher at start-up when nothing is running (off: only the notice). */
+  autoUpdate: boolean;
 }
 
 export interface DisplayInfo {
@@ -208,3 +210,25 @@ export interface TexturePackOutcome {
   /** Stable code the interface translates (`noGame`, `noSpace`, `network`...). */
   code: string | null;
 }
+
+/** Nothing to show (no newer release, or the check failed), a release to offer, or the update running or failed. */
+export type UpdatePhase = 'idle' | 'available' | 'downloading' | 'installing' | 'error';
+
+/** What the button does: update in place, or open the release page (the portable zip, a package install, an unsigned release). */
+export type UpdateMode = 'automatic' | 'portable' | 'manual';
+
+/** Event `update-state` and command `update_state`. */
+export interface UpdateState {
+  phase: UpdatePhase;
+  mode: UpdateMode;
+  version: string;
+  pageUrl: string;
+  /** Bytes downloaded and announced size (0 while unknown). */
+  done: number;
+  total: number;
+  /** English detail of the last failure, for the tooltip. */
+  error: string;
+}
+
+/** What an update must not interrupt; the backend refuses with `busy:<code>` for the same reasons. */
+export type UpdateBlocker = 'game' | 'installation' | 'optimizer' | 'texturePack';

@@ -401,5 +401,22 @@
   "texturePackInstalled": "Texture pack installed: %1 files · %2 GB",
   "texturePackFailed": "The texture pack could not be installed",
   "asyncTextures": "Load textures asynchronously",
-  "asyncTexturesDesc": "Reads the replacements in the background and draws the game's own texture until each one is ready, spreading the work on the GPU so the game does not stutter. Off waits for every file (each new texture may pause the game briefly)."
+  "asyncTexturesDesc": "Reads the replacements in the background and draws the game's own texture until each one is ready, spreading the work on the GPU so the game does not stutter. Off waits for every file (each new texture may pause the game briefly).",
+  "updateAvailable": "Version %1 is available",
+  "updateButton": "Update",
+  "updateRetry": "Retry",
+  "updateFailed": "Could not update to %1",
+  "updateDownloading": "Downloading the update: %1 %",
+  "updateDownloadingUnknown": "Downloading the update",
+  "updateInstalling": "Installing the update, the launcher will restart",
+  "updateProgress": "Update progress",
+  "updateOpenPage": "Open release page",
+  "updatePortableNote": "This portable copy cannot update itself: download the new zip from the release page.",
+  "updateManualNote": "Download it from the release page.",
+  "updateBlocked_game": "Close the game to update.",
+  "updateBlocked_installation": "Finish the installation first.",
+  "updateBlocked_optimizer": "Wait for the optimization to finish.",
+  "updateBlocked_texturePack": "Wait for the texture pack to install.",
+  "autoUpdate": "Automatic updates",
+  "autoUpdateDesc": "Checks for a new version of the launcher at start-up and installs it by itself when the game, the installer and the optimization are idle, then restarts the launcher. Off: you only see a notice and press Update. A portable copy only shows the notice."
 }
