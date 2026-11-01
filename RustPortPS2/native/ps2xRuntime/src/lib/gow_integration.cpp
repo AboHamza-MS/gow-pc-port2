@@ -271,7 +271,9 @@ namespace
             std::memset(packet + 6u, 0, 12u);
             return;
         }
+        // GOW-Port: the packet's sticks go in, so that with a gamepad listed only the axes the keyboard moves change.
         uint8_t sticks[4];
+        std::memcpy(sticks, rdram + buffer + 2u, sizeof(sticks));
         if (PCKeyboardSticks(sticks))
             std::memcpy(rdram + buffer + 2u, sticks, sizeof(sticks));
     }

@@ -53,13 +53,26 @@ namespace gow_game
             uint8_t state[32]{};
             if (!buffer || !socket || socket->port != 0 || !runtime ||
                 !runtime->padBackend().readState(0, 0, state, sizeof(state))) { returnToCaller(ctx, 0xffffffffu); return; }
-            // GOW-Port: keyboard sticks only without any gamepad (PSPadBackend uses the first available slot).
-            if (!IsGamepadAvailable(0) && !IsGamepadAvailable(1) && !IsGamepadAvailable(2) && !IsGamepadAvailable(3))
+            // GOW-Port: keyboard sticks. Without a gamepad they set every axis (PSPadBackend uses the first available slot);
+            // with one (issue #12: a listed device may never send input) a key only replaces the axis it moves, and the
+            // fixed WASD/IJKL keys stay out when the launcher's key map (PC_KEYS) is in charge.
+            const bool gamepad = IsGamepadAvailable(0) || IsGamepadAvailable(1) || IsGamepadAvailable(2) || IsGamepadAvailable(3);
+            static const bool mapped = std::getenv("PC_KEYS") != nullptr;
+            if (!gamepad || !mapped)
             {
-                state[6] = IsKeyDown(KEY_A) ? 0 : IsKeyDown(KEY_D) ? 255 : 128;
-                state[7] = IsKeyDown(KEY_W) ? 0 : IsKeyDown(KEY_S) ? 255 : 128;
-                state[4] = IsKeyDown(KEY_J) ? 0 : IsKeyDown(KEY_L) ? 255 : 128;
-                state[5] = IsKeyDown(KEY_I) ? 0 : IsKeyDown(KEY_K) ? 255 : 128;
+                auto fixedAxis = [gamepad](uint8_t &axis, int low, int high)
+                {
+                    if (IsKeyDown(low))
+                        axis = 0;
+                    else if (IsKeyDown(high))
+                        axis = 255;
+                    else if (!gamepad)
+                        axis = 128;
+                };
+                fixedAxis(state[6], KEY_A, KEY_D);
+                fixedAxis(state[7], KEY_W, KEY_S);
+                fixedAxis(state[4], KEY_J, KEY_L);
+                fixedAxis(state[5], KEY_I, KEY_K);
             }
             // Opt-in smoke test: advance title/new-game prompts without host UI input.
             // Capture the GS's own presented pixels; normal play never injects input.

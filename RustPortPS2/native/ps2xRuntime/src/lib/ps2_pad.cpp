@@ -264,8 +264,8 @@ void gowPadDiagFrame()
         const char *keys = std::getenv("PC_KEYS");
         const char *face = std::getenv("PC_PAD_FACE_MAP");
         const char *dmc5 = std::getenv("PC_DMC5_CONTROLS");
-        std::fprintf(stderr, "[gow-paddiag] started: PC_KEYS=%s PC_DMC5_CONTROLS=%s PC_PAD_FACE_MAP=%s; with a gamepad available the "
-                             "game ignores the keyboard (F1/F2 and the cheat menu are host features, not game input)\n",
+        std::fprintf(stderr, "[gow-paddiag] started: PC_KEYS=%s PC_DMC5_CONTROLS=%s PC_PAD_FACE_MAP=%s; the keyboard "
+                             "is read together with the gamepad (F1/F2 and the cheat menu are host features, not game input)\n",
                      keys && *keys ? "set" : "unset", dmc5 ? dmc5 : "unset", face && *face ? face : "unset");
     }
     int present = 0;
@@ -365,24 +365,36 @@ void gowPadDiagFrame()
 
 // GOW-Port: sticks from the configurable keyboard, in libpad2 packet order (RX, RY, LX, LY). It is used by the
 // wrapper of God of War's pad read (ps2_runtime.cpp), because gowPad2Read sets its own fixed sticks.
+// `sticks` holds the current values on entry. Without a gamepad the keyboard sets all four axes; with one (GLFW can list
+// devices that never send input, such as dongles or virtual Steam pads) only the axes the keyboard moves replace the
+// gamepad's, so the keyboard still works and a working pad is not overridden.
 bool PCKeyboardSticks(uint8_t (&sticks)[4])
 {
     const KeyMap &map = keyMap();
-    if (!map.enabled || IsGamepadAvailable(0))
+    if (!map.enabled)
         return false;
+    bool gamepad = false;
+    for (int i = 0; i < 4 && !gamepad; ++i)
+        gamepad = IsGamepadAvailable(i);
+    uint8_t keys[4];
     const uint8_t x = axisValue(isActionPressed(map, ActionLeftStickLeft), isActionPressed(map, ActionLeftStickRight));
     const uint8_t y = axisValue(isActionPressed(map, ActionLeftStickUp), isActionPressed(map, ActionLeftStickDown));
     if (isActionPressed(map, ActionRightStickModifier))
     {
-        sticks[0] = x;
-        sticks[1] = y;
-        sticks[2] = sticks[3] = kPadStickCenter;
-        return true;
+        keys[0] = x;
+        keys[1] = y;
+        keys[2] = keys[3] = kPadStickCenter;
     }
-    sticks[0] = axisValue(isActionPressed(map, ActionRightStickLeft), isActionPressed(map, ActionRightStickRight));
-    sticks[1] = axisValue(isActionPressed(map, ActionRightStickUp), isActionPressed(map, ActionRightStickDown));
-    sticks[2] = x;
-    sticks[3] = y;
+    else
+    {
+        keys[0] = axisValue(isActionPressed(map, ActionRightStickLeft), isActionPressed(map, ActionRightStickRight));
+        keys[1] = axisValue(isActionPressed(map, ActionRightStickUp), isActionPressed(map, ActionRightStickDown));
+        keys[2] = x;
+        keys[3] = y;
+    }
+    for (int i = 0; i < 4; ++i)
+        if (!gamepad || keys[i] != kPadStickCenter)
+            sticks[i] = keys[i];
     return true;
 }
 
@@ -542,7 +554,11 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
         data[4] = static_cast<uint8_t>(128 + rx * 127);
         data[5] = static_cast<uint8_t>(128 + ry * 127);
     }
-    else if (keyMap().enabled)
+
+    // GOW-Port: the keyboard works next to a gamepad too (buttons are active-low, so both sources simply add up). Before, any
+    // listed gamepad switched it off, and a device GLFW lists without ever sending input (a dongle, a virtual Steam pad)
+    // left the game with no input at all (issue #12).
+    if (keyMap().enabled)
     {
         // GOW-Port: configurable keyboard (launcher).
         const KeyMap &map = keyMap();
@@ -550,7 +566,7 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
         for (size_t action = 0; action <= ActionFury; ++action)
             if (isButtonPressed(map, action, moving))
                 clearBit(kActionBits[action]);
-        uint8_t sticks[4];
+        uint8_t sticks[4] = {data[4], data[5], data[6], data[7]};
         if (PCKeyboardSticks(sticks))
         {
             data[4] = sticks[0];
