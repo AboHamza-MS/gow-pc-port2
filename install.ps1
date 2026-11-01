@@ -128,13 +128,25 @@ function InstallVsBuildTools {
     $bootstrap = Join-Path $Toolchain 'vs_BuildTools.exe'
     Download 'https://aka.ms/vs/17/release/vs_BuildTools.exe' $bootstrap
     CheckSignature $bootstrap 'Microsoft Corporation'
+    # GOW-Port: two Visual Studio installers cannot run at once (one left open by the user makes this one end with code 1).
+    $running = @(Get-Process -Name 'vs_installer', 'vs_installershell', 'vs_setup_bootstrapper', 'setup' -ErrorAction SilentlyContinue | Where-Object { $_.Path -match 'Visual Studio' })
+    if ($running) { Warn "A Visual Studio installer is already open ($(($running | ForEach-Object { $_.ProcessName }) -join ', ')); close it, or this installation may end with code 1." }
+    $started = Get-Date
     try {
         $p = Start-Process -FilePath $bootstrap -Verb RunAs -Wait -PassThru -ArgumentList @(
             '--wait', '--passive', '--norestart', '--add', 'Microsoft.VisualStudio.Workload.VCTools', '--includeRecommended')
     }
     catch { Fail 'Could not start the Visual Studio installer: the administrator permission must be accepted.' }
     # 3010 = installed, but Windows asks for a restart; the C++ tools can already be used.
-    if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { Fail "The Visual Studio installer ended with code $($p.ExitCode)." }
+    if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+        # GOW-Port: the installer's own logs (issue #14: "ended with code 1" says nothing); their error lines go into install.log.
+        $logs = @(Get-ChildItem -Path $env:TEMP -Filter 'dd_*.log' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge $started.AddMinutes(-1) } | Sort-Object LastWriteTime -Descending | Select-Object -First 4)
+        foreach ($log in $logs) {
+            Write-Host "  $($log.Name):"
+            Select-String -LiteralPath $log.FullName -Pattern 'error|failed|exit code' -ErrorAction SilentlyContinue | Select-Object -Last 6 | ForEach-Object { Write-Host "    $($_.Line.Trim())" }
+        }
+        Fail "The Visual Studio installer ended with code $($p.ExitCode). Close any open Visual Studio Installer window, restart Windows if an installation is pending, and try again; if you already installed Visual Studio yourself, run this installation again without asking for the tools. Details: $env:TEMP\dd_*.log"
+    }
 }
 if ($InstallTools -and -not (FindVs)) { InstallVsBuildTools }
 
@@ -149,18 +161,41 @@ $vs = $null
 # first, and stderr is discarded too: a real failure is caught by the checks for cl, cmake and ninja right below.
 # GOW-Port: a function, because installing Visual Studio 2022 next to an old one (see the cmake check) reloads it.
 function LoadVsEnvironment {
-    $script:vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-    if (-not $script:vs) { Fail 'Visual Studio does not have the C++ compiler (the "Desktop development with C++" workload). Run: install.cmd -InstallTools' }
-    $vcvars = Join-Path $script:vs 'VC\Auxiliary\Build\vcvars64.bat'
-    $vcvarsCmd = Join-Path $env:TEMP 'PC_vcvars.cmd'
+    # GOW-Port: every installation with the C++ tools, the newest first (-sort), and for each one two loaders: vcvars64.bat and then
+    # VsDevCmd.bat, the entry point Microsoft documents (vcvars64.bat ends up there). Issue #14: a Visual Studio 2026 (18) with the C++
+    # workload where cl was not in PATH after vcvars64.bat; the loader's own output was discarded, so the cause was invisible.
+    # It now goes to a file and, if no loader works, into the log.
+    $instances = @(& $vswhere -products * -sort -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Where-Object { $_ })
+    if (-not $instances) { Fail 'Visual Studio does not have the C++ compiler (the "Desktop development with C++" workload). Run: install.cmd -InstallTools' }
     $vsInstaller = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
-    Set-Content -LiteralPath $vcvarsCmd -Value "@set `"PATH=$vsInstaller;%PATH%`"`r`n@call `"$vcvars`" >nul 2>&1`r`n@set" -Encoding ASCII
-    cmd /c $vcvarsCmd | ForEach-Object {
-        if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
+    # The .cmd holds paths of this PC, so it is written in the console's (OEM) code page, not ASCII.
+    $oem = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+    $cmdFile = Join-Path $env:TEMP 'PC_vcvars.cmd'
+    $outFile = Join-Path $env:TEMP 'PC_vcvars.out'
+    $notes = @()
+    foreach ($path in $instances) {
+        $loaders = @(
+            @{ Name = 'vcvars64.bat'; File = (Join-Path $path 'VC\Auxiliary\Build\vcvars64.bat'); Args = '' },
+            @{ Name = 'VsDevCmd.bat'; File = (Join-Path $path 'Common7\Tools\VsDevCmd.bat'); Args = '-arch=x64 -host_arch=x64 -no_logo' })
+        foreach ($l in $loaders) {
+            if (-not (Test-Path -LiteralPath $l.File)) { $notes += "$path : $($l.Name) is missing"; continue }
+            [IO.File]::WriteAllText($cmdFile, "@set `"PATH=$vsInstaller;%PATH%`"`r`n@call `"$($l.File)`" $($l.Args) > `"$outFile`" 2>&1`r`n@set`r`n", $oem)
+            cmd /c $cmdFile | ForEach-Object {
+                if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
+            }
+            # GOW-Port: only the compiler is required here. The newest Visual Studio may lack the "C++ CMake tools" component (a Visual
+            # Studio 18 Community without it, issue #9): cmake and ninja are looked up in every installation, or installed, right below.
+            if (Get-Command cl -ErrorAction SilentlyContinue) { $script:vs = $path; return }
+            $tail = if (Test-Path -LiteralPath $outFile) { @(Get-Content -LiteralPath $outFile -Tail 8 -ErrorAction SilentlyContinue) } else { @() }
+            $notes += "$path : $($l.Name) did not put cl in PATH; its output: $($tail -join ' | ')"
+        }
     }
-    # GOW-Port: only the compiler is required here. The newest Visual Studio may lack the "C++ CMake tools" component (a Visual
-    # Studio 18 Community without it, issue #9): cmake and ninja are looked up in every installation, or installed, right below.
-    if (-not (Get-Command cl -ErrorAction SilentlyContinue)) { Fail "cl not found after loading vcvars64.bat ($vcvars)." }
+    Write-Host 'Visual Studio installations with the C++ tools, and what each loader did:'
+    foreach ($n in $notes) { Write-Host "  $n" }
+    $msvc = Join-Path $instances[0] 'VC\Tools\MSVC'
+    $toolsets = if (Test-Path -LiteralPath $msvc) { @(Get-ChildItem -LiteralPath $msvc -Directory | ForEach-Object { "$($_.Name) (cl.exe: $(Test-Path -LiteralPath (Join-Path $_.FullName 'bin\Hostx64\x64\cl.exe')))" }) } else { @() }
+    Write-Host "  MSVC toolsets in $($instances[0]): $(if ($toolsets) { $toolsets -join ', ' } else { 'none' })"
+    Fail "cl not found after loading vcvars64.bat or VsDevCmd.bat ($($instances[0])). Open the Visual Studio Installer, choose Modify and check that ""Desktop development with C++"" is installed with an ""MSVC build tools"" component and a Windows SDK; the details are above in install.log."
 }
 LoadVsEnvironment
 # GOW-Port: the build needs a CMake 3.21 or newer with cmcldeps.exe next to it, and the first one in PATH may not be that:
