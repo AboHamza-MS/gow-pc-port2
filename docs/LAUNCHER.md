@@ -81,8 +81,9 @@ be saved. Hardcore disables all cheats. See [`PLAYING.md`](PLAYING.md#achievemen
 ### Other
 
 Language (English / Brazilian Portuguese), **Skip FMV videos**, **Fast boot** (cuts the intro animation and may cut the
-opening lines; not recommended), **Minimize the launcher while playing**, shortcuts, **Last game log**, **Restore
-defaults** (resets graphics, performance, controls and cheats; your file paths are kept) and the About box.
+opening lines; not recommended), **Minimize the launcher while playing**, **Automatic updates** (off by default, see
+[Updating the launcher](#updating-the-launcher)), shortcuts, **Last game log**, **Restore defaults** (resets graphics,
+performance, controls and cheats; your file paths are kept) and the About box.
 
 ## The setup wizard
 
@@ -94,7 +95,10 @@ The wizard opens by itself the first time, or from **Files → Setup wizard**.
 2. **Location**: where the extracted game and the build go. The path must be **ASCII only** and needs **30 GB free**.
    The default is `C:\Users\<you>\GodOfWar-PC`.
 3. **Components**: shown only when something is missing. Visual Studio 2022 Build Tools (C++, about 6 GB, needs
-   administrator permission, 15–30 minutes) and portable Git (about 50 MB, stays inside the install folder).
+   administrator permission, 15–30 minutes) and portable Git (about 50 MB, stays inside the install folder). Build Tools
+   are also offered when the PC has a Visual Studio but no usable CMake (3.21 or newer, with `cmcldeps.exe` next to it),
+   which is the case with Visual Studio 2017 and early 2019: they are installed next to the old ones. With a usable CMake,
+   from Visual Studio or from `PATH`, nothing is shown.
 4. **Install**: one button; the progress bar has eight stages and a cancel button. **Finished steps are kept**, so if
    you cancel and try again, the install resumes instead of starting over. The full log is `logs/install.log`.
 
@@ -116,6 +120,7 @@ The data folder is `%APPDATA%\GOW_PC\Launcher` on Windows and `~/.local/share/GO
 | Settings | `settings.json` in the data folder |
 | Last game log (stdout + stderr) | `logs/last.log` (the previous run becomes `logs/previous.log`) |
 | Installer and optimizer logs | `logs/install.log`, `logs/optimize.log` |
+| Launcher update checks and installs | `logs/update.log` |
 | Installation kit shipped with the launcher | `kit/` in the data folder |
 | Window icon | `icon.png` in the data folder |
 | GL shader cache | `%LOCALAPPDATA%\GOW_PC\Launcher\cache\shaders` / `~/.cache/GOW_PC/Launcher/shaders` |
@@ -144,5 +149,27 @@ The launcher also pauses a background rebuild while the game is running, and res
 - **Linux (experimental)**: `.deb` or AppImage from the same Releases page. The wizard drives `install.sh` there
   (unverified on a real Linux machine); `./install.sh` from a checkout also works, and the launcher finds its files.
   Vibration is not implemented on Linux.
+
+## Updating the launcher
+
+When GitHub has a newer *published* release of the launcher (drafts and pre-releases are ignored), a notice appears in the
+title bar, the strip at the top that is the same in every tab: **Version X.Y.Z is available** and an **Update** button. It
+shows nothing when you are up to date, and nothing at all when the check fails (no Internet, GitHub's rate limit): failures
+only go to `logs/update.log`. The launcher checks when it opens and then at most every few hours while it stays open.
+
+- **Installed launcher (Windows setup program, Linux AppImage)**: **Update** downloads the new version, checks its
+  signature, installs it and restarts the launcher, with a progress bar. If something goes wrong the notice says so and
+  offers **Retry**. Your settings, game and saves are not touched. The download is about the size of the setup program
+  (around 200 MB on Windows, since it carries WebView2).
+- **Portable zip, Linux `.deb`, or a release that cannot be installed in place**: the notice says the copy cannot update
+  itself, and the button (**Open release page**) opens the release page, where the new zip or package is.
+- **Not while something is running.** The button is disabled, with the reason beside it, while the game is running, the
+  setup wizard is installing, an optimization is compiling or the texture pack is installing. It comes back by itself.
+- **Automatic updates** (Other tab, off by default): with it on, the launcher checks when it opens and, if there is a newer
+  version and nothing is running, installs it by itself and restarts, without you pressing anything. If it fails it does not
+  try again on its own: the notice shows the error and **Retry**. With it off, you only get the notice. A portable copy
+  only ever gets the notice.
+
+How releases are made updatable is in [`dev/UPDATER.md`](dev/UPDATER.md).
 
 The launcher is GPL-3.0; its sources are in [`gow-launcher/`](../gow-launcher).

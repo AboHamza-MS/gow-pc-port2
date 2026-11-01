@@ -20,6 +20,8 @@ use gow_core::{display, kit, legacy, shortcut, textures};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
+mod updater;
+
 const ICON: &[u8] = include_bytes!("../../assets/icon-source.png");
 
 struct AppState {
@@ -31,6 +33,7 @@ struct AppState {
     gamepad_cancel: Mutex<Option<Arc<AtomicBool>>>,
     searching: AtomicBool,
     textures_running: AtomicBool,
+    updater: updater::Updates,
 }
 
 impl AppState {
@@ -109,11 +112,12 @@ fn bootstrap(window: WebviewWindow, state: State<'_, AppState>, locale: String) 
 
 /// Merges a partial settings object, saves it and returns the whole.
 #[tauri::command]
-fn patch_settings(state: State<'_, AppState>, patch: serde_json::Value) -> Result<Settings, String> {
+fn patch_settings(app: AppHandle, state: State<'_, AppState>, patch: serde_json::Value) -> Result<Settings, String> {
     let serde_json::Value::Object(patch) = patch else {
         return Err("the patch must be an object".into());
     };
     let reconfigure = patch.keys().any(|key| key.starts_with("optimiz"));
+    let patch_turns_on_auto_update = patch.get("autoUpdate") == Some(&serde_json::Value::Bool(true));
     let mut error = None;
     let settings = state.update(|settings| {
         let mut value = serde_json::to_value(&*settings).unwrap_or_default();
@@ -130,6 +134,9 @@ fn patch_settings(state: State<'_, AppState>, patch: serde_json::Value) -> Resul
     }
     if reconfigure {
         configure_optimizer(&state, &settings);
+    }
+    if settings.auto_update && patch_turns_on_auto_update {
+        updater::nudge(&app);
     }
     Ok(settings)
 }
@@ -564,6 +571,25 @@ fn optimize_now(state: State<'_, AppState>) {
     state.optimizer.optimize_now();
 }
 
+// ---------------------------------------------------------------------------------------------- self-update
+
+#[tauri::command]
+fn update_state(state: State<'_, AppState>) -> gow_core::update::UpdateState {
+    state.updater.snapshot()
+}
+
+/// Downloads and installs the update found by the check, then restarts. Fails at once, with a code, when it must not
+/// start (`busy:game`, `busy:installation`, `busy:optimizer`, `busy:texturePack`, `notAvailable`).
+#[tauri::command]
+fn update_install(app: AppHandle) -> Result<(), String> {
+    updater::install(&app)
+}
+
+#[tauri::command]
+fn update_open_release(app: AppHandle) -> bool {
+    updater::open_release(&app)
+}
+
 // ---------------------------------------------------------------------------------------------- startup
 
 fn prepare_data_directory(paths: &AppPaths) {
@@ -596,6 +622,7 @@ fn load_settings(paths: &AppPaths) -> Settings {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _arguments, _directory| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
@@ -620,6 +647,7 @@ pub fn run() {
                     let _ = compiled_app.emit("settings-changed", updated);
                 },
             );
+            let paths_logs = paths.logs_dir();
             let state = AppState {
                 paths,
                 settings: Mutex::new(settings.clone()),
@@ -629,11 +657,13 @@ pub fn run() {
                 gamepad_cancel: Mutex::new(None),
                 searching: AtomicBool::new(false),
                 textures_running: AtomicBool::new(false),
+                updater: updater::Updates::new(paths_logs.join("update.log")),
             };
             state.optimizer.set_script(install_script(&state));
             configure_optimizer(&state, &settings);
             state.optimizer.spawn_timer();
             app.manage(state);
+            updater::spawn_scheduler(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -689,6 +719,9 @@ pub fn run() {
             install_complete,
             optimizer_snapshot,
             optimize_now,
+            update_state,
+            update_install,
+            update_open_release,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the launcher");

@@ -119,6 +119,7 @@ pub fn start(
         .stdin(Stdio::null())
         .stdout(Stdio::from(log.try_clone().map_err(|e| LaunchError::LogOpen(e.to_string()))?))
         .stderr(Stdio::from(log));
+    crate::system::sanitize_child_environment(&mut command);
     for name in &plan.remove {
         command.env_remove(name);
     }

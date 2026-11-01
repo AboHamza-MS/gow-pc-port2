@@ -33,6 +33,9 @@ describe('translations', () => {
       ...Array.from({ length: 7 }, (_, i) => `wizStage${i}`),
       'mouseLeft', 'mouseRight', 'mouseMiddle', 'mouse4', 'mouse5', 'space',
       'errorExecutable', 'errorElf', 'errorElfMismatch', 'errorArranque', 'integrated', 'dedicated',
+      // The reasons an update waits (`UpdateBlocker`), and the two notes of a copy that cannot update itself.
+      ...['game', 'installation', 'optimizer', 'texturePack'].map((blocker) => `updateBlocked_${blocker}`),
+      'updatePortableNote', 'updateManualNote',
     ];
     expect(keys.filter((key) => !(key in en))).toEqual([]);
   });

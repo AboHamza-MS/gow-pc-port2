@@ -59,6 +59,44 @@ pub fn find_in_path(name: &str) -> Option<PathBuf> {
     })
 }
 
+/// `LD_LIBRARY_PATH` without the entries that point into the AppImage's own mount (`APPDIR`, or `/tmp/.mount_*` when the
+/// variable is missing), or `None` if nothing is left. `value` is the inherited variable.
+///
+/// The AppImage's `AppRun` puts its bundled libraries (`libcrypto.so.3` among them) first in `LD_LIBRARY_PATH`, and
+/// every child inherits them. The system's `cmake` then loads the bundled libcrypto together with the system's newer
+/// `libssl.so.3` and dies with ``version `OPENSSL_3.x.0' not found``.
+pub fn without_appimage_library_paths(value: &str, appdir: Option<&str>) -> Option<String> {
+    let appdir = appdir.map(|dir| dir.trim_end_matches('/')).filter(|dir| !dir.is_empty());
+    let bundled = |entry: &str| match appdir {
+        Some(dir) => entry == dir || entry.strip_prefix(dir).is_some_and(|rest| rest.starts_with('/')),
+        None => entry.starts_with("/tmp/.mount_"),
+    };
+    let kept: Vec<&str> = value.split(':').filter(|entry| !entry.is_empty() && !bundled(entry)).collect();
+    (!kept.is_empty()).then(|| kept.join(":"))
+}
+
+/// Makes `command` start without the AppImage's library path (see [`without_appimage_library_paths`]). Does nothing
+/// outside an AppImage, on Windows or when the variable is not set. Meant for the system tools the launcher runs
+/// (`bash`, `install.sh` and everything it builds with, the game, `xdg-open`), not for the launcher itself.
+pub fn sanitize_child_environment(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        if std::env::var_os("APPIMAGE").is_none() && std::env::var_os("APPDIR").is_none() {
+            return;
+        }
+        let Some(inherited) = std::env::var_os("LD_LIBRARY_PATH") else {
+            return;
+        };
+        let appdir = std::env::var("APPDIR").ok();
+        match without_appimage_library_paths(&inherited.to_string_lossy(), appdir.as_deref()) {
+            Some(cleaned) => command.env("LD_LIBRARY_PATH", cleaned),
+            None => command.env_remove("LD_LIBRARY_PATH"),
+        };
+    }
+    #[cfg(not(unix))]
+    let _ = command;
+}
+
 /// Runs a command and returns its stdout, or `None` if it fails or takes longer than `timeout`.
 pub fn output_with_timeout(command: Command, timeout: Duration) -> Option<String> {
     run_with_timeout(command, timeout).filter(|(success, _)| *success).map(|(_, output)| output)
@@ -67,6 +105,7 @@ pub fn output_with_timeout(command: Command, timeout: Duration) -> Option<String
 /// Runs a command and returns whether it succeeded and its stdout, or `None` if it could not run or took longer than
 /// `timeout`. For commands whose exit code carries an answer, like `install.sh --check-deps`.
 pub fn run_with_timeout(mut command: Command, timeout: Duration) -> Option<(bool, String)> {
+    sanitize_child_environment(&mut command);
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     #[cfg(windows)]
     {
@@ -97,6 +136,25 @@ mod tests {
         assert!(is_ascii_path(r"C:\GodOfWar-PC"));
         assert!(!is_ascii_path(r"C:\Usuários\x"));
         assert!(!is_ascii_path("C:\\a\tb"));
+    }
+
+    #[test]
+    fn the_appimage_library_paths_are_dropped_and_the_rest_kept() {
+        let cleaned = without_appimage_library_paths(
+            "/tmp/.mount_GodOfa/usr/lib:/tmp/.mount_GodOfa/usr/lib64:/opt/cuda/lib64:/usr/local/lib",
+            Some("/tmp/.mount_GodOfa"),
+        );
+        assert_eq!(cleaned.as_deref(), Some("/opt/cuda/lib64:/usr/local/lib"));
+        // Only what is under APPDIR goes: a sibling with the same prefix stays.
+        let cleaned = without_appimage_library_paths(
+            "/tmp/.mount_GodOfa2/lib:/tmp/.mount_GodOfa/lib",
+            Some("/tmp/.mount_GodOfa/"),
+        );
+        assert_eq!(cleaned.as_deref(), Some("/tmp/.mount_GodOfa2/lib"));
+        // Without APPDIR, the AppImage mount pattern is used; with nothing left there is nothing to set.
+        assert_eq!(without_appimage_library_paths("/tmp/.mount_GodOfa/usr/lib::", None), None);
+        assert_eq!(without_appimage_library_paths("/usr/lib:/tmp/.mount_x/lib", None).as_deref(), Some("/usr/lib"));
+        assert_eq!(without_appimage_library_paths("", Some("/tmp/.mount_x")), None);
     }
 
     #[test]

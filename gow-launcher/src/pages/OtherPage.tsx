@@ -1,4 +1,4 @@
-import { FileText, Info, Languages, Link, Minimize2, RotateCcw, SkipForward, Zap } from 'lucide-react';
+import { Download, FileText, Info, Languages, Link, Minimize2, RotateCcw, SkipForward, Zap } from 'lucide-react';
 import { SecondaryButton, Select, SettingRow, Switch } from '../components/ui';
 import { useApp } from '../state/app';
 
@@ -26,6 +26,9 @@ export function OtherPage() {
       </SettingRow>
       <SettingRow icon={Minimize2} title={t('minimizeOnPlay')} description={t('minimizeOnPlayDesc')}>
         <Switch label={t('minimizeOnPlay')} checked={settings.minimizeOnPlay} onChange={(minimizeOnPlay) => patch({ minimizeOnPlay })} />
+      </SettingRow>
+      <SettingRow icon={Download} title={t('autoUpdate')} description={t('autoUpdateDesc')}>
+        <Switch label={t('autoUpdate')} checked={settings.autoUpdate} onChange={(autoUpdate) => patch({ autoUpdate })} />
       </SettingRow>
       <SettingRow icon={Link} title={t('shortcuts')} description={t('shortcutsDesc')}>
         <div className="flex gap-2">

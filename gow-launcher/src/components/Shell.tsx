@@ -19,6 +19,10 @@ export function TitleBar() {
           GOD OF WAR (2005)
         </span>
       </div>
+      {/* Same place in every section, and clear of the window controls: the title bar is the one strip that never changes. */}
+      <div data-tauri-drag-region className="flex h-full min-w-0 flex-1 items-center justify-center px-4">
+        <UpdateNotice />
+      </div>
       <div className="flex h-full">
         {[
           { id: 'minimize', icon: Minus, size: 16, run: () => api.minimize() },
@@ -38,6 +42,85 @@ export function TitleBar() {
         ))}
       </div>
     </header>
+  );
+}
+
+// ----------------------------------------------------------------------------------------------- update notice
+
+const noticeButton =
+  'h-[22px] shrink-0 whitespace-nowrap rounded border border-gold bg-[#4a2f18] px-2.5 text-[11px] font-semibold tracking-wide text-cream transition-colors hover:bg-[#6a4424] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-[#4a2f18]';
+
+/**
+ * A newer launcher release, in the title bar. It says what the button will do (update here, or open the release page for
+ * a copy that cannot update itself), shows the progress while it runs and a failure with a retry, and explains a disabled
+ * button instead of just greying it. Nothing at all while there is nothing to offer.
+ */
+export function UpdateNotice() {
+  const { update, updateBlocker, installUpdate, openUpdatePage, f, t } = useApp();
+  if (update.phase === 'idle') return null;
+  const { phase, mode, version } = update;
+  const text = 'min-w-0 truncate text-[11px] font-semibold tracking-wide text-[#e7d6b4]';
+  const muted = 'min-w-0 truncate text-[11px] text-[#b9a27a]';
+
+  if (phase === 'downloading' || phase === 'installing') {
+    const known = update.total > 0;
+    const percent = phase === 'installing' ? 100 : known ? Math.min(100, Math.floor((update.done / update.total) * 100)) : 0;
+    const label = phase === 'installing' ? t('updateInstalling') : known ? f('updateDownloading', percent) : t('updateDownloadingUnknown');
+    return (
+      <div role="status" className="flex min-w-0 items-center gap-3" title={label}>
+        <span className={text}>{label}</span>
+        <div
+          role="progressbar"
+          aria-label={t('updateProgress')}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={known || phase === 'installing' ? percent : undefined}
+          className="h-[6px] w-[150px] shrink-0 overflow-hidden rounded-full bg-[#140b06]/70"
+        >
+          <div
+            className={`h-full rounded-full bg-gold-light ${known || phase === 'installing' ? '' : 'w-1/3 animate-pulse'}`}
+            style={known || phase === 'installing' ? { width: `${percent}%` } : undefined}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === 'error' && mode === 'automatic') {
+    return (
+      <div role="status" className="flex min-w-0 items-center gap-3" title={update.error}>
+        <span className={`${text} text-[#f0b4a8]`}>{f('updateFailed', version)}</span>
+        <button type="button" className={noticeButton} disabled={updateBlocker !== null} onClick={() => void installUpdate()}>
+          {t('updateRetry')}
+        </button>
+        {updateBlocker && <span className={muted}>{t(`updateBlocked_${updateBlocker}`)}</span>}
+      </div>
+    );
+  }
+
+  if (mode === 'automatic') {
+    const reason = updateBlocker ? t(`updateBlocked_${updateBlocker}`) : '';
+    return (
+      <div role="status" className="flex min-w-0 items-center gap-3" title={reason}>
+        <span className={text}>{f('updateAvailable', version)}</span>
+        {reason && <span className={muted}>{reason}</span>}
+        <button type="button" className={noticeButton} disabled={updateBlocker !== null} onClick={() => void installUpdate()}>
+          {t('updateButton')}
+        </button>
+      </div>
+    );
+  }
+
+  // A portable copy (or a package install) cannot replace itself: the button opens the page where the new one is.
+  const why = t(mode === 'portable' ? 'updatePortableNote' : 'updateManualNote');
+  return (
+    <div role="status" className="flex min-w-0 items-center gap-3" title={`${f('updateAvailable', version)}. ${why}`}>
+      <span className={text}>{f('updateAvailable', version)}</span>
+      <span className={muted}>{why}</span>
+      <button type="button" className={noticeButton} onClick={() => void openUpdatePage()}>
+        {t('updateOpenPage')}
+      </button>
+    </div>
   );
 }
 

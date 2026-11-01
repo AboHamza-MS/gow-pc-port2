@@ -92,7 +92,10 @@ pub fn open_path(path: &Path) -> std::io::Result<()> {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        Command::new("xdg-open").arg(path).spawn().map(|_| ())
+        let mut command = Command::new("xdg-open");
+        command.arg(path);
+        crate::system::sanitize_child_environment(&mut command);
+        command.spawn().map(|_| ())
     }
 }
 

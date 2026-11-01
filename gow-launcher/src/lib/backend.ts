@@ -4,7 +4,7 @@
 import type {
   Bootstrap, DestinationValidation, GameFinished, GameStatus, GamepadCaptured, InstallOutcome,
   InstallProgress, IsoValidation, OptimizerSnapshot, Settings, TexturePackInfo, TexturePackOutcome, TexturePackProgress,
-  WizardInfo,
+  UpdateMode, UpdateState, WizardInfo,
 } from './types';
 
 export interface EventMap {
@@ -22,6 +22,7 @@ export interface EventMap {
   /** The window was asked to close while a texture pack is installing; it stayed open. */
   'close-blocked': undefined;
   optimizer: OptimizerSnapshot;
+  'update-state': UpdateState;
 }
 
 export interface PickOptions {
@@ -64,6 +65,10 @@ export interface Api {
   installComplete(args: { destination: string; elf: string; executable: string }): Promise<Settings>;
   optimizerSnapshot(): Promise<OptimizerSnapshot>;
   optimizeNow(): Promise<void>;
+  updateState(): Promise<UpdateState>;
+  /** Downloads and installs the update, then the launcher restarts. Rejects with a code (`busy:game`...) when it must not start. */
+  updateInstall(): Promise<void>;
+  updateOpenRelease(): Promise<boolean>;
   // Window and dialogs.
   on<K extends keyof EventMap>(event: K, handler: (payload: EventMap[K]) => void): Promise<() => void>;
   pick(options: PickOptions): Promise<string | null>;
@@ -117,6 +122,9 @@ async function createTauriApi(): Promise<Api> {
     installComplete: (arguments_) => call('install_complete', { arguments: arguments_ }),
     optimizerSnapshot: () => call('optimizer_snapshot'),
     optimizeNow: () => call('optimize_now'),
+    updateState: () => call('update_state'),
+    updateInstall: () => call('update_install'),
+    updateOpenRelease: () => call('update_open_release'),
     on: async (event, handler) => listen(event, (e) => handler(e.payload as never)),
     pick: async ({ title, directory, filters, defaultPath }) => {
       const chosen = await open({ title, directory: directory ?? false, multiple: false, filters, defaultPath });
@@ -147,14 +155,23 @@ export const defaultSettings: Settings = {
   retroAchievementsEnabled: false, retroAchievementsUser: '',
   retroAchievementsHardcore: false, retroAchievementsNotifications: true, optimizationDestination: '',
   optimizationEnabled: true, optimizeDuringGame: true, optimizationCompiled: 0,
+  autoUpdate: false,
 };
+
+export const noUpdate: UpdateState = { phase: 'idle', mode: 'automatic', version: '', pageUrl: '', done: 0, total: 0, error: '' };
+
+/** An update the mock backend offers, for development in a browser (`?update=automatic`) and for tests. */
+export function availableUpdate(mode: UpdateMode = 'automatic'): UpdateState {
+  return { ...noUpdate, phase: 'available', mode, version: '0.2.0', pageUrl: 'https://github.com/danielalves96/gow-pc-port/releases/tag/launcher-v0.2.0' };
+}
 
 type Handler = (payload: never) => void;
 
 export type MockApi = Api & { emit: <K extends keyof EventMap>(event: K, payload: EventMap[K]) => void };
 
-export function createMockApi(options: { ready?: boolean } = {}): MockApi {
+export function createMockApi(options: { ready?: boolean; update?: UpdateState } = {}): MockApi {
   const ready = options.ready ?? true;
+  let update = options.update ?? noUpdate;
   const listeners = new Map<string, Set<Handler>>();
   const emit = <K extends keyof EventMap>(event: K, payload: EventMap[K]) =>
     listeners.get(event)?.forEach((handler) => handler(payload as never));
@@ -250,7 +267,7 @@ export function createMockApi(options: { ready?: boolean } = {}): MockApi {
     },
     gamepadCancel: async () => undefined,
     wizardInfo: async () => ({
-      environment: { vs: false, git: false, installer: true, missing: [], missingPackages: [], installCommand: '' },
+      environment: { vs: false, cmakeUnusable: false, git: false, installer: true, missing: [], missingPackages: [], installCommand: '' },
       hasManifest: true,
       defaultDestination: 'C:\\GodOfWar-PC',
     }),
@@ -285,6 +302,18 @@ export function createMockApi(options: { ready?: boolean } = {}): MockApi {
     installComplete: async (args) => merge({ elf: args.elf, executable: args.executable, optimizationDestination: args.destination, iso: '' }),
     optimizerSnapshot: async () => snapshot(),
     optimizeNow: async () => undefined,
+    updateState: async () => update,
+    updateInstall: async () => {
+      // Short fake run: the real one downloads about 200 MB, installs and restarts the launcher.
+      const publish = (change: Partial<UpdateState>) => {
+        update = { ...update, ...change };
+        emit('update-state', update);
+      };
+      publish({ phase: 'downloading', done: 0, total: 200_000_000, error: '' });
+      setTimeout(() => publish({ done: 90_000_000 }), 150);
+      setTimeout(() => publish({ phase: 'installing', done: 200_000_000 }), 450);
+    },
+    updateOpenRelease: async () => true,
     on: async (event, handler) => {
       const set = listeners.get(event) ?? new Set<Handler>();
       set.add(handler as Handler);
@@ -300,13 +329,22 @@ export function createMockApi(options: { ready?: boolean } = {}): MockApi {
   };
 }
 
+function mockUpdateFromAddress(value: string | null): UpdateState {
+  return value === 'automatic' || value === 'portable' || value === 'manual' ? availableUpdate(value) : noUpdate;
+}
+
 let instance: Promise<Api> | undefined;
 
 /** The backend for this environment: Tauri when running inside the app, the mock in a browser. */
 export function getApi(): Promise<Api> {
   instance ??= isTauri
     ? createTauriApi()
-    : Promise.resolve(createMockApi({ ready: new URLSearchParams(window.location.search).get('state') !== 'missing' }));
+    : Promise.resolve(
+        createMockApi({
+          ready: new URLSearchParams(window.location.search).get('state') !== 'missing',
+          update: mockUpdateFromAddress(new URLSearchParams(window.location.search).get('update')),
+        }),
+      );
   return instance;
 }
 

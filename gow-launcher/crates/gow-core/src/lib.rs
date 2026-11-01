@@ -21,3 +21,4 @@ pub mod settings;
 pub mod shortcut;
 pub mod system;
 pub mod textures;
+pub mod update;

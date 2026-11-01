@@ -12,7 +12,7 @@ type Step = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 const emptyIso: IsoValidation = { ok: false, reason: 'empty', hash: '' };
 const emptyDestination: DestinationValidation = { ok: false, reason: 'empty', freeGb: 0 };
 const noInfo: WizardInfo = {
-  environment: { vs: true, git: true, installer: true, missing: [], missingPackages: [], installCommand: '' },
+  environment: { vs: true, cmakeUnusable: false, git: true, installer: true, missing: [], missingPackages: [], installCommand: '' },
   hasManifest: false, defaultDestination: '',
 };
 
@@ -68,7 +68,10 @@ export function Wizard() {
   // Linux: the installer cannot install system packages by itself (it needs the user's password), so the wizard lists
   // them and waits until a new check finds none missing.
   const manual = environment.missing.length > 0;
-  const missing = !environment.vs || !environment.git;
+  // A Visual Studio without any usable CMake counts as missing, and the wizard offers Visual Studio 2022 next to it. With a
+  // usable one (in PATH or bundled), nothing is shown: the installer finds it by itself.
+  const needVs = !environment.vs || environment.cmakeUnusable;
+  const missing = needVs || !environment.git;
   const componentsReady = !manual && (environment.vs || include.vs) && (environment.git || include.git);
   const indicator = missing ? [0, 1, 2, 3] : [0, 1, 3];
 
@@ -188,7 +191,7 @@ export function Wizard() {
     outcome.current = null;
     setStep(4);
     try {
-      await api.installStart({ iso, destination, installTools: !manual && !environment.vs && include.vs, vu1MemoryLimitGb });
+      await api.installStart({ iso, destination, installTools: !manual && needVs && include.vs, vu1MemoryLimitGb });
     } catch (failure) {
       setErrorText(String(failure));
       setStep(6);
@@ -251,7 +254,7 @@ export function Wizard() {
     return key === 'wizDestinationSpace' ? f(key, destinationCheck.freeGb.toFixed(0)) : t(key);
   };
   const components = [
-    !manual && !environment.vs && include.vs && t('wizCompVs'),
+    !manual && needVs && include.vs && t('wizCompVs'),
     !environment.git && include.git && t('wizCompGit'),
   ].filter(Boolean);
 
@@ -367,7 +370,7 @@ export function Wizard() {
             ) : (
               <>
                 <Lead>{t('wizComponentsDesc')}</Lead>
-                {!environment.vs && <Component title={t('wizCompVs')} description={t('wizCompVsDesc')} size="~6 GB" checked={include.vs} onChange={(vs) => setInclude({ ...include, vs })} />}
+                {needVs && <Component title={t('wizCompVs')} description={t(environment.vs ? 'wizCompVsOldDesc' : 'wizCompVsDesc')} size="~6 GB" checked={include.vs} onChange={(vs) => setInclude({ ...include, vs })} />}
                 {!environment.git && <Component title={t('wizCompGit')} description={t('wizCompGitDesc')} size="~50 MB" checked={include.git} onChange={(git) => setInclude({ ...include, git })} />}
                 {!componentsReady && <p className="text-[13px] text-warn">{t('wizComponentRequired')}</p>}
               </>

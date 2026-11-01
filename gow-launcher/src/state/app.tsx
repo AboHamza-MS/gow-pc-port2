@@ -1,10 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { getApi, type Api } from '../lib/backend';
+import { getApi, noUpdate, type Api } from '../lib/backend';
 import { asLanguage, format, formatDuration, systemLocale, translate } from '../lib/i18n';
 import { gigabytes, nextOverall } from '../lib/texturePack';
 import type {
   Bootstrap, GameFinished, GameStatus, Language, LaunchError, OptimizerSnapshot, Settings, TexturePackOutcome,
-  TexturePackProgress, TexturePackStatus,
+  TexturePackProgress, TexturePackStatus, UpdateBlocker, UpdateState,
 } from '../lib/types';
 
 export interface ErrorNotice {
@@ -61,6 +61,13 @@ export interface AppContextValue {
   closeBlocked: boolean;
   keepInstalling: () => void;
   closeAnyway: () => void;
+  /** The newer launcher release, if any (`idle` shows nothing), and what the update would interrupt. */
+  update: UpdateState;
+  updateBlocker: UpdateBlocker | null;
+  /** The notice's button in an installed copy: downloads, installs and restarts. */
+  installUpdate: () => Promise<void>;
+  /** The notice's button in a portable copy or a package install: opens the release page. */
+  openUpdatePage: () => Promise<void>;
 }
 
 const Context = createContext<AppContextValue | null>(null);
@@ -92,6 +99,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [textureInstall, setTextureInstall] = useState<TextureInstall>(idleTextureInstall);
   const [closeBlocked, setCloseBlocked] = useState(false);
+  const [update, setUpdate] = useState<UpdateState>(noUpdate);
+  const [installing, setInstalling] = useState(false);
   const textureActive = useRef(false);
   textureActive.current = textureInstall.active;
   const pending = useRef<Partial<Settings>>({});
@@ -184,6 +193,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         else showError(translate(language, 'texturePackFailed'), event.error ?? undefined);
       }),
       api.on('close-blocked', () => setCloseBlocked(true)),
+      api.on('update-state', setUpdate),
+      api.on('install-progress', () => setInstalling(true)),
+      api.on('install-done', () => setInstalling(false)),
       api.on('game-finished', (finished: GameFinished) => {
         if (finished.failed) {
           showError(format(asLanguage(settingsRef.current?.language ?? 'en'), 'finishedFailure', finished.code ?? '?'), finished.summary);
@@ -195,6 +207,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ];
     void api.isGameRunning().then(setGameRunning);
     void api.optimizerSnapshot().then(setOptimizer);
+    void api.updateState().then(setUpdate);
     void refreshStatus();
     return () => {
       stops.forEach((stop) => void stop.then((off) => off()));
@@ -243,6 +256,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [api, showError, t],
   );
 
+  // The same reasons the backend refuses an update for (it is the one that decides; this only explains the disabled button).
+  const updateBlocker: UpdateBlocker | null = gameRunning
+    ? 'game'
+    : installing
+      ? 'installation'
+      : optimizer.compiling
+        ? 'optimizer'
+        : textureInstall.active
+          ? 'texturePack'
+          : null;
+
+  const installUpdate = useCallback(async () => {
+    if (!api) return;
+    try {
+      await api.updateInstall();
+    } catch (failure) {
+      const code = String(failure);
+      if (code.startsWith('busy:')) notify(translate(asLanguage(settingsRef.current?.language ?? 'en'), `updateBlocked_${code.slice(5)}`));
+      else setUpdate((current) => ({ ...current, phase: 'error', error: code }));
+    }
+  }, [api, notify]);
+
+  const openUpdatePage = useCallback(async () => {
+    await api?.updateOpenRelease();
+  }, [api]);
+
   const keepInstalling = useCallback(() => setCloseBlocked(false), []);
   const closeAnyway = useCallback(() => {
     setCloseBlocked(false);
@@ -282,11 +321,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       dismissError: () => setError(null), wizardOpen, openWizard: () => setWizardOpen(true),
       closeWizard: () => setWizardOpen(false), adoptSettings,
       textureInstall, installTexturePack, closeBlocked, keepInstalling, closeAnyway,
+      update, updateBlocker, installUpdate, openUpdatePage,
     };
   }, [
     api, boot, settings, patch, flush, reset, lang, t, f, duration, status, refreshStatus, detectPaths, gameRunning,
     optimizer, play, stop, toast, notify, error, showError, wizardOpen, adoptSettings,
     textureInstall, installTexturePack, closeBlocked, keepInstalling, closeAnyway,
+    update, updateBlocker, installUpdate, openUpdatePage,
   ]);
 
   if (!value) return null;

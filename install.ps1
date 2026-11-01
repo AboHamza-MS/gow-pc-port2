@@ -123,7 +123,7 @@ function GetPortableGit {
     return (Join-Path $dir 'cmd')
 }
 
-if ($InstallTools -and -not (FindVs)) {
+function InstallVsBuildTools {
     Step 'Installing Visual Studio 2022 Build Tools (C++): asks for administrator permission; 15-30 min'
     $bootstrap = Join-Path $Toolchain 'vs_BuildTools.exe'
     Download 'https://aka.ms/vs/17/release/vs_BuildTools.exe' $bootstrap
@@ -136,26 +136,92 @@ if ($InstallTools -and -not (FindVs)) {
     # 3010 = installed, but Windows asks for a restart; the C++ tools can already be used.
     if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { Fail "The Visual Studio installer ended with code $($p.ExitCode)." }
 }
+if ($InstallTools -and -not (FindVs)) { InstallVsBuildTools }
 
 Step 'Checking tools'
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 if (-not (Test-Path $vswhere)) { Fail 'Visual Studio (Build Tools) is not installed. Run: install.cmd -InstallTools' }
-$vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-if (-not $vs) { Fail 'Visual Studio does not have the C++ compiler (the "Desktop development with C++" workload). Run: install.cmd -InstallTools' }
-$vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+$vs = $null
 # MSVC environment (cl, link, cmake and ninja from Visual Studio) in this PowerShell session. A temporary .cmd avoids the
 # quoting problems of "cmd /c" with paths containing spaces.
 # vcvars64.bat looks vswhere.exe up by name, and outside a Developer Prompt its folder is not in PATH: it printed "'vswhere.exe'
 # is not recognized" (in the console's code page, which showed up garbled in the launcher's log). The folder goes into PATH
 # first, and stderr is discarded too: a real failure is caught by the checks for cl, cmake and ninja right below.
-$vcvarsCmd = Join-Path $env:TEMP 'PC_vcvars.cmd'
-$vsInstaller = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
-Set-Content -LiteralPath $vcvarsCmd -Value "@set `"PATH=$vsInstaller;%PATH%`"`r`n@call `"$vcvars`" >nul 2>&1`r`n@set" -Encoding ASCII
-cmd /c $vcvarsCmd | ForEach-Object {
-    if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
+# GOW-Port: a function, because installing Visual Studio 2022 next to an old one (see the cmake check) reloads it.
+function LoadVsEnvironment {
+    $script:vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    if (-not $script:vs) { Fail 'Visual Studio does not have the C++ compiler (the "Desktop development with C++" workload). Run: install.cmd -InstallTools' }
+    $vcvars = Join-Path $script:vs 'VC\Auxiliary\Build\vcvars64.bat'
+    $vcvarsCmd = Join-Path $env:TEMP 'PC_vcvars.cmd'
+    $vsInstaller = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
+    Set-Content -LiteralPath $vcvarsCmd -Value "@set `"PATH=$vsInstaller;%PATH%`"`r`n@call `"$vcvars`" >nul 2>&1`r`n@set" -Encoding ASCII
+    cmd /c $vcvarsCmd | ForEach-Object {
+        if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
+    }
+    foreach ($c in @('cl', 'cmake', 'ninja')) {
+        if (-not (Get-Command $c -ErrorAction SilentlyContinue)) { Fail "$c not found after loading vcvars64.bat ($vcvars)." }
+    }
 }
+LoadVsEnvironment
+# GOW-Port: the build needs a CMake 3.21 or newer with cmcldeps.exe next to it, and the first one in PATH may not be that:
+# - an older one (an old Visual Studio's, Android SDK, another recompilation kit) does not understand "-S <src> -B <build>": it takes
+#   the last path as the source and stops with "The source directory <build> does not exist";
+# - one from another toolchain can be 3.21+ and lack cmcldeps.exe: the Ninja generator then writes the resource compiler rule (rc.exe)
+#   with an empty helper and the build fails with RC1107 near its end.
+# The CMake and Ninja bundled with Visual Studio are the pair Microsoft tests with the MSVC compiler used here, so they are preferred
+# when usable; otherwise the first usable CMake in PATH is used, and only if there is none is something installed (-InstallTools).
+function CmakeVersion([string]$cmake = 'cmake') {
+    $m = [regex]::Match((& $cmake --version | Select-Object -First 1), '(\d+)\.(\d+)')
+    if (-not $m.Success) { return [version]'0.0' }
+    return [version]"$($m.Groups[1].Value).$($m.Groups[2].Value)"
+}
+function CmakeUsable([string]$cmake = 'cmake') {
+    $source = (Get-Command $cmake).Source
+    return ((CmakeVersion $source) -ge [version]'3.21') -and (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $source) 'cmcldeps.exe'))
+}
+# Puts the chosen CMake first in PATH (with Visual Studio's Ninja when it is Visual Studio's CMake) and returns its path, or $null.
+function UseUsableCmake {
+    $vsCmake = Join-Path $script:vs 'Common7\IDE\CommonExtensions\Microsoft\CMake'
+    $bundled = Join-Path $vsCmake 'CMake\bin\cmake.exe'
+    $candidates = @()
+    if (Test-Path -LiteralPath $bundled) { $candidates += $bundled }
+    $candidates += @(Get-Command cmake -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
+    foreach ($candidate in $candidates) {
+        if (CmakeUsable $candidate) {
+            $env:Path = (Split-Path -Parent $candidate) + ';' + $env:Path
+            $ninja = Join-Path $vsCmake 'Ninja'
+            if ($candidate -eq $bundled -and (Test-Path -LiteralPath (Join-Path $ninja 'ninja.exe'))) { $env:Path = $ninja + ';' + $env:Path }
+            return $candidate
+        }
+    }
+    return $null
+}
+$cmakeBefore = (Get-Command cmake).Source
+$cmakeBeforeVersion = CmakeVersion
+$cmakeWasUsable = CmakeUsable
+$cmakeChosen = UseUsableCmake
+# An old Visual Studio (2017, 2019 before 16.10) bundles an old CMake. With -InstallTools (the launcher's wizard, which asked the
+# user), Visual Studio 2022 is installed next to it: it becomes the newest, and the old one stays.
+if (-not $cmakeChosen -and $InstallTools) {
+    Warn 'No usable CMake (3.21 or newer with cmcldeps.exe) was found: installing Visual Studio 2022 Build Tools next to the current Visual Studio.'
+    InstallVsBuildTools
+    LoadVsEnvironment
+    $cmakeChosen = UseUsableCmake
+}
+if (-not $cmakeChosen) {
+    Fail "A CMake 3.21 or newer with cmcldeps.exe next to it is required, but $cmakeBefore ($cmakeBeforeVersion) does not meet that and no other was found (Visual Studio: $vs). An old Visual Studio (2017, 2019 before 16.10) bundles an old CMake: install Visual Studio 2022 Build Tools (install.cmd -InstallTools), or put an official CMake 3.21+ first in PATH."
+}
+if ($cmakeChosen -ne $cmakeBefore) {
+    $note = "CMake: using $cmakeChosen instead of $cmakeBefore ($cmakeBeforeVersion)."
+    if ($cmakeWasUsable) { Write-Host $note } else { Warn "$note It is older than 3.21 or lacks cmcldeps.exe." }
+}
+# GOW-Port: the build environment in the log, to diagnose reports without asking for it.
+Write-Host "Visual Studio: $vs ($((& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property catalog_productDisplayVersion)))"
 foreach ($c in @('cl', 'cmake', 'ninja')) {
-    if (-not (Get-Command $c -ErrorAction SilentlyContinue)) { Fail "$c not found after loading vcvars64.bat ($vcvars)." }
+    $cmd = Get-Command $c
+    # cl prints its banner on stderr, which would abort under $ErrorActionPreference = 'Stop': its file version is used.
+    $ver = if ($c -eq 'cl') { $cmd.Version } else { (& $c --version | Select-Object -First 1) }
+    Write-Host "  ${c}: $($cmd.Source) ($ver)"
 }
 # GOW-Port: the first configuration downloads raylib, imgui and rlImGui with Git; with the dependencies already downloaded
 # (or with Git installed) nothing is needed.
