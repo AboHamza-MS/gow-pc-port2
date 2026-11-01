@@ -45,6 +45,7 @@ Do not close `gow-2005` by name while testing (see `AGENTS.md`); the tests start
 | Appearance (parchment theme) | tokens and nine-slice classes in `src/styles.css`; the plates they draw are in `src/assets/theme/` |
 | Texts | `src/i18n/en.json` and `pt-BR.json`; `src/lib/i18n.test.ts` fails if a used key is missing |
 | A variable passed to the game | `crates/gow-core/src/launch.rs`, the golden test next to it, and `docs/LAUNCHER.md` |
+| Self-update of the launcher | decisions in `crates/gow-core/src/update.rs`, the plugin and events in `src-tauri/src/updater.rs`, the notice in `src/components/Shell.tsx`; setup and release steps in [`docs/dev/UPDATER.md`](../docs/dev/UPDATER.md) |
 
 ## Notes
 
@@ -56,5 +57,12 @@ Do not close `gow-2005` by name while testing (see `AGENTS.md`); the tests start
   run from a directory with a low Windows integrity label. Copy or build the artifact in a normal-integrity directory.
   CI release artifacts are produced at normal integrity.
 - `GOW_LAUNCHER_DATA_DIR=<folder>` runs the app with its own data folder, so tests do not touch the real one.
+- `GOW_LAUNCHER_NO_UPDATE_CHECK=1` turns off the check for a newer launcher (it asks GitHub when the app opens).
+  `npm run dev` with `?update=automatic`, `?update=portable` or `?update=manual` shows the update notice with the mock.
+- A release tag `launcher-vX.Y.Z` must match the version in the workspace `Cargo.toml`, `src-tauri/tauri.conf.json` and
+  `package.json` (the release job checks it): the launcher compares its own version with the tags to offer updates. The
+  signing key, the public key in `tauri.conf.json` (still a placeholder) and the GitHub secrets for in-app updates are
+  described in [`docs/dev/UPDATER.md`](../docs/dev/UPDATER.md); without them the launcher still builds and only offers a
+  link to the release page.
 - An executable run from a folder with a Low integrity label (the sandbox applies this label to this repository) runs
   with low integrity and cannot write to `%APPDATA%`; copy it to a normal folder first.

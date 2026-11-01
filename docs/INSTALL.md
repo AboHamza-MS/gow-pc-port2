@@ -50,6 +50,11 @@ installer works around it by moving the generated code to `%SystemDrive%\PCGen`)
 
 The launcher's own documentation (tabs, options, paths, logs) is in [`LAUNCHER.md`](LAUNCHER.md).
 
+**Updating the launcher.** When a newer launcher is published, a notice with an **Update** button appears in the title bar;
+the button downloads and installs it and restarts the launcher (it waits while the game, an installation or an
+optimization is running). **Other, Automatic updates** does the same by itself at start-up; it is off by default. Your
+settings and the game are kept. Details: [`LAUNCHER.md`](LAUNCHER.md#updating-the-launcher).
+
 ## Windows: the portable zip
 
 For anyone who prefers not to run an installer, for example because SmartScreen warns about an unsigned one. It is the
@@ -69,6 +74,8 @@ same launcher and the same wizard; only the installation of the launcher itself 
      Runtime; if the launcher does not open, install its Evergreen Standalone Installer from Microsoft.
    - **Settings stay in `%APPDATA%\GOW_PC\Launcher`**, not in the folder, so a new version can be unzipped over the old one
      (or next to it): settings carry over and the kit refreshes itself.
+   - **It does not update itself.** It still shows the "new version available" notice, but the button opens the release
+     page: download the new zip there and unzip it over the old folder.
 
 Every release has `SHA256SUMS-windows.txt` and `SHA256SUMS-linux.txt` with the SHA-256 of the installers and the zip, built
 by the same GitHub Actions run. Compare with `Get-FileHash <file>` (PowerShell) or `sha256sum -c` (Linux). The zip also

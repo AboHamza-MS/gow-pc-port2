@@ -4,6 +4,10 @@
 # - Pushing a tag `launcher-vX.Y.Z` builds the installers (NSIS on Windows; deb and AppImage on Linux) with the
 #   installation kit inside, and attaches them to a draft GitHub release, together with a portable zip for Windows
 #   (the launcher and its kit, nothing to install) and the SHA-256 of every file (SHA256SUMS-<os>.txt).
+# - With the repository secret TAURI_SIGNING_PRIVATE_KEY set, the installers are also signed for the launcher's in-app
+#   update (.sig files) and latest.json, the manifest the launcher reads, is attached to the release. Without it the
+#   release is built as before and an installed launcher only offers a link to the release page.
+#   Setup: docs/dev/UPDATER.md.
 #
 # No game files are involved: the kit is staged from tracked files only (scripts/stage-kit.mjs refuses anything that
 # looks like game data).
@@ -96,6 +100,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev patchelf
       - run: npm ci
+      # The launcher compares its own version (Cargo.toml) with the release tags to decide whether to offer an update, and
+      # the update manifest carries the version of tauri.conf.json: a tag that disagrees with them would make every launcher
+      # that installs it find "a newer version" again, forever. The three files and the tag must name the same version.
+      - name: The tag matches the launcher version
+        shell: bash
+        run: |
+          tag_version="${GITHUB_REF_NAME#launcher-v}"
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          conf_version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          package_version=$(node -p "require('./package.json').version")
+          echo "tag $tag_version, Cargo.toml $cargo_version, tauri.conf.json $conf_version, package.json $package_version"
+          if [ "$tag_version" != "$cargo_version" ] || [ "$tag_version" != "$conf_version" ] || [ "$tag_version" != "$package_version" ]; then
+            echo "::error::The tag launcher-v$tag_version does not match the version in Cargo.toml, src-tauri/tauri.conf.json and package.json."
+            exit 1
+          fi
       - name: Check the Windows installer contract
         if: runner.os == 'Windows'
         run: npm run check-windows-installer
@@ -109,11 +128,32 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then ext=".exe"; else ext=""; fi
           echo "PS2_RECOMP_BIN=$GITHUB_WORKSPACE/RustPortPS2/target/release/ps2_recomp$ext" >> "$GITHUB_ENV"
           echo "PS2_TOOLS_BIN=$GITHUB_WORKSPACE/RustPortPS2/target/release/ps2-tools$ext" >> "$GITHUB_ENV"
-      # Code signing is not set up yet: Windows will show SmartScreen's "unknown publisher" warning.
+      # In-app updates need signed update files. `createUpdaterArtifacts` is turned on only when the signing key exists,
+      # because the Tauri bundler fails without it, and a plain build (a fork, a test tag) must keep working. A key with
+      # the placeholder public key still in tauri.conf.json would sign files no launcher can verify: stop here instead.
+      - name: Updater signing
+        shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set: this release has no signed update files and no latest.json."
+            exit 0
+          fi
+          if grep -q REPLACE_WITH_THE_UPDATER_PUBLIC_KEY src-tauri/tauri.conf.json; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is set but plugins.updater.pubkey in src-tauri/tauri.conf.json is still the placeholder (docs/dev/UPDATER.md)."
+            exit 1
+          fi
+          node -e "const fs=require('fs');const f='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(f,'utf8'));c.bundle.createUpdaterArtifacts=true;fs.writeFileSync(f,JSON.stringify(c,null,2)+'\n')"
+          echo "update files will be signed"
+      # Code signing of the Windows program is not set up yet: Windows will show SmartScreen's "unknown publisher" warning.
+      # (The updater signature above is a different thing: it protects the launcher's own update, not SmartScreen.)
       - uses: tauri-apps/tauri-action@v0
         id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: gow-launcher
           tagName: ${{ github.ref_name }}
@@ -121,6 +161,8 @@ jobs:
           releaseBody: 'Installer of the God of War (2005) native port. It contains no game files: you supply your own ISO. Windows also has a portable zip (unzip and run, no installer); check any download against the SHA256SUMS files of this release.'
           releaseDraft: true
           prerelease: false
+          # latest.json (the update manifest) is uploaded when the update files were signed, and merged across the two jobs.
+          uploadUpdaterJson: true
           args: --bundles ${{ matrix.bundles }}
       # Portable copy for Windows: the launcher and its kit side by side, which is all the installer puts on disk. The
       # launcher extracts the kit from <exe folder>/kit on its first run (extract_kit in src-tauri/src/lib.rs). Whoever
