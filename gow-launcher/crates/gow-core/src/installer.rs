@@ -138,27 +138,29 @@ pub fn check_environment(script: Option<&Path>) -> Environment {
         if let Some(program_files) = std::env::var_os("ProgramFiles(x86)") {
             let vswhere = Path::new(&program_files).join("Microsoft Visual Studio/Installer/vswhere.exe");
             if vswhere.is_file() {
-                let query = |property: &str| {
-                    let mut command = Command::new(&vswhere);
-                    command.args([
-                        "-latest",
-                        "-products",
-                        "*",
-                        "-requires",
-                        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-                        "-property",
-                        property,
-                    ]);
-                    system::output_with_timeout(command, Duration::from_secs(8))
-                };
-                let installation =
-                    query("installationPath").map(|out| out.lines().next().unwrap_or("").trim().to_string());
-                environment.vs = installation.as_deref().is_some_and(|path| !path.is_empty());
+                // Every installation, the newest first: a newer Visual Studio without the CMake component (issue #9) must not
+                // hide the CMake of a Build Tools 2022 installed next to it, as in install.ps1.
+                let mut command = Command::new(&vswhere);
+                command.args([
+                    "-products",
+                    "*",
+                    "-requires",
+                    "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                    "-property",
+                    "installationPath",
+                ]);
+                let installations: Vec<String> = system::output_with_timeout(command, Duration::from_secs(8))
+                    .map(|out| {
+                        out.lines().map(|line| line.trim().to_string()).filter(|line| !line.is_empty()).collect()
+                    })
+                    .unwrap_or_default();
+                environment.vs = !installations.is_empty();
                 // GOW-Port: the installer uses the CMake in PATH or the one bundled with Visual Studio, whichever works
                 // (install.ps1 explains it); only when neither does is something offered to install.
-                if let Some(path) = installation.filter(|path| !path.is_empty()) {
-                    let bundled =
-                        Path::new(&path).join(r"Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe");
+                if environment.vs {
+                    let bundled = installations.iter().map(|path| {
+                        Path::new(path).join(r"Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe")
+                    });
                     let in_path = std::env::var_os("PATH")
                         .map(|path| {
                             std::env::split_paths(&path)
@@ -168,7 +170,7 @@ pub fn check_environment(script: Option<&Path>) -> Environment {
                         .unwrap_or_default();
                     environment.cmake_unusable = !in_path
                         .into_iter()
-                        .chain(Some(bundled))
+                        .chain(bundled)
                         .filter(|candidate| candidate.is_file())
                         .any(|cmake| cmake_is_usable(&cmake));
                 }

@@ -42,9 +42,10 @@ installer works around it by moving the generated code to `%SystemDrive%\PCGen`)
       **Browse**.
    2. **Location**: where the game goes (`C:\Users\<you>\GodOfWar-PC` by default), ASCII path, 30 GB free.
    3. **Components**: only if something is missing. Visual Studio 2022 Build Tools (C++, about 6 GB, asks for
-      administrator permission, 15–30 minutes) and portable Git (about 50 MB, stays inside the install folder). Build
-      Tools are also offered when you have an older Visual Studio (2017, 2019) and no CMake 3.21 or newer on the PC: the
-      new ones are installed next to the old ones, which are not removed. If a usable CMake exists, nothing is offered.
+      administrator permission, 15–30 minutes) and portable Git (about 50 MB, stays inside the install folder). CMake and
+      Ninja are never asked for: when the PC has no usable CMake (3.21 or newer, with `cmcldeps.exe`) or no Ninja, the
+      installer downloads portable ones (about 45 MB, SHA-256 checked) into the install folder, without administrator
+      permission. The C++ compiler is the only part that must come from Visual Studio.
    4. **Install**: a progress bar and a cancel button. Finished steps are kept, so you can cancel and resume later.
 3. Press **PLAY**. Check **Files** once: the executable, the runner and the memory card should all be detected.
 
@@ -95,7 +96,7 @@ install.cmd -Destination "D:\GodOfWar"               # keep the game data and th
 |---|---|
 | `-Iso <file>` | The disc image. Without it, the first `.iso` in `game\` and then in the repository root is used |
 | `-Destination <folder>` | Where `game\`, `build\`, `build-gen\` and `vu1_captures\` go. The generated C++ still lands in the repository |
-| `-InstallTools` | Downloads Microsoft's Build Tools installer (signature checked) and installs the C++ workload, when Visual Studio is missing or no usable CMake exists (see below) |
+| `-InstallTools` | Downloads Microsoft's Build Tools installer (signature checked) and installs the C++ workload, when Visual Studio is missing. A missing or unusable CMake or Ninja is not a reason: portable ones are downloaded first |
 | `-NoOptimize` / `-Optimize` | Skip / force the optimization pass (see below) |
 | `-Seconds <n>` | Duration of the optimization run (default 240 s) |
 | `-Jobs <n>` | Parallel compiler processes (default: cores, at most one per 2 GB of RAM) |
@@ -174,7 +175,7 @@ automatically**).
 | `vu1_captures/` | VU1 micro-memory images (16 KB each) that let the vector unit run native code |
 | `build-rust/` | `ps2_recomp` and `ps2-tools` when they were built from source |
 | `textures/replacements/` | Where a custom texture pack goes ([`TEXTURES.md`](TEXTURES.md)) |
-| `toolchain/` | Portable Git (Windows only, only when Git was missing) |
+| `toolchain/` | Portable Git, CMake and Ninja (Windows only, each only when the PC lacked a usable one) |
 | `RustPortPS2/native/ps2xRuntime/src/runner/` | The generated C++ of the game. **Always in the repository**, even with `-Destination` |
 
 On Windows, `build\ps2xRuntime\game-elf.sha256` records which ELF the build belongs to; the launcher checks it before

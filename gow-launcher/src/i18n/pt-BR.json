@@ -346,7 +346,6 @@
   "wizComponentRequired": "Marque todos os componentes para continuar.",
   "wizCompVs": "Visual Studio Build Tools (C++)",
   "wizCompVsDesc": "Compilador C++ da Microsoft. Baixado da Microsoft sob a licença dela; o Windows pede permissão de administrador e leva de 15 a 30 minutos.",
-  "wizCompVsOldDesc": "Este PC tem o Visual Studio, mas nenhum CMake que consiga compilar o jogo (3.21 ou mais novo): o que vem com um Visual Studio antigo é velho demais. O Visual Studio 2022 Build Tools é instalado ao lado, e o atual não é removido. Baixado da Microsoft sob a licença dela; o Windows pede permissão de administrador e leva de 15 a 30 minutos.",
   "wizCompGit": "Git portátil",
   "wizCompGitDesc": "Baixa as bibliotecas do projeto (raylib, imgui...). Fica dentro da pasta de instalação; nada é instalado no Windows.",
   "wizNoInstaller": "Não encontrei o script de instalação (install.ps1 no Windows, install.sh no Linux) junto ao repositório. Execute o launcher a partir da pasta do projeto.",

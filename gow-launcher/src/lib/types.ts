@@ -124,7 +124,8 @@ export interface OptimizerSnapshot {
 export interface WizardInfo {
   environment: {
     vs: boolean;
-    /** Windows: there is a Visual Studio but no usable CMake (3.21 or newer, with cmcldeps.exe) in PATH or bundled with it. */
+    /** Windows: there is a Visual Studio but no usable CMake (3.21 or newer, with cmcldeps.exe) in PATH or bundled with it.
+     * Informational: the installer downloads a portable CMake in that case. */
     cmakeUnusable: boolean;
     git: boolean;
     installer: boolean;

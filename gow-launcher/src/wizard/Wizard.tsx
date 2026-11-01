@@ -68,9 +68,9 @@ export function Wizard() {
   // Linux: the installer cannot install system packages by itself (it needs the user's password), so the wizard lists
   // them and waits until a new check finds none missing.
   const manual = environment.missing.length > 0;
-  // A Visual Studio without any usable CMake counts as missing, and the wizard offers Visual Studio 2022 next to it. With a
-  // usable one (in PATH or bundled), nothing is shown: the installer finds it by itself.
-  const needVs = !environment.vs || environment.cmakeUnusable;
+  // Only a missing Visual Studio (the C++ compiler) is offered. A Visual Studio without a usable CMake or Ninja needs nothing
+  // here: the installer downloads portable ones by itself (environment.cmakeUnusable is informational).
+  const needVs = !environment.vs;
   const missing = needVs || !environment.git;
   const componentsReady = !manual && (environment.vs || include.vs) && (environment.git || include.git);
   const indicator = missing ? [0, 1, 2, 3] : [0, 1, 3];
@@ -370,7 +370,7 @@ export function Wizard() {
             ) : (
               <>
                 <Lead>{t('wizComponentsDesc')}</Lead>
-                {needVs && <Component title={t('wizCompVs')} description={t(environment.vs ? 'wizCompVsOldDesc' : 'wizCompVsDesc')} size="~6 GB" checked={include.vs} onChange={(vs) => setInclude({ ...include, vs })} />}
+                {needVs && <Component title={t('wizCompVs')} description={t('wizCompVsDesc')} size="~6 GB" checked={include.vs} onChange={(vs) => setInclude({ ...include, vs })} />}
                 {!environment.git && <Component title={t('wizCompGit')} description={t('wizCompGitDesc')} size="~50 MB" checked={include.git} onChange={(git) => setInclude({ ...include, git })} />}
                 {!componentsReady && <p className="text-[13px] text-warn">{t('wizComponentRequired')}</p>}
               </>

@@ -87,8 +87,8 @@ function Run([string]$exe, [string[]]$arguments) {
 function Slashes([string]$p) { return ($p -replace '\\', '/') }
 
 # --- 0. Tools -----------------------------------------------------------------------------------------------------
-# GOW-Port: the installer is self-sufficient. Git is downloaded in portable form into toolchain\ (without
-# installing anything on Windows or asking for administrator). Only Visual Studio Build Tools (C++) is installed, with -InstallTools,
+# GOW-Port: the installer is self-sufficient. Git, and CMake and Ninja when the system has no usable ones, are downloaded in portable
+# form into toolchain\ (without installing anything on Windows or asking for administrator). Only Visual Studio Build Tools (C++) is installed, with -InstallTools,
 # because Microsoft does not allow redistributing it: its official installer is downloaded and its signature is checked.
 $Toolchain = Join-Path $DataRoot 'toolchain'
 $ProgressPreference = 'SilentlyContinue'
@@ -158,9 +158,9 @@ function LoadVsEnvironment {
     cmd /c $vcvarsCmd | ForEach-Object {
         if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
     }
-    foreach ($c in @('cl', 'cmake', 'ninja')) {
-        if (-not (Get-Command $c -ErrorAction SilentlyContinue)) { Fail "$c not found after loading vcvars64.bat ($vcvars)." }
-    }
+    # GOW-Port: only the compiler is required here. The newest Visual Studio may lack the "C++ CMake tools" component (a Visual
+    # Studio 18 Community without it, issue #9): cmake and ninja are looked up in every installation, or installed, right below.
+    if (-not (Get-Command cl -ErrorAction SilentlyContinue)) { Fail "cl not found after loading vcvars64.bat ($vcvars)." }
 }
 LoadVsEnvironment
 # GOW-Port: the build needs a CMake 3.21 or newer with cmcldeps.exe next to it, and the first one in PATH may not be that:
@@ -181,27 +181,86 @@ function CmakeUsable([string]$cmake = 'cmake') {
 }
 # Puts the chosen CMake first in PATH (with Visual Studio's Ninja when it is Visual Studio's CMake) and returns its path, or $null.
 function UseUsableCmake {
-    $vsCmake = Join-Path $script:vs 'Common7\IDE\CommonExtensions\Microsoft\CMake'
-    $bundled = Join-Path $vsCmake 'CMake\bin\cmake.exe'
+    # GOW-Port: every Visual Studio installation, the newest first, not only the one whose vcvars64.bat was loaded: a newer one
+    # without the CMake component must not hide the CMake of Visual Studio 2022 Build Tools installed next to it.
+    $vsPaths = @(& $vswhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Where-Object { $_ })
+    $bundledCmakes = @{}
     $candidates = @()
-    if (Test-Path -LiteralPath $bundled) { $candidates += $bundled }
+    foreach ($p in $vsPaths) {
+        $vsCmake = Join-Path $p 'Common7\IDE\CommonExtensions\Microsoft\CMake'
+        $bundled = Join-Path $vsCmake 'CMake\bin\cmake.exe'
+        if (Test-Path -LiteralPath $bundled) { $candidates += $bundled; $bundledCmakes[$bundled] = $vsCmake }
+    }
     $candidates += @(Get-Command cmake -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
     foreach ($candidate in $candidates) {
         if (CmakeUsable $candidate) {
             $env:Path = (Split-Path -Parent $candidate) + ';' + $env:Path
-            $ninja = Join-Path $vsCmake 'Ninja'
-            if ($candidate -eq $bundled -and (Test-Path -LiteralPath (Join-Path $ninja 'ninja.exe'))) { $env:Path = $ninja + ';' + $env:Path }
+            if ($bundledCmakes.ContainsKey($candidate)) {
+                $ninja = Join-Path $bundledCmakes[$candidate] 'Ninja'
+                if (Test-Path -LiteralPath (Join-Path $ninja 'ninja.exe')) { $env:Path = $ninja + ';' + $env:Path }
+            }
+            if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+                foreach ($p in $vsPaths) {
+                    $ninja = Join-Path $p 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'
+                    if (Test-Path -LiteralPath (Join-Path $ninja 'ninja.exe')) { $env:Path = $ninja + ';' + $env:Path; break }
+                }
+            }
             return $candidate
         }
     }
     return $null
 }
-$cmakeBefore = (Get-Command cmake).Source
-$cmakeBeforeVersion = CmakeVersion
-$cmakeWasUsable = CmakeUsable
+$cmakeFirst = Get-Command cmake -ErrorAction SilentlyContinue
+$cmakeBefore = if ($cmakeFirst) { $cmakeFirst.Source } else { 'none' }
+$cmakeBeforeVersion = if ($cmakeFirst) { CmakeVersion } else { 'not installed' }
+$cmakeWasUsable = [bool]$cmakeFirst -and (CmakeUsable)
 $cmakeChosen = UseUsableCmake
+# GOW-Port: portable CMake and Ninja (issue #11), like the portable Git: downloaded into toolchain\ from their official releases,
+# SHA-256 checked, without installing anything on Windows or asking for administrator. They are used only when the system has
+# no usable CMake (3.21+ with cmcldeps.exe) or no Ninja, so nobody has to add Visual Studio components or install a second
+# Visual Studio just for them. The C++ compiler still comes from Visual Studio Build Tools, which Microsoft does not allow
+# redistributing. A failed download is not fatal here: the other options below still apply.
+function GetPortableTool([string]$name, [string]$url, [string]$sha256, [string]$zip, [string]$dir, [string]$exe) {
+    if (Test-Path -LiteralPath $exe) { return $exe }
+    try {
+        New-Item -ItemType Directory -Force -Path $Toolchain | Out-Null
+        Step "Downloading portable $name"
+        Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip
+        $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+        if ($actual -ne $sha256) { throw "SHA-256 mismatch for $name ($actual, expected $sha256)" }
+        if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
+        Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force
+        if (-not (Test-Path -LiteralPath $exe)) { throw "$exe is missing after extracting $name" }
+        return $exe
+    }
+    catch {
+        Warn "Could not set up portable $name ($($_.Exception.Message))."
+        return $null
+    }
+    finally { if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue } }
+}
+function UsePortableCmake {
+    $v = '3.31.6'
+    $exe = GetPortableTool 'CMake' "https://github.com/Kitware/CMake/releases/download/v$v/cmake-$v-windows-x86_64.zip" `
+        'd163cd3ab4959b0a53fa8988f2ddbd2e6c501658201e6a154386bad9dbe4f836' (Join-Path $Toolchain "cmake-$v.zip") `
+        (Join-Path $Toolchain "cmake-$v") (Join-Path $Toolchain "cmake-$v\cmake-$v-windows-x86_64\bin\cmake.exe")
+    if ($exe -and (CmakeUsable $exe)) {
+        $env:Path = (Split-Path -Parent $exe) + ';' + $env:Path
+        return $exe
+    }
+    return $null
+}
+function UsePortableNinja {
+    $v = '1.12.1'
+    $exe = GetPortableTool 'Ninja' "https://github.com/ninja-build/ninja/releases/download/v$v/ninja-win.zip" `
+        'f550fec705b6d6ff58f2db3c374c2277a37691678d6aba463adcbb129108467a' (Join-Path $Toolchain "ninja-$v.zip") `
+        (Join-Path $Toolchain "ninja-$v") (Join-Path $Toolchain "ninja-$v\ninja.exe")
+    if ($exe) { $env:Path = (Split-Path -Parent $exe) + ';' + $env:Path }
+}
+if (-not $cmakeChosen) { $cmakeChosen = UsePortableCmake }
 # An old Visual Studio (2017, 2019 before 16.10) bundles an old CMake. With -InstallTools (the launcher's wizard, which asked the
-# user), Visual Studio 2022 is installed next to it: it becomes the newest, and the old one stays.
+# user), Visual Studio 2022 is installed next to it: it becomes the newest, and the old one stays. Only if the portable CMake
+# could not be downloaded.
 if (-not $cmakeChosen -and $InstallTools) {
     Warn 'No usable CMake (3.21 or newer with cmcldeps.exe) was found: installing Visual Studio 2022 Build Tools next to the current Visual Studio.'
     InstallVsBuildTools
@@ -209,7 +268,11 @@ if (-not $cmakeChosen -and $InstallTools) {
     $cmakeChosen = UseUsableCmake
 }
 if (-not $cmakeChosen) {
-    Fail "A CMake 3.21 or newer with cmcldeps.exe next to it is required, but $cmakeBefore ($cmakeBeforeVersion) does not meet that and no other was found (Visual Studio: $vs). An old Visual Studio (2017, 2019 before 16.10) bundles an old CMake: install Visual Studio 2022 Build Tools (install.cmd -InstallTools), or put an official CMake 3.21+ first in PATH."
+    Fail "A CMake 3.21 or newer with cmcldeps.exe next to it is required, but $cmakeBefore ($cmakeBeforeVersion) does not meet that and no other was found (Visual Studio: $vs). Visual Studio needs the ""C++ CMake tools for Windows"" component (Visual Studio Installer > Modify), an old Visual Studio (2017, 2019 before 16.10) bundles an old CMake: install Visual Studio 2022 Build Tools (install.cmd -InstallTools), or put an official CMake 3.21+ first in PATH."
+}
+if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { UsePortableNinja }
+if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+    Fail 'ninja was not found and the portable one could not be downloaded: check the Internet connection, add the "C++ CMake tools for Windows" component to Visual Studio (Visual Studio Installer > Modify), or put ninja in PATH.'
 }
 if ($cmakeChosen -ne $cmakeBefore) {
     $note = "CMake: using $cmakeChosen instead of $cmakeBefore ($cmakeBeforeVersion)."

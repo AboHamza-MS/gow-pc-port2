@@ -185,7 +185,7 @@ describe('installation wizard', () => {
     await waitFor(() => expect(install).toHaveBeenCalledWith(expect.objectContaining({ installTools: false })));
   });
 
-  it('offers Visual Studio 2022 next to a Visual Studio without a usable CMake and installs it only when ticked', async () => {
+  it('offers nothing for a Visual Studio without a usable CMake: the installer downloads a portable one', async () => {
     boot(false);
     vi.spyOn(api, 'wizardInfo').mockResolvedValue({
       environment: { vs: true, cmakeUnusable: true, git: true, installer: true, missing: [], missingPackages: [], installCommand: '' },
@@ -198,13 +198,11 @@ describe('installation wizard', () => {
     await user.click(next());
     await waitFor(() => expect(next()).toBeEnabled());
     await user.click(next());
-    // 2: it counts as missing, with its own explanation and the box ticked by default.
-    expect(await screen.findByText('Required components')).toBeInTheDocument();
-    expect(screen.getByText(/no CMake that can build the game/)).toBeInTheDocument();
-    await user.click(next());
+    // Location goes straight to the summary, as with a usable CMake: portable CMake and Ninja need no component step.
     expect(await screen.findByText('Ready to install')).toBeInTheDocument();
+    expect(screen.queryByText('Required components')).not.toBeInTheDocument();
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'INSTALL' }));
-    await waitFor(() => expect(install).toHaveBeenCalledWith(expect.objectContaining({ installTools: true })));
+    await waitFor(() => expect(install).toHaveBeenCalledWith(expect.objectContaining({ installTools: false })));
   });
 
   it('on Linux lists the missing packages and lets the user continue once a new check finds none', async () => {
