@@ -160,7 +160,7 @@ jobs:
           releaseName: 'God Of War Launcher ${{ github.ref_name }}'
           releaseBody: 'Installer of the God of War (2005) native port. It contains no game files: you supply your own ISO. Windows also has a portable zip (unzip and run, no installer); check any download against the SHA256SUMS files of this release.'
           releaseDraft: true
-          prerelease: false
+          prerelease: true
           # latest.json (the update manifest) is uploaded when the update files were signed, and merged across the two jobs.
           uploadUpdaterJson: true
           args: --bundles ${{ matrix.bundles }}
