@@ -62,6 +62,8 @@ pub struct Settings {
     pub optimization_enabled: bool,
     pub optimize_during_game: bool,
     pub optimization_compiled: u32,
+    /// Download and install a newer launcher at start-up when nothing is running. Off: the launcher only shows a notice.
+    pub auto_update: bool,
 }
 
 impl Default for Settings {
@@ -111,6 +113,7 @@ impl Default for Settings {
             // picture freezes). Rebuilds run with the game closed, and one started before the game opens is stopped.
             optimize_during_game: false,
             optimization_compiled: 0,
+            auto_update: false,
         }
     }
 }
@@ -358,6 +361,20 @@ mod tests {
         assert!(text.contains("\"cheatsShortcut\""));
         assert!(text.contains("\"progressive480p\""));
         assert_eq!(Settings::load(&path), settings);
+    }
+
+    #[test]
+    fn auto_update_is_off_unless_the_file_says_otherwise() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        // A file written before the option existed.
+        std::fs::write(&path, r#"{"gpu":"auto","settingsVersion":11}"#).unwrap();
+        let mut loaded = Settings::load(&path);
+        assert!(!loaded.auto_update);
+        loaded.migrate(false, &DisplayInfo::default());
+        assert!(!loaded.auto_update);
+        std::fs::write(&path, r#"{"autoUpdate":true}"#).unwrap();
+        assert!(Settings::load(&path).auto_update);
     }
 
     #[test]
