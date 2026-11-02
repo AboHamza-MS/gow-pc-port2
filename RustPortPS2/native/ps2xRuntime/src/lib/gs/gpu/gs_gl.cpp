@@ -36,6 +36,7 @@ namespace
     int s_readingSlot = -1;
     uint64_t s_sharedSequence = 0;
     std::atomic<bool> s_sharedActive{false};
+    std::atomic<GSSharedPresent::RendererFailure> s_rendererFailure{GSSharedPresent::RendererFailure::None};
     // GOW-Port: minor version of the GS context (4.x core); the worker contexts must ask for the same one to share with it.
     int s_contextMinor = 6;
 
@@ -616,6 +617,16 @@ namespace GSGL
 
 namespace GSSharedPresent
 {
+    void SetRendererFailure(RendererFailure failure)
+    {
+        s_rendererFailure.store(failure, std::memory_order_release);
+    }
+
+    RendererFailure GetRendererFailure()
+    {
+        return s_rendererFailure.load(std::memory_order_acquire);
+    }
+
     bool Active()
     {
         return s_sharedActive.load(std::memory_order_acquire);

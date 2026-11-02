@@ -44,6 +44,7 @@ The game log is plain text. Lines starting with `[gow-`, `[gs`, `[vu1` and `[iop
 | Launcher says the game files are missing | **Files → Find files automatically**, or set `SCUS_973.99` and `gow-2005` by hand |
 | "ELF does not match this build" | The runner was built for another ELF (or the file changed). Rebuild, or set the runner the build produced |
 | Window opens and closes instantly | Read `logs/last.log`; usually a missing renderer feature (below) or a missing game data file |
+| Dark window saying "The graphics renderer could not start" | The GPU or its driver gives less than OpenGL 4.3 (or rejected the shaders). Update the graphics driver or use a different GPU; the details are in `last.log` (`[gs-hw] GL unavailable` or `shader error`). |
 | Black screen, crash or "could not create the GL context" on an old GPU | The renderer needs **OpenGL 4.3 or newer** (it tries 4.6, 4.5, 4.4 and then 4.3, and `last.log` has a `[gs-gl] OpenGL 4.x core context` line with the one it got). Update the driver; on laptops use the dedicated GPU; on Linux make sure the proprietary/Mesa driver for your card is actually in use |
 | Windows SmartScreen warning | The launcher is not code-signed yet: "More info → Run anyway". Verify you downloaded it from the project's Releases page |
 | Third-party antivirus blocks the build | The build runs `cl.exe`, `ninja` and the recompiler; add the installation folder to its exclusions |
