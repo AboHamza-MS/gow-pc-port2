@@ -40,6 +40,7 @@ scripts/             PowerShell build helpers, CI script checker
 | Work on cheats, lock-on, agile combat, input | [`GAMEPLAY-HOOKS.md`](GAMEPLAY-HOOKS.md) |
 | Understand the byte-identical recompiler gate | [`../../RustPortPS2/docs/PARITY.md`](../../RustPortPS2/docs/PARITY.md) |
 | Work on the launcher | [`../../gow-launcher/README.md`](../../gow-launcher/README.md) |
+| Translate the launcher or check its texts | [`TRANSLATING.md`](TRANSLATING.md) |
 | Release the launcher so that installed copies can update themselves (keys, secrets, `latest.json`) | [`UPDATER.md`](UPDATER.md) |
 
 ## The commands you will actually use
