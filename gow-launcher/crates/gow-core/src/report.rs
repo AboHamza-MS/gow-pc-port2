@@ -118,7 +118,7 @@ pub fn cap_log(bytes: &[u8], cap: usize) -> Vec<u8> {
 
 fn read_log(path: &Path, cap: usize, scrubber: &Scrubber) -> Option<Vec<u8>> {
     let bytes = fs::read(path).ok()?;
-    let text = String::from_utf8_lossy(&cap_log(&bytes, cap)).into_owned();
+    let text = drop_login_lines(&String::from_utf8_lossy(&cap_log(&bytes, cap)));
     Some(scrubber.scrub(&text).into_bytes())
 }
 
@@ -150,7 +150,29 @@ pub fn scrubber_for(paths: &AppPaths, settings: &Settings, host: &HostFacts) -> 
     if let Some(computer) = &host.computer_name {
         scrubber = scrubber.name(computer, "<PC>");
     }
+    // The RetroAchievements handle is a public profile name: it must not travel in a report, and the game's own log can
+    // carry it (the client logs the login), so it is a scrubbed name like the others.
+    scrubber = scrubber.name(&settings.retro_achievements_user, "<RA_USER>");
     scrubber
+}
+
+/// The RetroAchievements client logs who logs in (`Attempting to log in <name>`, `<name> logged in successfully`) at its
+/// default level. The name is scrubbed when the settings know it, but a handle that differs in case, or one typed in the
+/// game, would pass, so these two kinds of line are dropped whole.
+fn drop_login_lines(text: &str) -> String {
+    text.split_inclusive('\n')
+        .map(|line| {
+            if line.contains("Attempting to log in") || line.contains("logged in successfully") {
+                if line.ends_with('\n') {
+                    "[login line removed]\n"
+                } else {
+                    "[login line removed]"
+                }
+            } else {
+                line
+            }
+        })
+        .collect()
 }
 
 /// The settings as the report shows them: every text goes through the scrubber (paths, mostly), and the
@@ -604,6 +626,21 @@ mod tests {
         assert!(text.contains("\"retroAchievementsUser\":\"<set>\""));
         let none = Settings::default();
         assert_eq!(redact_settings(&none, &scrubber)["retroAchievementsUser"], "");
+    }
+
+    #[test]
+    fn the_retroachievements_user_does_not_survive_in_a_log() {
+        let world = world();
+        let scrubber = scrubber_for(&world.paths, &world.settings, &world.host);
+        // The user of the settings is scrubbed wherever it appears; the client's login lines are dropped whole, which also
+        // covers a handle that differs in case or was typed in the game.
+        let log = "[ra] Attempting to log in QuentinRetro (with password)\n[ra] someotherhandle logged in successfully\n[ra] points: QuentinRetro 12\nlast line";
+        let scrubbed = scrubber.scrub(&drop_login_lines(log));
+        assert!(!scrubbed.contains("QuentinRetro"), "{scrubbed}");
+        assert!(!scrubbed.contains("someotherhandle"), "{scrubbed}");
+        assert!(scrubbed.contains("[login line removed]\n[login line removed]\n"), "{scrubbed}");
+        assert!(scrubbed.contains("<RA_USER> 12"), "{scrubbed}");
+        assert!(scrubbed.ends_with("last line"), "{scrubbed}");
     }
 
     #[test]
