@@ -160,22 +160,23 @@ int main(int argc, char **argv)
     // GOW-Port: this tool used to retain a decoded copy of every recorded micro-memory. A long playthrough can
     // contain hundreds of thousands of captures, which made the installer consume the whole machine. Keep a
     // deliberately conservative fraction of the requested budget for captures; the remaining headroom is for the
-    // generated source, maps and the C++ runtime. Zero keeps the old unlimited developer behaviour.
+    // generated source, maps and the C++ runtime. Zero keeps the old unlimited developer behaviour: it is also what CMake passes
+    // by default (PS2X_VU1_MAX_MEMORY_MB=0), and what install.sh relies on, so it must be accepted (issue #12: it was rejected).
     uint32_t maxMemoryMiB = 0;
     int inputStart = 2;
     if (std::strcmp(argv[inputStart], "--max-memory-mb") == 0)
     {
         if (inputStart + 2 >= argc)
         {
-            std::cerr << "--max-memory-mb needs a positive integer\n";
+            std::cerr << "--max-memory-mb needs an integer (0 means unlimited)\n";
             return 2;
         }
         char *end = nullptr;
         errno = 0;
         const unsigned long parsed = std::strtoul(argv[inputStart + 1], &end, 10);
-        if (errno != 0 || !end || *end != '\0' || parsed == 0 || parsed > UINT_MAX)
+        if (errno != 0 || !end || end == argv[inputStart + 1] || *end != '\0' || parsed > UINT_MAX)
         {
-            std::cerr << "--max-memory-mb needs a positive integer\n";
+            std::cerr << "--max-memory-mb needs an integer (0 means unlimited)\n";
             return 2;
         }
         maxMemoryMiB = static_cast<uint32_t>(parsed);
