@@ -436,5 +436,11 @@
   "rebuildBlocked_game": "Feche o jogo para recompilar.",
   "rebuildBlocked_installation": "Termine a instalação primeiro.",
   "rebuildBlocked_optimizer": "Espere a otimização terminar.",
-  "rebuildBlocked_texturePack": "Espere o pacote de texturas terminar de instalar."
+  "rebuildBlocked_texturePack": "Espere o pacote de texturas terminar de instalar.",
+  "presetTitle": "Predefinição de gráficos",
+  "presetDesc": "Ajusta de uma vez a resolução de renderização, o filtro de ampliação e o antisserrilhado. Muda o peso da imagem para a sua placa de vídeo, não a velocidade do jogo em si.",
+  "presetPerformance": "Desempenho (1×, suave, sem antisserrilhado)",
+  "presetBalanced": "Equilibrado (2×, suave, com antisserrilhado)",
+  "presetQuality": "Qualidade (3×, nítido, com antisserrilhado)",
+  "presetCustom": "Personalizado"
 }

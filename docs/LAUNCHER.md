@@ -17,6 +17,7 @@ If you just want to play, set **Graphics → render resolution 2×** and **Perfo
 | Widescreen (Hor+) | On | PCSX2's widescreen patch: widens the camera to the sides at the chosen aspect. Off gives you the game's original 4:3 picture, with side bars in a wide window |
 | Aspect ratio | Your display's | 4:3, 16:9, 16:10 or 21:9 (ultrawide, experimental) |
 | Resolution | Native | Fullscreen always uses the display's native mode; this is the initial window size |
+| Graphics preset | Balanced | **Performance** (1×, Bilinear, no FXAA), **Balanced** (2×, Bilinear, FXAA) or **Quality** (3×, Bicubic at 0.8, FXAA). It sets only render resolution, upscaling, sharpness and FXAA, and shows **Custom** as soon as you change one of them by hand. It changes how heavy the picture is for your graphics card, not the speed of the game itself |
 | Render resolution | 2× | Internal render scale, 1× to 6×. 2× is recommended: **from 3× up the game gets heavy**, and 4×–6× are experimental |
 | Upscaling | Bilinear (soft) | How the image is fitted to the screen: **Bicubic (sharp)** (bicubic + contrast-adaptive sharpening), **Bilinear (soft)** or **Pixel**. The "Pixel" option currently resolves to a bilinear stretch, not nearest-neighbour. If the render is larger than the screen it is downsampled by area averaging |
 | Sharpness | 0.8 | Only for Bicubic: how much contrast-adaptive sharpening is applied |

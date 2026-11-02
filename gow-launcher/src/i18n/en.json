@@ -436,5 +436,11 @@
   "rebuildBlocked_game": "Close the game to rebuild.",
   "rebuildBlocked_installation": "Finish the installation first.",
   "rebuildBlocked_optimizer": "Wait for the optimization to finish.",
-  "rebuildBlocked_texturePack": "Wait for the texture pack to install."
+  "rebuildBlocked_texturePack": "Wait for the texture pack to install.",
+  "presetTitle": "Graphics preset",
+  "presetDesc": "Sets the render resolution, upscaling filter and anti-aliasing together. It changes how heavy the picture is for your graphics card, not the speed of the game itself.",
+  "presetPerformance": "Performance (1×, soft, no anti-aliasing)",
+  "presetBalanced": "Balanced (2×, soft, anti-aliasing)",
+  "presetQuality": "Quality (3×, sharp, anti-aliasing)",
+  "presetCustom": "Custom"
 }
