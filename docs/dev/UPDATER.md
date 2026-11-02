@@ -61,9 +61,12 @@ asks for a password in the middle of an update is not something to ship unverifi
 
 ## One-time setup (maintainer)
 
-The updater only installs files signed with a key whose public half is in the launcher. **Nothing below has been done in the
-repository**: the public key in `src-tauri/tauri.conf.json` is the placeholder `REPLACE_WITH_THE_UPDATER_PUBLIC_KEY`, so
-until you do it the notice still appears but its button opens the release page.
+The updater only installs files signed with a key whose public half is in the launcher. **State since v0.2.5**: the key pair
+exists (steps 1 and 2 are done, the public key is in `src-tauri/tauri.conf.json`), and step 3, the two GitHub secrets, is the
+maintainer's. A launcher older than v0.2.5 was built with the placeholder key (`REPLACE_WITH_THE_UPDATER_PUBLIC_KEY`) and can
+never verify a signed release: its owners install v0.2.5 by hand once, from the notice's "Open release page" button, and every
+release after that updates in place. Until the secrets exist a release is built without signed files and the notice's button
+opens the release page.
 
 1. **Generate the key pair** on your machine, from `gow-launcher/`:
 
