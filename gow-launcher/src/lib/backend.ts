@@ -243,7 +243,7 @@ export function createMockApi(
   return {
     emit,
     bootstrap: async () => ({
-      settings, version: '0.2.4', platform: 'windows', display,
+      settings, version: '0.2.5', platform: 'windows', display,
       graphicsCards: [
         { id: 'ahorro', kind: 'integrated', displayName: '', manufacturer: '', driver: '', isDefault: false },
         { id: 'rendimiento', kind: 'dedicated', displayName: '', manufacturer: '', driver: '', isDefault: false },
