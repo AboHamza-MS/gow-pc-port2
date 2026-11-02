@@ -195,6 +195,12 @@ function LoadVsEnvironment {
     $msvc = Join-Path $instances[0] 'VC\Tools\MSVC'
     $toolsets = if (Test-Path -LiteralPath $msvc) { @(Get-ChildItem -LiteralPath $msvc -Directory | ForEach-Object { "$($_.Name) (cl.exe: $(Test-Path -LiteralPath (Join-Path $_.FullName 'bin\Hostx64\x64\cl.exe')))" }) } else { @() }
     Write-Host "  MSVC toolsets in $($instances[0]): $(if ($toolsets) { $toolsets -join ', ' } else { 'none' })"
+    # GOW-Port: vcvars64.bat is written long before the compiler (about 14 minutes in a clean Visual Studio 2026 install), so running
+    # this while the Visual Studio installer is still working finds the loader without the compiler. Issue #14 showed exactly that.
+    $installing = @(Get-Process -Name 'vs_installer', 'vs_installershell', 'vs_setup_bootstrapper', 'vs_BuildTools', 'vs_community', 'setup' -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like 'vs_*' -or $_.Path -match 'Visual Studio' })
+    if ($installing) {
+        Fail "A Visual Studio installer is open or still working ($(($installing | ForEach-Object { $_.ProcessName } | Sort-Object -Unique) -join ', ')), and the C++ compiler is not there yet. Wait for the installation to finish (the Visual Studio Installer window shows its progress), restart Windows if it asks, and run this installation again."
+    }
     Fail "cl not found after loading vcvars64.bat or VsDevCmd.bat ($($instances[0])). Open the Visual Studio Installer, choose Modify and check that ""Desktop development with C++"" is installed with an ""MSVC build tools"" component and a Windows SDK; the details are above in install.log."
 }
 LoadVsEnvironment
