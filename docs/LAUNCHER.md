@@ -104,7 +104,7 @@ be saved. Hardcore disables all cheats. See [`PLAYING.md`](PLAYING.md#achievemen
 Language (English / Brazilian Portuguese), **Skip FMV videos**, **Fast boot** (cuts the intro animation and may cut the
 opening lines; not recommended), **Minimize the launcher while playing**, **Automatic updates** (off by default, see
 [Updating the launcher](#updating-the-launcher)), shortcuts, **Last game log**, **Session report** and **Mark a problem** (see [Reports](#reports)), **Restore defaults** (resets graphics,
-performance, controls and cheats; your file paths are kept) and the About box.
+performance, controls and cheats; your file paths and the button layout you built for a controller the system does not know are kept) and the About box.
 
 ## The setup wizard
 

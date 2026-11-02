@@ -746,8 +746,13 @@ struct GSHwBackend::Impl
             return false;
         }
         std::string error;
-        if (!context.Create(error) || !gl().hwRaster)
+        const bool created = context.Create(error);
+        if (!created || !gl().hwRaster)
         {
+            // A context that exists but whose driver lacks a function the renderer needs (for example glTextureBarrier on a 4.3
+            // driver without ARB_texture_barrier) used to log an empty reason.
+            if (created && error.empty())
+                error = "the context was created, but the driver lacks an OpenGL function the renderer needs";
             std::fprintf(stderr, "[gs-hw] GL unavailable: %s\n", error.c_str());
             GSSharedPresent::SetRendererFailure(GSSharedPresent::RendererFailure::NoContext);
             failed = true;

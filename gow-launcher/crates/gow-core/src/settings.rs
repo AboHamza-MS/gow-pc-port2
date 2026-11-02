@@ -243,7 +243,8 @@ impl Settings {
         }
     }
 
-    /// Back to the defaults of the "Reset" button; paths, cheats' history and RetroAchievements are untouched.
+    /// Back to the defaults of the "Reset" button; paths, cheats' history, RetroAchievements and the hand-made mapping of a
+    /// controller (`pad_sdl_map`) are untouched.
     pub fn reset_game_options(&mut self, display: &DisplayInfo) {
         self.gpu = "auto".into();
         self.display_mode = "fullscreen".into();
@@ -267,7 +268,8 @@ impl Settings {
         self.pad_map.clear();
         self.pad_device.clear();
         self.pad_device_name.clear();
-        self.pad_sdl_map.clear();
+        // `pad_sdl_map` stays: for a controller the system has no layout for, the mapping the player built is the only thing
+        // that makes it work, which is a device fact more than a preference.
         self.cancel_animations = true;
         self.esc_quits = false;
         self.minimize_on_play = true;
@@ -288,6 +290,31 @@ mod tests {
         assert!(!settings.skip_videos); // v5 turns them off, v6 puts them back
         assert_eq!(settings.language, "en");
         assert_eq!(settings.aspect_mode, "16:9");
+    }
+
+    /// The "Balanced" graphics preset (`src/lib/presets.ts`) is what a fresh install and the Reset button give. The
+    /// TypeScript table is a copy, so this pins the Rust side of it: change one of the four defaults and this fails,
+    /// together with the line in `presets.test.ts` that holds the same values.
+    #[test]
+    fn the_balanced_preset_is_what_a_fresh_install_and_a_reset_give() {
+        let balanced = (("2", "bilinear"), (0.8_f64, true));
+        let fresh = Settings::default();
+        assert_eq!(
+            ((fresh.internal_resolution.as_str(), fresh.filter.as_str()), (fresh.sharpness, fresh.fxaa)),
+            balanced
+        );
+        let mut reset = Settings {
+            internal_resolution: "4".into(),
+            filter: "fsr".into(),
+            sharpness: 0.1,
+            fxaa: false,
+            ..Settings::default()
+        };
+        reset.reset_game_options(&DisplayInfo::default());
+        assert_eq!(
+            ((reset.internal_resolution.as_str(), reset.filter.as_str()), (reset.sharpness, reset.fxaa)),
+            balanced
+        );
     }
 
     #[test]
@@ -391,8 +418,10 @@ mod tests {
         assert!(std::fs::read_to_string(&path).unwrap().contains("\"padMap\""));
         assert_eq!(Settings::load(&path).pad_map, "a=cross;start=start");
         loaded.pad_device = "0300dddd5e040000a102000000010000".into();
+        loaded.pad_sdl_map = "a:b0,b:b1".into();
         loaded.reset_game_options(&DisplayInfo::default());
         assert_eq!((loaded.pad_map.as_str(), loaded.pad_device.as_str()), ("", ""));
+        assert_eq!(loaded.pad_sdl_map, "a:b0,b:b1"); // the layout of a controller the system does not know survives a reset
     }
 
     #[test]

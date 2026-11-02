@@ -14,8 +14,9 @@ export const PRESET_IDS: PresetId[] = ['performance', 'balanced', 'quality'];
 
 /**
  * Balanced is `Settings::reset_game_options` in gow-core (`settings.rs`) for these four fields, which is also
- * `Settings::default`: a player who never touched the options starts on it. `presets.test.ts` holds a copy of
- * that table and fails when the two sides drift apart.
+ * `Settings::default`: a player who never touched the options starts on it. The Rust side is pinned by the test
+ * `the_balanced_preset_is_what_a_fresh_install_and_a_reset_give` in `settings.rs`, which holds these same values: change one
+ * of the four defaults there and it fails, and `presets.test.ts` keeps this table honest on the TypeScript side.
  *
  * Performance leaves the sharpness alone (`null`): it only matters for the bicubic filter and Performance uses bilinear.
  */
