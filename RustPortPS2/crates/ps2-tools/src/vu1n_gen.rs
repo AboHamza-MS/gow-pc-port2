@@ -1056,10 +1056,7 @@ pub fn run(options: &Options) -> Result<String, String> {
             regs[k].join("\n")
         );
         let path = options.output.join(format!("vu1n_part{k}.cpp"));
-        let unchanged = fs::read_to_string(&path).map(|old| old.replace("\r\n", "\n") == body).unwrap_or(false);
-        if !unchanged {
-            fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
-        }
+        crate::write_if_changed(&path, &body).map_err(|e| format!("{}: {e}", path.display()))?;
     }
     Ok(format!(
         "[vu1n_gen] {} images, {} distinct blocks, {count} generated, {unsupported} unsupported",

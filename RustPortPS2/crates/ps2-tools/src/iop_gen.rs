@@ -521,7 +521,8 @@ pub fn run(dump: &Path, output: &Path, overrides_text: &str) -> Result<(), Strin
         let mut code = String::new();
         let function = gen_module(&ident, *base, &words, &overrides, &mut code);
         let target = output.join(format!("iopn_{ident}.cpp"));
-        fs::write(&target, code).map_err(|e| format!("{}: {e}", target.display()))?;
+        // GOW-Port: only a changed file is rewritten, so the build does not recompile the unchanged modules.
+        crate::write_if_changed(&target, &code).map_err(|e| format!("{}: {e}", target.display()))?;
         entries.push((name.clone(), *base, *size, *hash, function));
         println!("{name}: base 0x{base:x}, {} instructions", words.len());
     }
@@ -543,5 +544,5 @@ pub fn run(dump: &Path, output: &Path, overrides_text: &str) -> Result<(), Strin
     registry.push_str("const IopNativeModule *iopNativeModules(size_t &count)\n{\n");
     let _ = write!(registry, "    count = {};\n    return kModules;\n}}\n}}\n", entries.len());
     let target = output.join("iopn_registry.cpp");
-    fs::write(&target, registry).map_err(|e| format!("{}: {e}", target.display()))
+    crate::write_if_changed(&target, &registry).map(drop).map_err(|e| format!("{}: {e}", target.display()))
 }
