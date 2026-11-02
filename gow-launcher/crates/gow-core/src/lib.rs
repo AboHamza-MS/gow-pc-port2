@@ -17,6 +17,7 @@ pub mod legacy;
 pub mod optimizer;
 pub mod paths;
 pub mod process;
+pub mod rebuild;
 pub mod script;
 pub mod settings;
 pub mod shortcut;

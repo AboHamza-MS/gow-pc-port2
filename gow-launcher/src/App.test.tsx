@@ -82,6 +82,48 @@ describe('game failures', () => {
   });
 });
 
+describe('rebuild after an update', () => {
+  const bootWithRebuild = (rebuildNeeded: boolean) => {
+    api = createMockApi({ ready: true, rebuildNeeded });
+    setApi(api);
+    return render(<App />);
+  };
+
+  it('shows nothing when the build is up to date', async () => {
+    bootWithRebuild(false);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Performance' }));
+    expect(await screen.findByRole('switch', { name: 'Background optimization' })).toBeInTheDocument();
+    expect(screen.queryByText('Rebuild the game to get the latest fixes')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Rebuild now' })).not.toBeInTheDocument();
+  });
+
+  it('announces it once, offers the rebuild in the Performance tab and clears the note when the rebuild succeeds', async () => {
+    bootWithRebuild(true);
+    const user = userEvent.setup();
+    const start = vi.spyOn(api, 'rebuildStart');
+    expect(await screen.findByText(/Open Performance to rebuild the game/)).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Performance' }));
+    expect(await screen.findByText('Rebuild the game to get the latest fixes')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Rebuild now' }));
+    expect(start).toHaveBeenCalledTimes(1);
+    // The optimizer reports the rebuild running and then finished: the need is asked again and is gone.
+    const snapshot = { configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.5, status: 'compiling' as const };
+    act(() => api.emit('optimizer', snapshot));
+    act(() => api.emit('optimizer', { ...snapshot, compiling: false, buildProgress: -1, status: 'idle' }));
+    await waitFor(() => expect(screen.queryByText('Rebuild the game to get the latest fixes')).not.toBeInTheDocument());
+  });
+
+  it('disables the button with the reason while the game runs', async () => {
+    bootWithRebuild(true);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Performance' }));
+    expect(await screen.findByRole('button', { name: 'Rebuild now' })).toBeEnabled();
+    act(() => api.emit('game-running', true));
+    expect(screen.getByRole('button', { name: 'Rebuild now' })).toBeDisabled();
+    expect(screen.getByText('Close the game to rebuild.')).toBeInTheDocument();
+  });
+});
+
 describe('graphics', () => {
   it('turns the widescreen (PCSX2) patch on and off', async () => {
     boot(true);

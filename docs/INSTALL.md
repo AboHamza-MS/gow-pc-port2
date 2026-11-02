@@ -56,6 +56,12 @@ the button downloads and installs it and restarts the launcher (it waits while t
 optimization is running). **Other, Automatic updates** does the same by itself at start-up; it is off by default. Your
 settings and the game are kept. Details: [`LAUNCHER.md`](LAUNCHER.md#updating-the-launcher).
 
+**Game fixes after a launcher update.** The game itself is not replaced by a launcher update: it is a build made on your
+PC. When the new launcher carries game fixes your build lacks, **Performance** shows a **Rebuild now** note. The rebuild
+reuses what is already built, so it is much shorter than the first installation, but it can still take over an hour when a
+fix changes a header the whole game includes. Until it finishes you keep playing the current build. Details:
+[`LAUNCHER.md`](LAUNCHER.md#performance).
+
 ## Windows: the portable zip
 
 For anyone who prefers not to run an installer, for example because SmartScreen warns about an unsigned one. It is the

@@ -425,5 +425,16 @@
   "failureDownload": "Um download falhou. Confira a conexão com a Internet e se nenhum firewall ou antivírus está bloqueando o launcher, e tente de novo.",
   "failureOpenGl": "O driver de vídeo não conseguiu fornecer o contexto OpenGL que o jogo precisa. Atualize o driver de vídeo. Uma sessão de área de trabalho remota ou o Adaptador de Vídeo Básico da Microsoft não consegue rodar o jogo.",
   "failureMissingDll": "O Windows não encontrou uma biblioteca de que o jogo precisa (código de erro 0xC0000135). Rode a instalação de novo e confira se nenhum antivírus removeu arquivos da pasta do jogo.",
-  "failureBadImage": "O Windows não conseguiu carregar o jogo ou uma das bibliotecas dele, porque o arquivo está danificado ou foi feito para outro tipo de PC (código de erro 0xC000007B). Rode a instalação de novo neste PC."
+  "failureBadImage": "O Windows não conseguiu carregar o jogo ou uma das bibliotecas dele, porque o arquivo está danificado ou foi feito para outro tipo de PC (código de erro 0xC000007B). Rode a instalação de novo neste PC.",
+  "rebuildNoteTitle": "Recompile o jogo para ter as correções mais recentes",
+  "rebuildNoteText": "Esta atualização trouxe correções para o jogo. Recompile o jogo para recebê-las. Leva de alguns minutos a mais de uma hora; você pode continuar usando a versão atual até lá.",
+  "rebuildButton": "Recompilar agora",
+  "rebuildToast": "Esta atualização trouxe correções para o jogo. Abra Desempenho para recompilar o jogo.",
+  "rebuildStarted": "Recompilando o jogo em segundo plano.",
+  "rebuildDone": "O jogo foi recompilado. A nova versão abre na próxima vez que você jogar.",
+  "rebuildUnavailable": "Não foi possível recompilar o jogo: a pasta da instalação não foi encontrada.",
+  "rebuildBlocked_game": "Feche o jogo para recompilar.",
+  "rebuildBlocked_installation": "Termine a instalação primeiro.",
+  "rebuildBlocked_optimizer": "Espere a otimização terminar.",
+  "rebuildBlocked_texturePack": "Espere o pacote de texturas terminar de instalar."
 }

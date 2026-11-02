@@ -239,5 +239,15 @@ export interface UpdateState {
   error: string;
 }
 
+/** Whether the game build is older than the runtime sources the launcher carries (`gow_core::rebuild::RebuildState`). */
+export interface RebuildState {
+  needed: boolean;
+  /** Short digests of the kit and of what the build was made from, for the log. */
+  kit: string;
+  built: string;
+  /** True the first time this digest asks for a rebuild: the interface shows a toast once. */
+  announce: boolean;
+}
+
 /** What an update must not interrupt; the backend refuses with `busy:<code>` for the same reasons. */
 export type UpdateBlocker = 'game' | 'installation' | 'optimizer' | 'texturePack';

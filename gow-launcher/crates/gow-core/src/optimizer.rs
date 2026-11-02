@@ -13,6 +13,7 @@ use serde::Serialize;
 
 use crate::game::EXECUTABLE_NAME;
 use crate::installer::ninja_progress;
+use crate::rebuild;
 use crate::script::{self, quote_for_powershell, ScriptOptions, ScriptRun};
 
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(30);
@@ -363,6 +364,25 @@ impl Optimizer {
         }
     }
 
+    /// The player asked to rebuild the game from the kit's current sources (see `rebuild`). Unlike [`Self::optimize_now`] it
+    /// does not need the background optimization to be switched on: the installation folder is all it needs. Returns `false`
+    /// when it did not start (no installation folder, or a rebuild already running).
+    pub fn rebuild_now(&self) -> bool {
+        let ready = {
+            let mut state = self.state.lock().unwrap();
+            let ready = state.destination.is_some() && state.run.is_none();
+            if ready {
+                state.last_failure = None;
+                state.captured = state.destination.as_deref().map_or(0, count_captures);
+            }
+            ready
+        };
+        if ready {
+            self.start();
+        }
+        ready
+    }
+
     /// One tick of the 30-second timer.
     pub fn check(&self) {
         let start = {
@@ -432,6 +452,10 @@ impl Optimizer {
                 return;
             }
         };
+        let kit = script.parent().map(Path::to_path_buf);
+        if let Some(kit) = &kit {
+            let _ = writeln!(log.lock().unwrap(), "{}", rebuild::log_line(kit, &destination));
+        }
         // With the game open, few build processes and low priority; without it, the installer chooses.
         let jobs = if game_running {
             if std::thread::available_parallelism().map_or(1, |n| n.get()) >= 8 {
@@ -469,7 +493,7 @@ impl Optimizer {
                     }
                 }
             },
-            move |code| on_exit.finished(code, &destination),
+            move |code| on_exit.finished(code, &destination, kit.as_deref()),
         );
         match result {
             Ok(run) => {
@@ -480,7 +504,7 @@ impl Optimizer {
         }
     }
 
-    fn finished(&self, code: Option<i32>, destination: &Path) {
+    fn finished(&self, code: Option<i32>, destination: &Path, kit: Option<&Path>) {
         let stopped = {
             let mut state = self.state.lock().unwrap();
             let stopped = state.stopping;
@@ -515,6 +539,10 @@ impl Optimizer {
             succeeded.then_some(state.compiled)
         };
         if let Some(compiled) = compiled {
+            // The build now holds the kit's sources: say so, so the launcher stops offering a rebuild.
+            if let Some(kit) = kit {
+                rebuild::record_build(kit, destination);
+            }
             (self.compiled_changed)(compiled);
             sync_active_executable(destination, self.state.lock().unwrap().game_running);
         }
@@ -649,6 +677,19 @@ mod tests {
         assert!(optimizer.capture_directory().ends_with("vu1_captures"));
         optimizer.configure(&directory.path().to_string_lossy(), false, true, 3);
         assert_eq!(optimizer.snapshot().status, OptimizerStatus::Disabled);
+    }
+
+    #[test]
+    fn a_rebuild_on_request_needs_only_the_installation_folder() {
+        let directory = tempfile::tempdir().unwrap();
+        let optimizer = quiet(directory.path());
+        // No installation folder known: nothing starts.
+        assert!(!optimizer.rebuild_now());
+        // With the background optimization off it still starts (here it fails for lack of a kit, which proves it tried).
+        optimizer.configure(&directory.path().to_string_lossy(), false, true, 0);
+        assert_eq!(optimizer.snapshot().status, OptimizerStatus::Disabled);
+        assert!(optimizer.rebuild_now());
+        assert!(optimizer.state.lock().unwrap().has_error);
     }
 
     #[test]

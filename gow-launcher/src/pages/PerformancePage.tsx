@@ -10,7 +10,7 @@ export function selectedScale(internalResolution: string): number {
 }
 
 export function PerformancePage() {
-  const { settings, patch, optimizer, info, api, t, f } = useApp();
+  const { settings, patch, optimizer, info, api, t, f, rebuild, rebuildBlocker, startRebuild } = useApp();
   const optimizing = settings.optimizationDestination.length > 0;
   const { graphicsCards, platform } = info;
   const gpuUnavailable = settings.gpu !== 'auto' && !graphicsCards.some((card) => card.id === settings.gpu);
@@ -30,6 +30,19 @@ export function PerformancePage() {
   );
   return (
     <div className="flex flex-col gap-1">
+      {rebuild.needed && (
+        <div className="mb-2">
+          <Note tone="warn" title={t('rebuildNoteTitle')}>
+            <p>{t('rebuildNoteText')}</p>
+            <div className="mt-2.5 flex items-center gap-3">
+              <SecondaryButton disabled={rebuildBlocker !== null} onClick={() => void startRebuild()}>
+                {t('rebuildButton')}
+              </SecondaryButton>
+              {rebuildBlocker && <span className="text-ink-muted">{t(`rebuildBlocked_${rebuildBlocker}`)}</span>}
+            </div>
+          </Note>
+        </div>
+      )}
       <GroupTitle>{t('groupRenderer')}</GroupTitle>
       <SettingRow icon={MemoryStick} title={t('gpu')} description={gpuUnavailable ? t('gpuMissing') : t('gpuDesc')}>
         <Select label={t('gpu')} options={gpuOptions} value={settings.gpu} onChange={(gpu) => patch({ gpu })} />

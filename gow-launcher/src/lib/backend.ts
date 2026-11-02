@@ -3,7 +3,7 @@
 
 import type {
   Bootstrap, DestinationValidation, GameFinished, GameStatus, GamepadCaptured, InstallOutcome,
-  InstallProgress, IsoValidation, OptimizerSnapshot, Settings, TexturePackInfo, TexturePackOutcome, TexturePackProgress,
+  InstallProgress, IsoValidation, OptimizerSnapshot, RebuildState, Settings, TexturePackInfo, TexturePackOutcome, TexturePackProgress,
   UpdateMode, UpdateState, WizardInfo,
 } from './types';
 
@@ -65,6 +65,9 @@ export interface Api {
   installComplete(args: { destination: string; elf: string; executable: string }): Promise<Settings>;
   optimizerSnapshot(): Promise<OptimizerSnapshot>;
   optimizeNow(): Promise<void>;
+  rebuildState(): Promise<RebuildState>;
+  /** Starts the rebuild of the game from the kit's sources. Rejects with a code (`busy:game`...) when it must not start. */
+  rebuildStart(): Promise<void>;
   updateState(): Promise<UpdateState>;
   /** Downloads and installs the update, then the launcher restarts. Rejects with a code (`busy:game`...) when it must not start. */
   updateInstall(): Promise<void>;
@@ -122,6 +125,8 @@ async function createTauriApi(): Promise<Api> {
     installComplete: (arguments_) => call('install_complete', { arguments: arguments_ }),
     optimizerSnapshot: () => call('optimizer_snapshot'),
     optimizeNow: () => call('optimize_now'),
+    rebuildState: () => call('rebuild_state'),
+    rebuildStart: () => call('rebuild_start'),
     updateState: () => call('update_state'),
     updateInstall: () => call('update_install'),
     updateOpenRelease: () => call('update_open_release'),
@@ -169,9 +174,13 @@ type Handler = (payload: never) => void;
 
 export type MockApi = Api & { emit: <K extends keyof EventMap>(event: K, payload: EventMap[K]) => void };
 
-export function createMockApi(options: { ready?: boolean; update?: UpdateState } = {}): MockApi {
+export function createMockApi(options: { ready?: boolean; update?: UpdateState; rebuildNeeded?: boolean } = {}): MockApi {
   const ready = options.ready ?? true;
   let update = options.update ?? noUpdate;
+  let rebuild: RebuildState = {
+    needed: options.rebuildNeeded ?? false, kit: '3fa9c1d20b7e', built: options.rebuildNeeded ? '9b1e44c07a52' : '3fa9c1d20b7e', announce: false,
+  };
+  let announced = false;
   const listeners = new Map<string, Set<Handler>>();
   const emit = <K extends keyof EventMap>(event: K, payload: EventMap[K]) =>
     listeners.get(event)?.forEach((handler) => handler(payload as never));
@@ -302,6 +311,14 @@ export function createMockApi(options: { ready?: boolean; update?: UpdateState }
     installComplete: async (args) => merge({ elf: args.elf, executable: args.executable, optimizationDestination: args.destination, iso: '' }),
     optimizerSnapshot: async () => snapshot(),
     optimizeNow: async () => undefined,
+    rebuildState: async () => {
+      const current = { ...rebuild, announce: rebuild.needed && !announced };
+      announced = announced || rebuild.needed;
+      return current;
+    },
+    rebuildStart: async () => {
+      rebuild = { needed: false, kit: rebuild.kit, built: rebuild.kit, announce: false };
+    },
     updateState: async () => update,
     updateInstall: async () => {
       // Short fake run: the real one downloads about 200 MB, installs and restarts the launcher.
@@ -343,6 +360,7 @@ export function getApi(): Promise<Api> {
         createMockApi({
           ready: new URLSearchParams(window.location.search).get('state') !== 'missing',
           update: mockUpdateFromAddress(new URLSearchParams(window.location.search).get('update')),
+          rebuildNeeded: new URLSearchParams(window.location.search).get('rebuild') === 'needed',
         }),
       );
   return instance;

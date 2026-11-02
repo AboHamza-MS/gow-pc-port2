@@ -8,6 +8,8 @@ use std::fs::{self, File};
 use std::io;
 use std::path::Path;
 
+use crate::rebuild;
+
 pub const MARKER: &str = ".kit-version";
 
 /// The files the installers cannot run without, relative to the kit folder: the script, the two prebuilt executables and
@@ -48,8 +50,11 @@ pub fn sync(source: &Path, target: &Path, version: &str) -> io::Result<bool> {
     if current && missing_essentials(target).is_empty() {
         return Ok(false);
     }
+    // The first extraction that records a digest also needs the digest of the kit it replaces (see `rebuild`).
+    let before = if rebuild::read_kit_digest(target).is_none() { rebuild::kit_digest(target).ok() } else { None };
     fs::create_dir_all(target)?;
     copy_tree(source, target)?;
+    rebuild::record_kit(target, before);
     fs::write(target.join(MARKER), version)?;
     Ok(true)
 }
@@ -160,6 +165,39 @@ mod tests {
         );
         // Nothing is missing any more: the next start does nothing.
         assert!(!sync(&source, &target, "1.0.0").unwrap());
+    }
+
+    #[test]
+    fn sync_writes_the_digest_with_the_version_marker() {
+        let root = tempfile::tempdir().unwrap();
+        let (source, target) = (root.path().join("kit"), root.path().join("data"));
+        write_essentials(&source);
+        write(&source.join("RustPortPS2/native/ps2xRuntime/src/a.cpp"), "int a;");
+        assert!(sync(&source, &target, "1.0.0").unwrap());
+        let first = rebuild::read_kit_digest(&target).expect("the digest is written next to the marker");
+        assert_eq!(first, rebuild::kit_digest(&target).unwrap());
+        // A version whose runtime files are the same keeps the digest; a changed runtime file changes it.
+        assert!(sync(&source, &target, "1.0.1").unwrap());
+        assert_eq!(rebuild::read_kit_digest(&target).unwrap(), first);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write(&source.join("RustPortPS2/native/ps2xRuntime/src/a.cpp"), "int fixed;");
+        assert!(sync(&source, &target, "1.0.2").unwrap());
+        assert_ne!(rebuild::read_kit_digest(&target).unwrap(), first);
+    }
+
+    #[test]
+    fn the_first_digest_over_an_older_kit_remembers_the_digest_it_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let (source, target) = (root.path().join("kit"), root.path().join("data"));
+        write_essentials(&source);
+        write(&source.join("RustPortPS2/native/ps2xRuntime/src/a.cpp"), "int fixed;");
+        // A kit extracted by a launcher that kept no digest, with the runtime of the previous release.
+        write_essentials(&target);
+        write(&target.join("RustPortPS2/native/ps2xRuntime/src/a.cpp"), "int old;");
+        fs::write(target.join(MARKER), "0.9.0").unwrap();
+        let old = rebuild::kit_digest(&target).unwrap();
+        assert!(sync(&source, &target, "1.0.0").unwrap());
+        assert_eq!(fs::read_to_string(target.join(rebuild::PRIOR_MARKER)).unwrap(), old);
     }
 
     #[test]

@@ -425,5 +425,16 @@
   "failureDownload": "A download failed. Check the Internet connection and that no firewall or antivirus is blocking the launcher, then try again.",
   "failureOpenGl": "The graphics driver could not provide the OpenGL context the game needs. Update the graphics driver. A remote desktop session or the Microsoft Basic Display Adapter cannot run the game.",
   "failureMissingDll": "Windows could not find a library the game needs (error code 0xC0000135). Run the installation again, and check that no antivirus removed files from the game folder.",
-  "failureBadImage": "Windows could not load the game or one of its libraries, because the file is damaged or built for another kind of PC (error code 0xC000007B). Run the installation again on this PC."
+  "failureBadImage": "Windows could not load the game or one of its libraries, because the file is damaged or built for another kind of PC (error code 0xC000007B). Run the installation again on this PC.",
+  "rebuildNoteTitle": "Rebuild the game to get the latest fixes",
+  "rebuildNoteText": "Fixes for the game were installed with this update. Rebuild the game to get them. It takes from a few minutes to over an hour; you can keep using the current build until then.",
+  "rebuildButton": "Rebuild now",
+  "rebuildToast": "Fixes for the game came with this update. Open Performance to rebuild the game.",
+  "rebuildStarted": "Rebuilding the game in the background.",
+  "rebuildDone": "The game was rebuilt. The new version opens the next time you play.",
+  "rebuildUnavailable": "The game could not be rebuilt: the installation folder was not found.",
+  "rebuildBlocked_game": "Close the game to rebuild.",
+  "rebuildBlocked_installation": "Finish the installation first.",
+  "rebuildBlocked_optimizer": "Wait for the optimization to finish.",
+  "rebuildBlocked_texturePack": "Wait for the texture pack to install."
 }

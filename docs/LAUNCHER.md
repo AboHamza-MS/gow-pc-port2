@@ -45,6 +45,18 @@ A pack applies the next time the game starts. [`TEXTURES.md`](TEXTURES.md) expla
 | Background optimization | On | Recompiles the parts of the game you have reached, in the background, after you close the game |
 | Also while playing | **Off** | Rebuilds with the game open. It competes for the CPU and freezes the picture for tens of seconds, so leave it off unless you are debugging |
 | Optimize now | - | Runs one optimization pass immediately |
+| Rebuild now | - | Only shown, as a note at the top of the tab, when this launcher carries game fixes your build does not have yet (see below) |
+
+**Rebuilding after a launcher update.** A launcher update brings new game code (the runtime sources in its kit), but the
+game you play is a build made on your PC, so the fixes do not reach it by themselves. The launcher remembers which kit each
+build was made from (`build/.built-from-kit` in your installation folder, written when an installation or a rebuild
+succeeds). When the kit it now carries has different runtime files or tools, it shows a note at the top of **Performance**
+and one notice, once per kit version. **Rebuild now** runs the build in the background; it takes from a few minutes to over
+an hour, and you keep playing the current build until it finishes (the new one opens the next time you start the game).
+The button waits while the game, an installation, an optimization or a texture pack is running. An update that does not
+change the runtime files shows nothing, and the launcher never starts a rebuild by itself because of an update. A build
+made before the launcher kept this record is assumed up to date, except when the update that introduced the record changed
+the runtime files: then it asks once.
 
 ### Files
 
