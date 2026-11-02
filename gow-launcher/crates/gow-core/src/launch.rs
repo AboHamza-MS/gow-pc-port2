@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::game;
 use crate::keys;
+use crate::padmap;
 use crate::settings::Settings;
 
 /// Variables of Waffle565's runtime (`run_gow.sh`): VIF1/VU1/GIF on the GS thread,
@@ -165,6 +166,8 @@ pub fn build_environment(ctx: &LaunchContext<'_>, inherited: impl Fn(&str) -> Op
     plan.flag("GOW_TEXTURE_REPLACE_SYNC", !settings.async_textures, None);
     plan.flag("PC_DMC5_CONTROLS", settings.dmc5_controls, Some("0"));
     plan.text_or_remove("PC_PAD_FACE_MAP", &settings.pad_buttons);
+    // Every gamepad button (padmap.rs); the game ignores an invalid value, so an invalid one is not passed at all.
+    plan.text_or_remove("PC_PAD_MAP", if padmap::pad_map_is_valid(&settings.pad_map) { &settings.pad_map } else { "" });
     plan.flag("PC_ESC_QUITS", settings.esc_quits, Some("0"));
     plan.flag("GOW_CANCEL", settings.cancel_animations, Some("0"));
     // Configurable keyboard and mouse (ps2_pad.cpp): "action=code,code;...".
@@ -412,12 +415,39 @@ mod tests {
             expected.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect();
         expected.sort();
         assert_eq!(actual, expected);
-        for name in
-            ["GOW_SKIP_FMV", "GOW_FAST_BOOT", "PC_VSYNC", "PC_SHOW_FPS", "PC_CHEATS", "GOW_ISO", "PC_PAD_FACE_MAP"]
-        {
+        for name in [
+            "GOW_SKIP_FMV",
+            "GOW_FAST_BOOT",
+            "PC_VSYNC",
+            "PC_SHOW_FPS",
+            "PC_CHEATS",
+            "GOW_ISO",
+            "PC_PAD_FACE_MAP",
+            "PC_PAD_MAP",
+        ] {
             assert!(plan.remove.contains(name), "{name} should be removed");
         }
         assert!(value(&plan, "PC_KEYS").unwrap().starts_with("ls_up=87;"));
+    }
+
+    #[test]
+    fn the_button_map_is_passed_only_when_it_is_valid() {
+        let mut fixture = fixture();
+        let valid = "a=cross;b=circle;start=start";
+        fixture.settings.pad_map = valid.into();
+        assert_eq!(value(&plan(&fixture, 2.0), "PC_PAD_MAP"), Some(valid));
+        // Invalid (no start), empty and unknown names: the variable is removed so the game keeps the presets.
+        for invalid in ["a=cross;b=circle", "", "a=jump;start=start", "a=cross;a=circle;start=start"] {
+            fixture.settings.pad_map = invalid.into();
+            let plan = plan(&fixture, 2.0);
+            assert_eq!(value(&plan, "PC_PAD_MAP"), None, "{invalid:?}");
+            assert!(plan.remove.contains("PC_PAD_MAP"), "{invalid:?}");
+        }
+        // The face map and the shoulder preset are still passed next to it: the game decides which one wins.
+        fixture.settings.pad_map = valid.into();
+        fixture.settings.pad_buttons = "cross,triangle,circle,square".into();
+        let plan = plan(&fixture, 2.0);
+        assert_eq!(value(&plan, "PC_PAD_FACE_MAP"), Some("cross,triangle,circle,square"));
     }
 
     #[test]

@@ -43,6 +43,8 @@ pub struct Settings {
     pub dmc5_controls: bool,
     /// A,B,X,Y -> cross,circle,square,triangle; empty = preset.
     pub pad_buttons: String,
+    /// `source=target;...` for every gamepad button (`PC_PAD_MAP`, see `padmap.rs`); empty = the preset and the face buttons above.
+    pub pad_map: String,
     pub cancel_animations: bool,
     pub esc_quits: bool,
     pub minimize_on_play: bool,
@@ -95,6 +97,7 @@ impl Default for Settings {
             settings_version: 0,
             dmc5_controls: false,
             pad_buttons: String::new(),
+            pad_map: String::new(),
             cancel_animations: true,
             esc_quits: false,
             minimize_on_play: true,
@@ -252,6 +255,7 @@ impl Settings {
         self.fast_boot = false;
         self.dmc5_controls = false;
         self.pad_buttons.clear();
+        self.pad_map.clear();
         self.cancel_animations = true;
         self.esc_quits = false;
         self.minimize_on_play = true;
@@ -361,6 +365,21 @@ mod tests {
         assert!(text.contains("\"cheatsShortcut\""));
         assert!(text.contains("\"progressive480p\""));
         assert_eq!(Settings::load(&path), settings);
+    }
+
+    #[test]
+    fn an_old_file_has_no_button_map_and_the_reset_clears_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, r#"{"padButtons":"cross,circle,square,triangle","settingsVersion":11}"#).unwrap();
+        let mut loaded = Settings::load(&path);
+        assert_eq!(loaded.pad_map, "");
+        loaded.pad_map = "a=cross;start=start".into();
+        loaded.save(&path).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"padMap\""));
+        assert_eq!(Settings::load(&path).pad_map, "a=cross;start=start");
+        loaded.reset_game_options(&DisplayInfo::default());
+        assert_eq!(loaded.pad_map, "");
     }
 
     #[test]

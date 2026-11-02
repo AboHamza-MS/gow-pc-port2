@@ -1,0 +1,23 @@
+[
+  { "value": "a=cross;b=circle;x=square;y=triangle;lb=l1;rb=r1;lt=l2;rt=r2;back=select;start=start;ls=l3;rs=r3;up=up;down=down;left=left;right=right", "valid": true, "note": "the classic layout written out" },
+  { "value": "a=cross;b=triangle;x=circle;y=square;lb=l1;rb=r1;lt=r2;rt=l2;back=select;start=start;ls=l3;rs=r3;up=up;down=down;left=left;right=right", "valid": true, "note": "the modern layout written out" },
+  { "value": "a=cross;start=start;", "valid": true, "note": "one trailing semicolon, sources not listed press nothing" },
+  { "value": "a=cross;b=cross;start=start", "valid": true, "note": "two sources on one target" },
+  { "value": "a=none;start=start", "valid": true, "note": "none drops a button" },
+  { "value": "a=start", "valid": true, "note": "start can come from any source" },
+  { "value": " a = cross ; start = start ", "valid": true, "note": "spaces around names are ignored" },
+  { "value": "", "valid": false, "note": "empty: no custom map" },
+  { "value": "a=cross;b=circle", "valid": false, "note": "nothing presses start" },
+  { "value": "a=cross;start=none", "valid": false, "note": "start only as none" },
+  { "value": "a=cross;a=circle;start=start", "valid": false, "note": "duplicate source" },
+  { "value": "q=cross;start=start", "valid": false, "note": "unknown source" },
+  { "value": "guide=cross;start=start", "valid": false, "note": "the guide button cannot be mapped" },
+  { "value": "a=jump;start=start", "valid": false, "note": "unknown target" },
+  { "value": "a;start=start", "valid": false, "note": "no equals sign" },
+  { "value": "a=cross;;start=start", "valid": false, "note": "empty entry" },
+  { "value": ";a=cross;start=start", "valid": false, "note": "leading empty entry" },
+  { "value": "A=cross;start=start", "valid": false, "note": "names are lower case" },
+  { "value": "a=Cross;start=start", "valid": false, "note": "targets are lower case" },
+  { "value": "a=cross,start=start", "valid": false, "note": "comma instead of semicolon" },
+  { "value": "a=cross=circle;start=start", "valid": false, "note": "two equals signs" }
+]

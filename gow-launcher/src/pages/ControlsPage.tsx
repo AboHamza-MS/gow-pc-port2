@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Circle, DoorOpen, Ellipsis, Gamepad2, Square, Swords, Triangle, X } from 'lucide-react';
-import { Glyphs, GroupTitle, KeyCap, SecondaryButton, Select, SettingRow, Switch } from '../components/ui';
+import { Glyphs, GroupTitle, KeyCap, Note, SecondaryButton, Select, SettingRow, Switch } from '../components/ui';
 import { Modal } from '../components/Shell';
 import { upper } from '../lib/i18n';
 import { actions, assign, conflicts, fromEvent, fromMouse, groups, isReserved, keyName, readBindings, type Bindings } from '../lib/keys';
+import { assignTarget, parsePadMap, presetLayout, serializePadMap, sharedTargets, SOURCES, TARGETS, type Source, type Target } from '../lib/padmap';
 import { useApp } from '../state/app';
 
 type Face = 'cross' | 'circle' | 'square' | 'triangle';
@@ -98,6 +99,24 @@ export function ControlsPage() {
   const map = useMemo(() => readBindings(settings.keys), [settings.keys]);
   const [capture, setCapture] = useState<{ action: string; index: number } | null>(null);
   const faces = faceButtons(settings.padButtons, settings.dmc5Controls);
+  // A custom button map the game accepts; an invalid text is ignored by the game too, so it counts as no map.
+  const parsedMap = useMemo(() => parsePadMap(settings.padMap), [settings.padMap]);
+  const custom = parsedMap.ok ? parsedMap.layout : null;
+  const [noStart, setNoStart] = useState(false);
+  const scheme = custom ? 'custom' : settings.dmc5Controls ? 'modern' : 'classic';
+
+  const changeScheme = (value: string) => {
+    setNoStart(false);
+    if (value === 'custom') patch({ padMap: serializePadMap(presetLayout(settings.dmc5Controls, faces)) });
+    else patch({ dmc5Controls: value === 'modern', padButtons: '', padMap: '' });
+  };
+  const changeTarget = (source: Source, target: Target) => {
+    if (!custom) return;
+    const next = assignTarget(custom, source, target);
+    setNoStart(next === null);
+    if (next) patch({ padMap: serializePadMap(next) });
+  };
+  const sharedLabels = custom ? sharedTargets(custom).map((target) => t(`padmapTarget_${target}`)) : [];
 
   const save = (bindings: Bindings) => patch({ keys: JSON.stringify(bindings) });
   const warning = (action: string, code: number) => {
@@ -118,21 +137,64 @@ export function ControlsPage() {
       <SettingRow icon={Gamepad2} title={t('padScheme')} description={t('padSchemeDesc')}>
         <Select
           label={t('padScheme')}
-          options={[{ text: t('modernPad'), value: true }, { text: t('classicPad'), value: false }]}
-          value={settings.dmc5Controls}
-          onChange={(dmc5Controls) => patch({ dmc5Controls, padButtons: '' })}
+          options={[
+            { text: t('modernPad'), value: 'modern' },
+            { text: t('classicPad'), value: 'classic' },
+            { text: t('padmapCustom'), value: 'custom' },
+          ]}
+          value={scheme}
+          onChange={changeScheme}
         />
       </SettingRow>
       {['A / ✕', 'B / ○', 'X / □', 'Y / △'].map((title, index) => (
-        <SettingRow key={title} icon={faceIcons[index]} title={title} description={t('padButtonDesc')}>
+        <SettingRow
+          key={title}
+          icon={faceIcons[index]}
+          title={title}
+          description={custom ? t('padmapLocked') : t('padButtonDesc')}
+          disabled={custom !== null}
+        >
           <Select
             label={title}
+            disabled={custom !== null}
             options={faceOptions}
             value={faces[index]}
             onChange={(value) => patch({ padButtons: setFaceButton(faces, index, value).join(',') })}
           />
         </SettingRow>
       ))}
+      {custom && (
+        <>
+          <GroupTitle>{t('padmapTitle')}</GroupTitle>
+          <p className="px-1 text-[13px] text-ink-muted">{t('padmapDesc')}</p>
+          {SOURCES.map((source) => (
+            <SettingRow key={source} title={t(`padmapSrc_${source}`)}>
+              <Select
+                label={f('padmapPresses', t(`padmapSrc_${source}`))}
+                options={TARGETS.map((target) => ({ text: t(`padmapTarget_${target}`), value: target }))}
+                value={custom[source]}
+                onChange={(target) => changeTarget(source, target)}
+              />
+            </SettingRow>
+          ))}
+          {sharedLabels.length > 0 && (
+            <Note tone="warn" title={t('padmapSharedTitle')}>
+              {f('padmapShared', sharedLabels.join(', '))}
+            </Note>
+          )}
+          {noStart && <Note tone="warn">{t('padmapNoStart')}</Note>}
+          <div className="flex justify-end py-1">
+            <SecondaryButton
+              onClick={() => {
+                setNoStart(false);
+                patch({ padMap: '' });
+              }}
+            >
+              {t('padmapReset')}
+            </SecondaryButton>
+          </div>
+        </>
+      )}
       <SettingRow icon={Swords} title={t('cancelAnimations')} description={t('cancelAnimationsDesc')}>
         <Switch label={t('cancelAnimations')} checked={settings.cancelAnimations} onChange={(cancelAnimations) => patch({ cancelAnimations })} />
       </SettingRow>

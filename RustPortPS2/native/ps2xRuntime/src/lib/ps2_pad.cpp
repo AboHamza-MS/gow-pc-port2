@@ -1,5 +1,6 @@
 #include "runtime/ps2_pad.h"
 #include "ps2_host_backend.h"
+#include "gow_pad_map.h" // GOW-Port: the pure part of the gamepad layer (button table, device choice), tested on its own
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -523,93 +524,25 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
         const char *val = std::getenv("PC_DMC5_CONTROLS");
         return val != nullptr && std::strcmp(val, "1") == 0;
     }();
-    // A, B, X, Y by physical position. An explicit launcher map takes priority over the preset.
-    // It is validated as a permutation so a corrupt preference does not accidentally cancel a button.
-    static const std::array<uint16_t, 4> faceButtons = [] {
-        constexpr std::array<uint16_t, 4> classic{PAD_CROSS, PAD_CIRCLE, PAD_SQUARE, PAD_TRIANGLE};
-        constexpr std::array<uint16_t, 4> modern{PAD_CROSS, PAD_TRIANGLE, PAD_CIRCLE, PAD_SQUARE};
-        const auto fallback = dmc5Controls ? modern : classic;
-        const char *value = std::getenv("PC_PAD_FACE_MAP");
-        if (!value || !*value)
-            return fallback;
-        const std::string names(value);
-        std::array<uint16_t, 4> mapped{};
-        std::array<bool, 4> seen{};
-        size_t offset = 0;
-        for (size_t i = 0; i < mapped.size(); ++i)
-        {
-            const size_t comma = names.find(',', offset);
-            if ((i < 3 && comma == std::string::npos) || (i == 3 && comma != std::string::npos))
-                return fallback;
-            const std::string name = names.substr(offset, comma == std::string::npos ? comma : comma - offset);
-            constexpr const char *labels[] = {"cross", "circle", "square", "triangle"};
-            bool valid = false;
-            for (size_t j = 0; j < 4; ++j)
-                if (name == labels[j] && !seen[j])
-                {
-                    mapped[i] = classic[j];
-                    seen[j] = valid = true;
-                    break;
-                }
-            if (!valid)
-                return fallback;
-            offset = comma == std::string::npos ? names.size() : comma + 1;
-        }
-        return mapped;
+    // GOW-Port: what each gamepad button presses, built once (gow_pad_map.h). Without PC_PAD_MAP it is the layout the launcher's presets
+    // describe: the classic or DMC5 shoulders and, by physical position A, B, X, Y, the PC_PAD_FACE_MAP permutation (validated there, a
+    // corrupt value falls back to the preset). A valid PC_PAD_MAP replaces both; an invalid one is ignored and logged once.
+    static const gowpad::Table padTable = []
+    {
+        std::string note;
+        const char *custom = std::getenv("PC_PAD_MAP");
+        const gowpad::Table table = gowpad::buildTable(custom, std::getenv("PC_PAD_FACE_MAP"), dmc5Controls, &note);
+        if (!note.empty())
+            std::fprintf(stderr, "[pad] %s\n", note.c_str());
+        else if (custom && *custom)
+            std::fprintf(stderr, "[pad] custom button map (PC_PAD_MAP) in use\n");
+        return table;
     }();
 
     if (useGamepad)
     {
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_UP))
-            clearBit(PAD_UP);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN))
-            clearBit(PAD_DOWN);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT))
-            clearBit(PAD_LEFT);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT))
-            clearBit(PAD_RIGHT);
-
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN))
-            clearBit(faceButtons[0]);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT))
-            clearBit(faceButtons[1]);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_LEFT))
-            clearBit(faceButtons[2]);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_UP))
-            clearBit(faceButtons[3]);
-
-        if (dmc5Controls)
-        {
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_1)) // LB -> Block / Parry
-                clearBit(PAD_L1);
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) // RB -> Stance / Charge
-                clearBit(PAD_R1);
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_2)) // LT -> Magic
-                clearBit(PAD_R2);
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_2)) // RT -> Magic Toggle / Secondary
-                clearBit(PAD_L2);
-        }
-        else
-        {
-            // Classic PS2 GoW shoulder layout.
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_1))
-                clearBit(PAD_L1);
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_1))
-                clearBit(PAD_R1);
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_2))
-                clearBit(PAD_L2);
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_2))
-                clearBit(PAD_R2);
-        }
-
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT))
-            clearBit(PAD_START);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_MIDDLE_LEFT))
-            clearBit(PAD_SELECT);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_THUMB))
-            clearBit(PAD_L3);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_THUMB))
-            clearBit(PAD_R3);
+        // Active low: every pressed button clears the bits it stands for (the sticks below are not buttons).
+        btns &= static_cast<uint16_t>(~gowpad::pressedBits(padTable, [kGamepad](int button) { return IsGamepadButtonDown(kGamepad, button); }));
 
         float lx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_X);
         float ly = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_Y);

@@ -15,6 +15,7 @@ pub mod kit;
 pub mod launch;
 pub mod legacy;
 pub mod optimizer;
+pub mod padmap;
 pub mod paths;
 pub mod process;
 pub mod rebuild;

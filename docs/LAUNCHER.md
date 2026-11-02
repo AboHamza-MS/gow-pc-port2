@@ -73,8 +73,10 @@ installation folder. **Setup wizard** reopens the installer.
 
 ### Controls
 
-Keyboard and mouse mapping (two keys per action), gamepad layout (Classic PS2 or Modern DMC5), the four face-button
-swaps, **Agile combat** and **ESC closes the game**. The default layout and what each action does are in
+Keyboard and mouse mapping (two keys per action), gamepad layout (Classic PS2, Modern DMC5 or **Custom**), the four
+face-button swaps, **Agile combat** and **ESC closes the game**. **Custom (every button)** shows 16 rows, one per button of
+the pad, each choosing the PS2 button it presses (`PC_PAD_MAP`); the first change starts from the layout in use, two buttons
+may share a target (a warning is shown), Start cannot be taken away, and **Back to a layout** clears the map. The default layout and what each action does are in
 [`PLAYING.md`](PLAYING.md#keyboard-and-mouse).
 
 Click a slot, then press the new key or click a mouse button. Right click clears it. **Esc** cancels. Keys are bound by

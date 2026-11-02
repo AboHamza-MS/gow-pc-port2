@@ -30,6 +30,8 @@ export interface Settings {
   settingsVersion: number;
   dmc5Controls: boolean;
   padButtons: string;
+  /** `source=target;...` for every gamepad button (the game's `PC_PAD_MAP`); empty = the layout and face buttons above. */
+  padMap: string;
   cancelAnimations: boolean;
   escQuits: boolean;
   minimizeOnPlay: boolean;
