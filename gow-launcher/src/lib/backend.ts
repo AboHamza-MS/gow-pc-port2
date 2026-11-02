@@ -46,6 +46,10 @@ export interface Api {
   openLog(): Promise<void>;
   openInstallLog(): Promise<void>;
   openOptimizerLog(): Promise<void>;
+  /** Writes the session report ZIP, opens its folder and returns the file name. */
+  reportExport(): Promise<string>;
+  /** Stores a note about a problem for the next report; false when the text was empty. */
+  reportMark(text: string): Promise<boolean>;
   openDirectory(path: string): Promise<void>;
   openTexturesFolder(): Promise<boolean>;
   texturePackInfo(): Promise<TexturePackInfo>;
@@ -106,6 +110,8 @@ async function createTauriApi(): Promise<Api> {
     openLog: () => call('open_log'),
     openInstallLog: () => call('open_install_log'),
     openOptimizerLog: () => call('open_optimizer_log'),
+    reportExport: () => call('report_export'),
+    reportMark: (text) => call('report_mark', { text }),
     openDirectory: (path) => call('open_directory', { path }),
     openTexturesFolder: () => call('open_textures_folder'),
     texturePackInfo: () => call('texture_pack_info'),
@@ -242,6 +248,8 @@ export function createMockApi(options: { ready?: boolean; update?: UpdateState; 
     openLog: async () => undefined,
     openInstallLog: async () => undefined,
     openOptimizerLog: async () => undefined,
+    reportExport: async () => 'gow-report-20260101-120000.zip',
+    reportMark: async (text) => text.trim().length > 0,
     openDirectory: async () => undefined,
     openTexturesFolder: async () => true,
     texturePackInfo: async () => ({

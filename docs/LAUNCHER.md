@@ -95,7 +95,7 @@ be saved. Hardcore disables all cheats. See [`PLAYING.md`](PLAYING.md#achievemen
 
 Language (English / Brazilian Portuguese), **Skip FMV videos**, **Fast boot** (cuts the intro animation and may cut the
 opening lines; not recommended), **Minimize the launcher while playing**, **Automatic updates** (off by default, see
-[Updating the launcher](#updating-the-launcher)), shortcuts, **Last game log**, **Restore defaults** (resets graphics,
+[Updating the launcher](#updating-the-launcher)), shortcuts, **Last game log**, **Session report** and **Mark a problem** (see [Reports](#reports)), **Restore defaults** (resets graphics,
 performance, controls and cheats; your file paths are kept) and the About box.
 
 ## The setup wizard
@@ -136,6 +136,7 @@ The data folder is `%APPDATA%\GOW_PC\Launcher` on Windows and `~/.local/share/GO
 | Launcher update checks and installs | `logs/update.log` |
 | Installation kit shipped with the launcher | `kit/` in the data folder |
 | Kit repairs (a file that went missing and was restored) | `logs/kit.log` |
+| Last game session (how it ended) and your problem markers | `logs/last-session.json`, `logs/markers.jsonl` |
 | Window icon | `icon.png` in the data folder |
 | GL shader cache | `%LOCALAPPDATA%\GOW_PC\Launcher\cache\shaders` / `~/.cache/GOW_PC/Launcher/shaders` |
 | Game data, build and saves | inside your installation folder (`game/`, `build/`, `game/Mcd001.ps2`) |
@@ -175,6 +176,28 @@ When an installation or the game fails for a cause the launcher recognizes, a sh
 error text, which stays: a download that failed, no usable CMake, a kit file that is gone, a graphics driver that could
 not give the OpenGL context, and the Windows exit codes for a missing DLL (`0xC0000135`) and a bad image (`0xC000007B`).
 Anything else shows only the raw text and the log button, as before.
+
+## Reports
+
+**Other, Export report** (and the same button in the failure dialog) saves a ZIP to `reports/` in the data folder and
+opens that folder; the newest ten are kept. Attach it to a GitHub issue. It holds `report.json` (launcher version, system,
+processor, memory, graphics adapters and drivers, the settings, the installation facts with the checksum of the runner and
+the CRC of the game file, the optimizer state, the environment the game would get and what the launcher knows about the last
+session), the launcher's logs (`last.log`, `previous.log`, `install.log`, `optimize.log`, `update.log`, `kit.log`; long
+ones keep their first 256 KiB and their end), your markers and a `README.txt`. The contents are an allowlist of file names:
+the disc image, the game file and data, saves, recorded microcode, textures, shader caches and screenshots are never
+read.
+
+Before anything is written, the installation, data, temporary, home, disc image and game folders become `<INSTALL>`,
+`<DATA>`, `<TEMP>`, `<HOME>`, `<ISO_DIR>`, `<GAME>`, the user name `<USER>` and the computer name `<PC>`; the
+RetroAchievements user is shown only as set or not and its password is never read. The files on disk are not changed. The
+removal is by text match: it does not catch 8.3 short names or URL-encoded paths, and a word equal to your user name is
+replaced too, so look through the ZIP before attaching it.
+
+**Mark a problem** (Other tab, and the failure dialog) stores a note of up to 200 characters in `logs/markers.jsonl`, with the
+time and, while the game runs, how many seconds into the session; the last 50 are kept. Do not write personal information
+in them. A report can be made with the game closed, running (it is then marked partial) or after a crash: the launcher
+writes `logs/last-session.json` when the game starts and when it ends.
 
 ## Updating the launcher
 

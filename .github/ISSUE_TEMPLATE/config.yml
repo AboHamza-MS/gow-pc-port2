@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Troubleshooting guide
+    url: https://github.com/danielalves96/gow-pc-port/blob/main/docs/TROUBLESHOOTING.md
+    about: Common problems (black screen, no audio, build failures) and how to fix them.

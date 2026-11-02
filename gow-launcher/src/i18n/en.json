@@ -442,5 +442,15 @@
   "presetPerformance": "Performance (1×, soft, no anti-aliasing)",
   "presetBalanced": "Balanced (2×, soft, anti-aliasing)",
   "presetQuality": "Quality (3×, sharp, anti-aliasing)",
-  "presetCustom": "Custom"
+  "presetCustom": "Custom",
+  "reportExportTitle": "Session report",
+  "reportExportDesc": "Saves a ZIP with the launcher's logs, your settings and details of this PC, with your user name and folders removed, to attach to a bug report on GitHub. Game files and saves are never included.",
+  "reportExportButton": "Export report",
+  "reportSaved": "Report saved: %1",
+  "reportFailed": "The report could not be saved.",
+  "reportMarkTitle": "Mark a problem",
+  "reportMarkDesc": "A short note on what went wrong, for example where in the game. It goes into the next report. Do not write personal information.",
+  "reportMarkPlaceholder": "What happened?",
+  "reportMarkButton": "Mark",
+  "reportMarked": "Marked for the next report."
 }

@@ -18,6 +18,7 @@ pub mod optimizer;
 pub mod paths;
 pub mod process;
 pub mod rebuild;
+pub mod report;
 pub mod script;
 pub mod settings;
 pub mod shortcut;

@@ -16,6 +16,7 @@ use gow_core::launch::LaunchError;
 use gow_core::optimizer::{self, Optimizer, OptimizerSnapshot};
 use gow_core::paths::AppPaths;
 use gow_core::process::{self, GameSession, StartOptions};
+use gow_core::report::{self, session, HostFacts, ReportRequest};
 use gow_core::settings::{DisplayInfo, Settings};
 use gow_core::update::Activity;
 use gow_core::{display, kit, legacy, rebuild, shortcut, textures};
@@ -228,9 +229,14 @@ fn start_game(app: AppHandle, window: WebviewWindow, state: State<'_, AppState>)
     let settings = state.snapshot();
     let options = StartOptions { vu1_capture: state.optimizer.capture_directory() };
     let finished_app = app.clone();
-    let session = process::start(&settings, &options, &state.paths, move |finished| {
+    // Written before the game starts, so a session that ends at once cannot be overwritten by a late "started".
+    let started_at = report::unix_now();
+    let previous_session = session::read_session(&state.paths);
+    session::session_started(&state.paths, started_at);
+    let started = process::start(&settings, &options, &state.paths, move |finished| {
         let state = finished_app.state::<AppState>();
         *state.game.lock().unwrap() = None;
+        session::session_ended(&state.paths, started_at, &finished, report::unix_now());
         let updated = state.update(|s| {
             s.seconds_played += finished.seconds;
             s.last_session = finished.seconds;
@@ -243,7 +249,14 @@ fn start_game(app: AppHandle, window: WebviewWindow, state: State<'_, AppState>)
         let _ = finished_app.emit("settings-changed", updated);
         let _ = finished_app.emit("game-running", false);
         let _ = finished_app.emit("game-finished", finished);
-    })?;
+    });
+    let session = match started {
+        Ok(session) => session,
+        Err(error) => {
+            session::session_not_started(&state.paths, previous_session);
+            return Err(error.into());
+        }
+    };
     *state.game.lock().unwrap() = Some(session);
     state.optimizer.game_state_changed(true);
     let _ = app.emit("game-running", true);
@@ -294,6 +307,53 @@ fn open_install_log(state: State<'_, AppState>) {
 #[tauri::command]
 fn open_optimizer_log(state: State<'_, AppState>) {
     let _ = shortcut::open_path(&state.paths.logs_dir().join("optimize.log"));
+}
+
+// ---------------------------------------------------------------------------------------------- session report
+
+/// Writes the report ZIP (see `gow_core::report`), opens its folder and returns the file name. Hashing the runner and
+/// scrubbing the logs take a moment, so it leaves the UI thread.
+#[tauri::command]
+async fn report_export(window: WebviewWindow, state: State<'_, AppState>) -> Result<String, String> {
+    let settings = state.snapshot();
+    let display = display_info(&window);
+    let paths = state.paths.clone();
+    let optimizer = state.optimizer.snapshot();
+    let vu1_capture = state.optimizer.capture_directory();
+    let game_running = state.game.lock().unwrap().is_some();
+    let exported = tauri::async_runtime::spawn_blocking(move || {
+        let host = HostFacts::detect();
+        let env: Vec<(String, String)> = std::env::vars_os()
+            .map(|(name, value)| (name.to_string_lossy().into_owned(), value.to_string_lossy().into_owned()))
+            .collect();
+        let cards = gpu::graphics_cards();
+        let request = ReportRequest {
+            paths: &paths,
+            settings: &settings,
+            launcher_version: env!("CARGO_PKG_VERSION"),
+            display,
+            cards: &cards,
+            optimizer: &optimizer,
+            game_running,
+            vu1_capture: &vu1_capture,
+            now: report::unix_now(),
+        };
+        report::export(&request, &host, &env)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    let _ = shortcut::open_path(&report::reports_dir(&state.paths));
+    Ok(exported.name)
+}
+
+/// Stores a note about a problem for the next report. False when the text was empty.
+#[tauri::command]
+fn report_mark(state: State<'_, AppState>, text: String) -> Result<bool, String> {
+    let running = state.game.lock().unwrap().is_some();
+    session::add_marker(&state.paths, &text, report::unix_now(), running)
+        .map(|marker| marker.is_some())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -768,6 +828,8 @@ pub fn run() {
             open_log,
             open_install_log,
             open_optimizer_log,
+            report_export,
+            report_mark,
             open_directory,
             open_textures_folder,
             texture_pack_info,

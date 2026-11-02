@@ -2,6 +2,7 @@
 import badgeUrl from '../assets/theme/badge.webp';
 import logoUrl from '../assets/theme/logo.webp';
 import { useApp } from '../state/app';
+import { MarkField, useReportExport } from './ReportTools';
 import { SecondaryButton, type IconComponent } from './ui';
 
 // ----------------------------------------------------------------------------------------------- title bar
@@ -260,6 +261,7 @@ export function CloseBlockedDialog() {
 
 export function ErrorDialog() {
   const { error, dismissError, api, t } = useApp();
+  const report = useReportExport();
   if (!error) return null;
   return (
     <Modal>
@@ -271,8 +273,10 @@ export function ErrorDialog() {
             {error.detail}
           </pre>
         )}
+        <MarkField />
         <div className="flex justify-end gap-2">
           <SecondaryButton onClick={() => void api.openLog()}>{t('viewLog')}</SecondaryButton>
+          <SecondaryButton disabled={report.busy} onClick={() => void report.run()}>{t('reportExportButton')}</SecondaryButton>
           <SecondaryButton onClick={dismissError}>{t('gotIt')}</SecondaryButton>
         </div>
       </div>

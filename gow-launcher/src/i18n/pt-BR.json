@@ -442,5 +442,15 @@
   "presetPerformance": "Desempenho (1×, suave, sem antisserrilhado)",
   "presetBalanced": "Equilibrado (2×, suave, com antisserrilhado)",
   "presetQuality": "Qualidade (3×, nítido, com antisserrilhado)",
-  "presetCustom": "Personalizado"
+  "presetCustom": "Personalizado",
+  "reportExportTitle": "Relatório da sessão",
+  "reportExportDesc": "Salva um ZIP com os registros do launcher, suas configurações e dados deste PC, sem o seu nome de usuário nem as suas pastas, para anexar a um relato de erro no GitHub. Arquivos do jogo e saves nunca entram.",
+  "reportExportButton": "Exportar relatório",
+  "reportSaved": "Relatório salvo: %1",
+  "reportFailed": "Não foi possível salvar o relatório.",
+  "reportMarkTitle": "Marcar um problema",
+  "reportMarkDesc": "Uma nota curta sobre o que deu errado, por exemplo em que ponto do jogo. Ela entra no próximo relatório. Não escreva informações pessoais.",
+  "reportMarkPlaceholder": "O que aconteceu?",
+  "reportMarkButton": "Marcar",
+  "reportMarked": "Marcado para o próximo relatório."
 }
