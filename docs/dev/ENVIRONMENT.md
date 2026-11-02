@@ -41,6 +41,8 @@ arrives as `GOW_SHARPEN` and the render scale as `PS2X_GS_HW_SCALE`.
 | `GOW_SCALER=sharp\|bilinear`, `GOW_SHARPEN` (0–1) | The scaler that actually runs: bicubic + contrast-adaptive sharpening, or a linear tap |
 | `PS2X_GS_HW_SCALE=<n>` | Internal render scale (float, clamped to ≥ 1). This is the one the runtime reads |
 | `PS2X_GS_DIRECT_PRESENT=0` | Forces the RAM (readback + upload) presentation; shared GL textures are the default |
+| `PS2X_GS_FAIL_TEST=context\|shaders` | Test only: `GSHwBackend::ensure()` fails on purpose before touching GL, to see the on-screen renderer-failure message (English, or Portuguese when `PC_LANGUAGE` starts with `pt`); `GOW_HOST_SHOT=<frame>` writes `host_shot.png` |
+| `PS2X_GS_GL_MAX_MINOR=<3..6>` | Test only: the GS context ladder starts at OpenGL 4.<n> instead of 4.6 (then falls down to 4.3), to exercise the 4.3 path on a newer GPU. `[gs-gl]` in the log reports the version obtained |
 | `GOW_PRESENT_BLOCKING`, `GOW_PRESENT_FIFO`, `GOW_PRESENT_MIN_INTERVAL_US` | Presentation pacing |
 | `PC_GAME_FPS`, `PC_WINDOW_FPS`, `PC_VSYNC`, `PC_SHOW_FPS` | Limits, vsync, counter |
 | `PC_PROGRESSIVE` / `GOW_PROGRESSIVE` | 480p progressive mode |
@@ -94,6 +96,7 @@ arrives as `GOW_SHARPEN` and the render scale as `PS2X_GS_HW_SCALE`.
 | `GOW_IO_HIST=<s>`, `GOW_IOP_IO_HIST=<s>` | Which hardware registers the game still touches, within `<s>` seconds |
 | `GOW_VIF_DIAG=1`, `GOW_XGKICK_IMMEDIATE=1`, `GOW_VU1F_*` | VIF/GIF packet diagnostics |
 | `GOW_AUDIO_STATS=1`, `GOW_IOP_DRIFT=1`, `GOW_SND_REGLOG=1`, `GOW_SND_DIAG=1` | Sound: frame counts, IOP drift, register writes |
+| `GOW_SND_VOICE_DIAG=1` | Sound: `[gow-voices]` every 5 s with the SPU2 voices taken, in release and stuck in release |
 | `GOW_MPEG_DIAG=1`, `GOW_MPEG_PACE`, `GOW_MOVIE_OVERRIDE` | Movie playback and A/V sync |
 | `GOW_RENDER_DIAG=1`, `GOW_PATH_DIAG=1`, `GOW_ANM_DIAG=1`, `GOW_SKEL_DIAG=1`, `GOW_MODEL_DIAG=1` | Renderer, node search, animation, skeleton |
 | `GOW_GS_REPLAY_TRACE`, `GOW_GS_REPLAY_AFTER`, `GOW_GS_REPLAY_SECONDS`, `GOW_GS_REPLAY_TEXFLUSH` | Record a GS command stretch. The recording works, but the consumer (`replay_gs`) does not build in this tree; use `GOW_VIF_CAPTURE` plus `replay_vif_chain` for VIF1/VU1 work |

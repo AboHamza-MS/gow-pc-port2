@@ -2119,8 +2119,11 @@ void register_ps2_memory_tests()
             t.Equals(mem.readIORegister(kChannel + 0x80u), kSadr + 80u, "SADR should advance past tags and data");
             t.Equals(mem.readIORegister(kChannel + 0x10u), 0x29410u, "MADR should end after the last tag's data");
             t.IsTrue((mem.readIORegister(kChannel + 0x00u) & 0x100u) == 0u, "chain completion should clear CHCR.STR");
+            t.Equals(mem.readIORegister(kChannel + 0x00u) & 0xFFFFu, 0x0004u, "chain completion should keep the chain mode and direction bits");
             const std::vector<uint32_t> causes = mem.consumeCompletedDmacCauses();
             t.Equals(causes.size(), static_cast<size_t>(1u), "SPR_FROM chain should queue one completion");
+            if (!causes.empty())
+                t.Equals(causes[0], 8u, "SPR_FROM chain completion should use DMAC cause 8");
         });
 
         tc.Run("DMAC SPR_TO source chain copies tagged RDRAM data to scratchpad", [](TestCase &t)
@@ -2155,8 +2158,11 @@ void register_ps2_memory_tests()
             t.IsTrue(copied, "cnt and ref data should land contiguously in the scratchpad");
             t.Equals(mem.readIORegister(kChannel + 0x80u), kSadr + 32u, "SADR should advance by the copied QWs");
             t.IsTrue((mem.readIORegister(kChannel + 0x00u) & 0x100u) == 0u, "chain completion should clear CHCR.STR");
+            t.Equals(mem.readIORegister(kChannel + 0x00u) & 0xFFFFu, 0x0005u, "chain completion should keep the chain mode and direction bits");
             const std::vector<uint32_t> causes = mem.consumeCompletedDmacCauses();
             t.Equals(causes.size(), static_cast<size_t>(1u), "SPR_TO chain should queue one completion");
+            if (!causes.empty())
+                t.Equals(causes[0], 9u, "SPR_TO chain completion should use DMAC cause 9");
         });
 
         tc.Run("sceDmaReset re-enables DMAC DMAE", [](TestCase &t)

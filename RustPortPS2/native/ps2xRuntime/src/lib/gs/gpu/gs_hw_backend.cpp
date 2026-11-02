@@ -734,10 +734,22 @@ struct GSHwBackend::Impl
             return true;
         if (failed)
             return false;
+        // GOW-Port: PS2X_GS_FAIL_TEST=context|shaders (test only) fails here on purpose, before touching GL, to see the
+        // on-screen message of that kind.
+        static const char *failTest = std::getenv("PS2X_GS_FAIL_TEST");
+        if (failTest && (std::strcmp(failTest, "context") == 0 || std::strcmp(failTest, "shaders") == 0))
+        {
+            std::fprintf(stderr, "[gs-hw] PS2X_GS_FAIL_TEST=%s: failing on purpose\n", failTest);
+            GSSharedPresent::SetRendererFailure(failTest[0] == 'c' ? GSSharedPresent::RendererFailure::NoContext
+                                                                   : GSSharedPresent::RendererFailure::Shaders);
+            failed = true;
+            return false;
+        }
         std::string error;
         if (!context.Create(error) || !gl().hwRaster)
         {
             std::fprintf(stderr, "[gs-hw] GL unavailable: %s\n", error.c_str());
+            GSSharedPresent::SetRendererFailure(GSSharedPresent::RendererFailure::NoContext);
             failed = true;
             return false;
         }
@@ -746,6 +758,7 @@ struct GSHwBackend::Impl
         const GLuint f = compile(GSGL::kFragmentShader, {kFsSource, kReinterpretSource, kFsTail});
         if (!v || !f)
         {
+            GSSharedPresent::SetRendererFailure(GSSharedPresent::RendererFailure::Shaders);
             failed = true;
             return false;
         }
@@ -761,6 +774,7 @@ struct GSHwBackend::Impl
             GLsizei n = 0;
             g.GetProgramInfoLog(program, sizeof(log), &n, log);
             std::fprintf(stderr, "[gs-hw] link error: %s\n", log);
+            GSSharedPresent::SetRendererFailure(GSSharedPresent::RendererFailure::Shaders);
             failed = true;
             return false;
         }

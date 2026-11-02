@@ -25,6 +25,17 @@ namespace GSSharedPresent
         bool blank = false;
     };
 
+    // GOW-Port: why the GS renderer could not start, for the host to explain on screen. Written once by the GS thread
+    // (GSHwBackend::ensure), read by the host thread every frame; a failed renderer never recovers.
+    enum class RendererFailure : uint8_t
+    {
+        None,
+        NoContext, // the GL context could not be created, or its entry points are missing
+        Shaders,   // the driver rejected the shaders (compile or link)
+    };
+    void SetRendererFailure(RendererFailure failure);
+    RendererFailure GetRendererFailure();
+
     void CaptureHostContext();
     void RestoreHostContext();
     bool Active();

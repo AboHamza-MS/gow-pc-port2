@@ -117,16 +117,22 @@ namespace ps2_gs_stage
     void push(GifPathId path, const uint8_t *data, uint32_t size)
     {
         Stage &s = stage();
-        std::unique_lock<std::mutex> lock(s.mutex);
-        s.space.wait(lock, [&s, size] { return s.queuedBytes == 0 || s.queuedBytes + size <= kMaxQueuedBytes; });
+        // GOW-Port: the copy runs outside the mutex, which the stage thread also takes to swap the queue and recycle its
+        // buffers, so a large packet no longer holds it up. The only producer is the GS worker (the call site in
+        // ps2_runtime.cpp is guarded by onGsWorkerThread()), so the order of the queue is the order of the calls.
         Packet p;
         p.path = path;
-        if (!s.spare.empty())
         {
-            p.data = std::move(s.spare.back());
-            s.spare.pop_back();
+            std::lock_guard<std::mutex> lock(s.mutex);
+            if (!s.spare.empty())
+            {
+                p.data = std::move(s.spare.back());
+                s.spare.pop_back();
+            }
         }
         p.data.assign(data, data + size);
+        std::unique_lock<std::mutex> lock(s.mutex);
+        s.space.wait(lock, [&s, size] { return s.queuedBytes == 0 || s.queuedBytes + size <= kMaxQueuedBytes; });
         s.queuedBytes += size;
         const bool wasEmpty = s.queue.empty();
         s.queue.push_back(std::move(p));

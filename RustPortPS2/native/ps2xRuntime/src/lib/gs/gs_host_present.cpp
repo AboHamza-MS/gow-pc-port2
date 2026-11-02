@@ -12,6 +12,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <string>
+#include <vector>
 
 float gowPresentationAspect();                                // GOW-Port: gow_integration.cpp
 void gowFrameDraw(float x, float y, float w, float h, uint64_t presentedVsyncTick, bool hasSharedFrame); // GOW-Port: gow_integration.cpp
@@ -153,6 +155,136 @@ void main()
             }
         }
         return g_scaler.id != 0u ? &g_scaler : nullptr;
+    }
+}
+
+namespace
+{
+    // GOW-Port: what the player reads when the GS renderer could not start (GSSharedPresent::RendererFailure). Portuguese
+    // when PC_LANGUAGE starts with "pt", the same rule as the cheat menu; the accents are octal escapes of their UTF-8 bytes
+    // so the file does not depend on the compiler's source charset.
+    struct FailureText
+    {
+        const char *title;
+        const char *lines[3];
+    };
+
+    const FailureText &failureText(GSSharedPresent::RendererFailure failure)
+    {
+        static const FailureText english[2] = {
+            {"The graphics renderer could not start",
+             {"This game needs a GPU and driver with OpenGL 4.3 or newer.",
+              "Update your graphics driver, or run the game on a different GPU (on laptops, choose the dedicated one).",
+              "Details are in last.log, in the launcher's logs folder."}},
+            {"The graphics renderer could not start",
+             {"The graphics driver rejected the game's shaders.", "Update your graphics driver.",
+              "Details are in last.log, in the launcher's logs folder."}}};
+        static const FailureText portuguese[2] = {
+            {"O renderizador gr\303\241fico n\303\243o p\303\264de iniciar",
+             {"Este jogo precisa de uma GPU e de um driver com OpenGL 4.3 ou mais novo.",
+              "Atualize o driver da placa de v\303\255deo, ou rode o jogo em outra GPU (em notebooks, escolha a dedicada).",
+              "Os detalhes est\303\243o em last.log, na pasta de logs do launcher."}},
+            {"O renderizador gr\303\241fico n\303\243o p\303\264de iniciar",
+             {"O driver gr\303\241fico recusou os shaders do jogo.", "Atualize o driver da placa de v\303\255deo.",
+              "Os detalhes est\303\243o em last.log, na pasta de logs do launcher."}}};
+        static const bool pt = [] { const char *language = std::getenv("PC_LANGUAGE"); return language && std::strncmp(language, "pt", 2) == 0; }();
+        const size_t index = failure == GSSharedPresent::RendererFailure::Shaders ? 1u : 0u;
+        return pt ? portuguese[index] : english[index];
+    }
+
+    // Greedy word wrap of text to maxWidth at the given size (the raylib default font).
+    void wrapText(const char *text, float size, float spacing, float maxWidth, std::vector<std::string> &out)
+    {
+        const Font font = GetFontDefault();
+        std::string line, word;
+        const auto flush = [&] {
+            if (!line.empty())
+                out.push_back(line);
+            line.clear();
+        };
+        for (const char *p = text;; ++p)
+        {
+            if (*p != ' ' && *p != '\0')
+            {
+                word.push_back(*p);
+                continue;
+            }
+            if (!word.empty())
+            {
+                const std::string candidate = line.empty() ? word : line + " " + word;
+                if (!line.empty() && MeasureTextEx(font, candidate.c_str(), size, spacing).x > maxWidth)
+                {
+                    flush();
+                    line = word;
+                }
+                else
+                    line = candidate;
+                word.clear();
+            }
+            if (*p == '\0')
+                break;
+        }
+        flush();
+    }
+
+    // An opaque dark panel over the picture area (so the magenta placeholder is not shown) and the message centered in it:
+    // the title, then the lines, word-wrapped to the panel, with a size proportional to the window height that shrinks
+    // until everything fits. The wrapped lines are kept until the window size changes.
+    void drawRendererFailure(const Rectangle &area, float screenHeight, GSSharedPresent::RendererFailure failure)
+    {
+        struct Layout
+        {
+            float width = 0.0f, height = 0.0f;
+            GSSharedPresent::RendererFailure failure = GSSharedPresent::RendererFailure::None;
+            float titleSize = 0.0f, bodySize = 0.0f, gap = 0.0f;
+            std::vector<std::string> title, body;
+        };
+        static Layout layout;
+        if (layout.width != area.width || layout.height != screenHeight || layout.failure != failure)
+        {
+            const FailureText &text = failureText(failure);
+            layout = {};
+            layout.width = area.width;
+            layout.height = screenHeight;
+            layout.failure = failure;
+            const float maxWidth = area.width * 0.86f, maxHeight = area.height * 0.86f;
+            float bodySize = std::max(10.0f, screenHeight * 0.034f);
+            for (;; bodySize *= 0.92f)
+            {
+                layout.bodySize = bodySize;
+                layout.titleSize = bodySize * 1.4f;
+                layout.gap = bodySize * 0.7f;
+                layout.title.clear();
+                layout.body.clear();
+                wrapText(text.title, layout.titleSize, layout.titleSize * 0.1f, maxWidth, layout.title);
+                for (const char *line : text.lines)
+                    wrapText(line, bodySize, bodySize * 0.1f, maxWidth, layout.body);
+                const float height = layout.title.size() * layout.titleSize * 1.2f + layout.gap +
+                                     layout.body.size() * bodySize * 1.35f + layout.gap;
+                if (height <= maxHeight || bodySize <= 8.0f)
+                    break;
+            }
+        }
+        const Font font = GetFontDefault();
+        const float titleLine = layout.titleSize * 1.2f, bodyLine = layout.bodySize * 1.35f;
+        const float total = layout.title.size() * titleLine + layout.gap + layout.body.size() * bodyLine + layout.gap;
+        float y = area.y + (area.height - total) * 0.5f;
+        DrawRectangleRec(area, Color{20, 20, 20, 255});
+        for (const std::string &line : layout.title)
+        {
+            const float width = MeasureTextEx(font, line.c_str(), layout.titleSize, layout.titleSize * 0.1f).x;
+            DrawTextEx(font, line.c_str(), Vector2{std::round(area.x + (area.width - width) * 0.5f), std::round(y)},
+                       layout.titleSize, layout.titleSize * 0.1f, Color{255, 255, 255, 255});
+            y += titleLine;
+        }
+        y += layout.gap;
+        for (const std::string &line : layout.body)
+        {
+            const float width = MeasureTextEx(font, line.c_str(), layout.bodySize, layout.bodySize * 0.1f).x;
+            DrawTextEx(font, line.c_str(), Vector2{std::round(area.x + (area.width - width) * 0.5f), std::round(y)},
+                       layout.bodySize, layout.bodySize * 0.1f, Color{214, 214, 214, 255});
+            y += bodyLine;
+        }
     }
 }
 
@@ -399,6 +531,14 @@ GSHostPresentation::View GSHostPresentation::renderFrame(GS &gs, uint64_t vsyncT
         EndShaderMode();
     gowFrameDraw(destination.x, destination.y, destination.width, destination.height,
                      selected.frame.vsyncTick, selected.shared && !selected.blank); // GOW-Port
+    // GOW-Port: no renderer, so no frame will ever come: say why instead of the magenta placeholder. A blank frame without a
+    // failure (PMODE off) keeps its look.
+    if (selected.blank)
+    {
+        const GSSharedPresent::RendererFailure failure = GSSharedPresent::GetRendererFailure();
+        if (failure != GSSharedPresent::RendererFailure::None)
+            drawRendererFailure(destination, screenHeight, failure);
+    }
     if (overlay)
         overlay();
     // GOW-Port: GOW_HOST_SHOT=<n>: at host frame n write the window's back buffer (what is about to be shown) to

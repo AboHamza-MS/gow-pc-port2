@@ -23,7 +23,7 @@ PS2. On Windows a launcher does all of it for you, and two installer scripts cov
 | **Disk** | About **30 GB** free (the extracted disc is about 8 GB, the build a few more) |
 | **CPU** | 64-bit x86, 4 cores or more recommended. AVX2 is **not** required by the shipped build |
 | **RAM** | 8 GB (16 GB recommended while building) |
-| **GPU** | OpenGL 4.6 or newer: any recent NVIDIA/AMD card, or the integrated graphics of a recent Intel/AMD CPU |
+| **GPU** | OpenGL 4.3 or newer (the renderer asks for 4.6 first and falls back down to 4.3; 4.6 is the tested path): any recent NVIDIA/AMD card, or the integrated graphics of a recent Intel/AMD CPU |
 | **OS** | Windows 10/11 x64, or Linux: Arch/CachyOS, Ubuntu 24.04+, Fedora 40+ or similar (**experimental**, see above) |
 | **Time** | The first build takes **30–90 minutes** depending on the CPU. Later updates only rebuild what changed |
 
