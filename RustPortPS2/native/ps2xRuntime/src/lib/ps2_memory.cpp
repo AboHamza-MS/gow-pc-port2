@@ -1781,7 +1781,10 @@ bool PS2Memory::processScratchpadChain(uint32_t channelBase, uint32_t chcr)
         chcr = (chcr & ~(0x3u << 4u)) | ((asp & 0x3u) << 4u);
     }
 
-    m_ioRegisters[channelBase + 0x00u] = (chcr & 0x0000FFFFu) | (lastTagUpper << 16u);
+    // GOW-Port: 0xFEFF: keep the configuration (mode, direction, ASP, TTE / TIE) but not STR (bit 8). eeDmaStore clears STR in
+    // the stored value because the transfer is complete when it returns, yet it passes the original CHCR here, and the
+    // game polls this bit after a transfer.
+    m_ioRegisters[channelBase + 0x00u] = (chcr & 0x0000FEFFu) | (lastTagUpper << 16u);
     m_ioRegisters[channelBase + 0x10u] = madr & 0x7FFFFFF0u;
     m_ioRegisters[channelBase + 0x20u] = 0u;
     m_ioRegisters[channelBase + 0x80u] = sadr & 0x3FF0u;
