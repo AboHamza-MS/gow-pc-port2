@@ -36,6 +36,8 @@ export interface Settings {
   padDevice: string;
   /** Its name, only to show it while it is not connected. */
   padDeviceName: string;
+  /** SDL mapping fields for that device when the system has none (`a:b0,start:b7,...`); empty = none. */
+  padSdlMap: string;
   cancelAnimations: boolean;
   escQuits: boolean;
   minimizeOnPlay: boolean;
@@ -78,6 +80,26 @@ export interface PadDeviceList {
   devices: PadDevice[];
   /** Unix seconds of the last change of the list. */
   seenAt: number;
+}
+
+/** What one joystick does right now, from the game (`gow_core::controller::LiveDevice`): the raw inputs held or moved off rest. */
+export interface LiveDevice {
+  index: number;
+  guid: string;
+  /** Raw buttons held. */
+  buttons: number[];
+  /** `[hat, direction bits]` for each hat off rest. */
+  hats: Array<[number, number]>;
+  /** `[axis, distance from rest in hundredths]` for each axis that moved. */
+  axes: Array<[number, number]>;
+}
+
+export interface LiveState {
+  /** Grows with every write: a changing beat means the game is alive. */
+  beat: number;
+  devices: LiveDevice[];
+  /** Milliseconds since the game wrote it. */
+  ageMs: number;
 }
 
 export interface DisplayInfo {

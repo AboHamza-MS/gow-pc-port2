@@ -179,6 +179,9 @@ pub fn build_environment(ctx: &LaunchContext<'_>, inherited: impl Fn(&str) -> Op
         "GOW_PAD_DEVICE",
         if controller::is_guid(&settings.pad_device) { &settings.pad_device } else { "" },
     );
+    // A hand-made SDL mapping for that device, when the player built one because the system has none.
+    let sdl_mapping = controller::mapping_line(&settings.pad_device, &settings.pad_device_name, &settings.pad_sdl_map);
+    plan.text_or_remove("GOW_PAD_SDL_MAPPING", sdl_mapping.as_deref().unwrap_or(""));
     plan.text_or_remove("PC_PAD_MAP", if padmap::pad_map_is_valid(&settings.pad_map) { &settings.pad_map } else { "" });
     plan.flag("PC_ESC_QUITS", settings.esc_quits, Some("0"));
     plan.flag("GOW_CANCEL", settings.cancel_animations, Some("0"));
@@ -439,6 +442,7 @@ mod tests {
             "PC_PAD_MAP",
             "GOW_PAD_DEVICE",
             "GOW_PAD_LIST_FILE",
+            "GOW_PAD_SDL_MAPPING",
         ] {
             assert!(plan.remove.contains(name), "{name} should be removed");
         }
@@ -471,6 +475,26 @@ mod tests {
         };
         let plan = build_environment(&ctx, |_| None);
         assert_eq!(value(&plan, "GOW_PAD_LIST_FILE"), Some("/data/pads/devices.json"));
+    }
+
+    #[test]
+    fn the_hand_made_sdl_mapping_needs_the_device_and_valid_fields() {
+        let mut fixture = fixture();
+        let guid = "0300dddd5e040000a102000000010000";
+        fixture.settings.pad_sdl_map = "a:b0,start:b7,dpup:h0.1,leftx:a0".into();
+        // Fields without a chosen device go nowhere.
+        assert!(plan(&fixture, 2.0).remove.contains("GOW_PAD_SDL_MAPPING"));
+        fixture.settings.pad_device = guid.into();
+        fixture.settings.pad_device_name = "Generic X-Box pad".into();
+        assert_eq!(
+            value(&plan(&fixture, 2.0), "GOW_PAD_SDL_MAPPING"),
+            Some("0300dddd5e040000a102000000010000,Generic X-Box pad,a:b0,start:b7,dpup:h0.1,leftx:a0")
+        );
+        // Without a start button the game could not be started: nothing is passed.
+        fixture.settings.pad_sdl_map = "a:b0".into();
+        assert_eq!(value(&plan(&fixture, 2.0), "GOW_PAD_SDL_MAPPING"), None);
+        fixture.settings.pad_sdl_map = String::new();
+        assert_eq!(value(&plan(&fixture, 2.0), "GOW_PAD_SDL_MAPPING"), None);
     }
 
     #[test]

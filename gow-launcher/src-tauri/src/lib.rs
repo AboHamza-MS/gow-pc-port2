@@ -466,6 +466,24 @@ fn pad_devices(state: State<'_, AppState>) -> Option<PadDeviceList> {
     controller::read(&state.paths.pad_devices_file())
 }
 
+/// The raw input of the joysticks right now, from the game (only while the mapping dialog keeps the probe fresh); `None` when the
+/// game has not written it.
+#[tauri::command]
+fn pad_live(state: State<'_, AppState>) -> Option<controller::LiveState> {
+    controller::read_live(&state.paths.pad_live_file())
+}
+
+/// The mapping dialog asks the game for the live feed (`true`, repeated every few seconds while it is open) or stops asking.
+#[tauri::command]
+fn pad_probe(state: State<'_, AppState>, active: bool) {
+    let file = state.paths.pad_probe_file();
+    if active {
+        let _ = controller::touch_probe(&file);
+    } else {
+        controller::clear_probe(&file);
+    }
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct GamepadFailure {
@@ -846,6 +864,8 @@ pub fn run() {
             ra_save_credential,
             ra_clear_credential,
             pad_devices,
+            pad_live,
+            pad_probe,
             gamepad_begin,
             gamepad_cancel,
             wizard_info,

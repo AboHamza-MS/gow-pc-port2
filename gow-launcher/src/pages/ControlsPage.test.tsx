@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from '../App';
 import { createMockApi, dongleDevices, setApi, type MockApi } from '../lib/backend';
-import type { PadDeviceList } from '../lib/types';
+import type { LiveDevice, PadDeviceList } from '../lib/types';
 import { serializePadMap, presetLayout } from '../lib/padmap';
 
 let api: MockApi;
@@ -117,5 +117,101 @@ describe('controller picker', () => {
     await user.click(screen.getByRole('button', { name: 'Refresh' }));
     expect(await screen.findByText(/did not connect|was not connected the last time/)).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: 'Controller' })).toHaveTextContent('2.4G Keyboard (not seen last time)');
+  });
+});
+
+describe('mapping a controller the system has no layout for', () => {
+  const padGuid = '0300dddd5e040000a102000000010000';
+  const idle = (): LiveDevice => ({ index: 3, guid: padGuid, buttons: [], hats: [], axes: [] });
+
+  /** What the game reports for the pad: the test changes it as a player would press things. */
+  function feed(initial: LiveDevice, ageMs = 100) {
+    const state = { device: initial, ageMs };
+    vi.spyOn(api, 'padLive').mockImplementation(async () => ({ beat: 1, ageMs: state.ageMs, devices: [state.device] }));
+    return state;
+  }
+
+  it('asks the game for the live feed while it is open and stops when it closes', async () => {
+    api = createMockApi({ ready: true });
+    setApi(api);
+    const spy = vi.spyOn(api, 'padProbe');
+    render(<App />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Controls' }));
+    await choose(user, 'Controller', 'Generic X-Box pad (no button layout)');
+    await user.click(await screen.findByRole('button', { name: 'Map its buttons' }));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(spy).toHaveBeenCalledWith(true));
+    // The game has not written anything: it is not running. Listening is not offered, saving is not possible.
+    expect(within(dialog).getByText(/Waiting for the game/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Listen A' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled();
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(spy).toHaveBeenLastCalledWith(false);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('builds a mapping from what the game reports and saves it', async () => {
+    const { user, patch } = await openControls();
+    await choose(user, 'Controller', 'Generic X-Box pad (no button layout)');
+    const state = feed(idle());
+    await user.click(await screen.findByRole('button', { name: 'Map its buttons' }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('Receiving input from the game.');
+    const listen = async (name: string, press: Partial<LiveDevice>) => {
+      await user.click(within(dialog).getByRole('button', { name: `Listen ${name}` }));
+      await within(dialog).findByText(/Press or move/);
+      state.device = { ...idle(), ...press };
+      await waitFor(() => expect(within(dialog).queryByText(/Press or move/)).not.toBeInTheDocument());
+      state.device = idle(); // released
+    };
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled();
+    await listen('A', { buttons: [0] });
+    // Still no start: saving stays off and the dialog says why.
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(within(dialog).getByText(/Map Start before saving/)).toBeInTheDocument();
+    await listen('Start', { buttons: [7] });
+    await listen('D-pad up', { hats: [[0, 1]] });
+    await listen('Left stick, push right', { axes: [[0, 150]] });
+    await listen('LT (left trigger)', { axes: [[2, 200]] });
+    expect(within(dialog).getByText('Hat 0, up')).toBeInTheDocument();
+    expect(within(dialog).getByText('Button 7')).toBeInTheDocument();
+    const save = within(dialog).getByRole('button', { name: 'Save' });
+    expect(save).toBeEnabled();
+    await user.click(save);
+    await waitFor(() => expect(patch).toHaveBeenCalledWith(expect.objectContaining({ padSdlMap: 'a:b0,start:b7,dpup:h0.1,leftx:a0,lefttrigger:a2' })));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    // The saved mapping is announced and can be changed or removed.
+    expect(await screen.findByText(/hand-made button layout is set/)).toBeInTheDocument();
+  });
+
+  it('ignores a press that cannot be the input asked for, and what was already held when Listen was pressed', async () => {
+    const { user } = await openControls();
+    await choose(user, 'Controller', 'Generic X-Box pad (no button layout)');
+    const state = feed({ ...idle(), buttons: [4] }); // a button already held
+    await user.click(await screen.findByRole('button', { name: 'Map its buttons' }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('Receiving input from the game.');
+    await user.click(within(dialog).getByRole('button', { name: 'Listen Left stick, push right' }));
+    // A button is not a stick axis: it is ignored and the dialog keeps listening.
+    state.device = { ...idle(), buttons: [4, 5] };
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(within(dialog).getByText(/Press or move/)).toBeInTheDocument();
+    expect(within(dialog).queryByText('Button 5')).not.toBeInTheDocument();
+    // Esc stops listening without changing anything.
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(within(dialog).queryByText(/Press or move/)).not.toBeInTheDocument());
+    expect(within(dialog).getAllByText('Not mapped').length).toBeGreaterThan(10);
+  });
+
+  it('says so when the game is running but does not list the controller, and when it stopped writing', async () => {
+    const { user } = await openControls();
+    await choose(user, 'Controller', 'Generic X-Box pad (no button layout)');
+    vi.spyOn(api, 'padLive').mockImplementation(async () => ({ beat: 1, ageMs: 100, devices: [{ ...idle(), guid: '0300eeee5e040000a102000000010000' }] }));
+    await user.click(await screen.findByRole('button', { name: 'Map its buttons' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText(/does not list this controller/)).toBeInTheDocument();
+    feed(idle(), 9000); // written long ago: the game is gone
+    expect(await within(dialog).findByText(/Waiting for the game/)).toBeInTheDocument();
   });
 });

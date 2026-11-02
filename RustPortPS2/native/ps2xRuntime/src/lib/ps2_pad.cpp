@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -364,8 +365,36 @@ namespace
         return devices;
     }
 
+    // GOW_PAD_SDL_MAPPING: the launcher's hand-made mapping for the chosen device when GLFW has none (a button layout the player set
+    // in Controls, from the raw buttons, hats and axes this very file lists). GLFW attaches it to the joystick with that GUID,
+    // present now or plugged in later. Applied once, before the first list is written, so `mapped` already reflects it.
+    void applyUserMapping()
+    {
+        static bool done = false;
+        if (done)
+            return;
+        done = true;
+#ifdef _WIN32
+        const char *platform = "Windows";
+#else
+        const char *platform = "Linux";
+#endif
+        const char *text = std::getenv("GOW_PAD_SDL_MAPPING");
+        if (!text || !*text)
+            return;
+        const std::string line = gowpad::glfwMappingLine(text, platform);
+        if (line.empty())
+        {
+            std::fprintf(stderr, "[pad] GOW_PAD_SDL_MAPPING ignored: not one SDL mapping line\n");
+            return;
+        }
+        const bool ok = glfwUpdateGamepadMappings(line.c_str()) != 0;
+        std::fprintf(stderr, "[pad] SDL mapping from the launcher for %.32s: %s\n", line.c_str(), ok ? "accepted" : "rejected by GLFW");
+    }
+
     void updateControllerPicker()
     {
+        applyUserMapping();
         static int frame = 0;
         if (frame++ % 30 != 0) // twice a second is plenty for hot-plugging
             return;
@@ -435,13 +464,107 @@ namespace
     }
 }
 
+namespace
+{
+    // GOW-Port (issue #12): what the joysticks do right now, for the launcher's "map this device" dialog. A player whose pad has no
+    // SDL mapping cannot say which raw button, hat or axis is which (and a web page's gamepad API orders them differently from GLFW,
+    // whose numbering a mapping is written in), so the game itself reports them: while the launcher keeps a `probe` file next to the
+    // device list fresh, the game writes `live.json` there (schema 1, `gow_pad_map.h`): per joystick the raw buttons held, the hats
+    // off rest and the axes moved away from where they first were. Nothing is written without the probe file.
+    bool probeFresh(const std::filesystem::path &probe)
+    {
+        std::error_code error;
+        const auto written = std::filesystem::last_write_time(probe, error);
+        if (error)
+            return false;
+        return std::filesystem::file_time_type::clock::now() - written < std::chrono::seconds(10);
+    }
+
+    void updateLiveFeed()
+    {
+        static const std::filesystem::path listFile = envPath("GOW_PAD_LIST_FILE");
+        if (listFile.empty())
+            return;
+        static int frame = 0;
+        static bool active = false;
+        ++frame;
+        static const std::filesystem::path probe = listFile.parent_path() / "probe";
+        static const std::filesystem::path liveFile = listFile.parent_path() / "live.json";
+        if (!active && frame % 30 != 0) // looking for the probe file: twice a second
+            return;
+        if (active && frame % 3 != 0) // while it is there: twenty times a second
+            return;
+        static std::array<gowpad::RawSample, 16> rest;
+        static std::array<bool, 16> haveRest{};
+        if (!probeFresh(probe))
+        {
+            active = false;
+            haveRest.fill(false); // the next probe starts from how the pads rest then
+            return;
+        }
+        active = true;
+        std::vector<gowpad::LiveDevice> devices;
+        for (int jid = 0; jid < 16; ++jid)
+        {
+            if (!glfwJoystickPresent(jid))
+            {
+                haveRest[jid] = false;
+                continue;
+            }
+            int buttonCount = 0, hatCount = 0, axisCount = 0;
+            const unsigned char *buttons = glfwGetJoystickButtons(jid, &buttonCount);
+            const unsigned char *hats = glfwGetJoystickHats(jid, &hatCount);
+            const float *axes = glfwGetJoystickAxes(jid, &axisCount);
+            gowpad::RawSample now;
+            if (buttons)
+                now.buttons.assign(buttons, buttons + buttonCount);
+            if (hats)
+                now.hats.assign(hats, hats + hatCount);
+            if (axes)
+                now.axes.assign(axes, axes + axisCount);
+            if (!haveRest[jid])
+            {
+                rest[jid] = now;
+                rest[jid].buttons.assign(now.buttons.size(), 0); // a button held while the probe starts is a press, not rest
+                haveRest[jid] = true;
+            }
+            const char *guid = glfwGetJoystickGUID(jid);
+            devices.push_back(gowpad::liveDevice(jid, guid ? guid : "", now, rest[jid]));
+        }
+        static std::string written;
+        static int sinceWrite = 0;
+        static unsigned beat = 0;
+        const std::string body = gowpad::liveJson(devices, 0);
+        // Rewritten when something changed, and about once a second otherwise (twenty checks a second: the beat shows the game is alive).
+        if (body == written && ++sinceWrite < 20)
+            return;
+        sinceWrite = 0;
+        written = body;
+        const std::string json = gowpad::liveJson(devices, ++beat);
+        std::error_code error;
+        std::filesystem::create_directories(liveFile.parent_path(), error);
+        std::filesystem::path temporary = liveFile;
+        temporary += ".tmp";
+        {
+            std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+            out << json;
+            if (!out)
+                return;
+        }
+        std::filesystem::rename(temporary, liveFile, error);
+        if (error)
+            std::filesystem::remove(temporary, error);
+    }
+}
+
 // GOW-Port: window loop (gowFrameInput), the thread that owns the raylib window: GLFW's joystick calls belong to it.
 // It also gives unmapped Xbox-class pads their mapping (always, with or without GOW_PAD_DIAG), keeps the launcher's device list
-// and the chosen device up to date; the diagnostic below runs only with GOW_PAD_DIAG.
+// and the chosen device up to date, and feeds the launcher's mapping dialog; the diagnostic below runs only with GOW_PAD_DIAG.
 void gowPadDiagFrame()
 {
     mapUnmappedXpads();
     updateControllerPicker();
+    updateLiveFeed();
     if (!padDiagEnabled())
         return;
     static JoystickDiag joysticks[kDiagJoysticks];

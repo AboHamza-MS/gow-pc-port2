@@ -34,11 +34,16 @@ struct FakeJoystick
     std::string name, guid;
     bool mapped = false;
     int buttons = 0, hats = 0, axes = 0;
+    unsigned char rawButtons[32]{};
+    unsigned char rawHats[8]{};
+    float rawAxes[12]{};
     bool down[32]{};    // raylib button ids held
     bool pressed[32]{}; // raylib button ids that went down since the last read
 };
 static FakeJoystick g_joy[16];
 static double g_time = 0.0;
+static std::vector<std::string> g_mappings; // what the pad code handed to glfwUpdateGamepadMappings
+static bool g_acceptMappings = true;
 
 extern "C"
 {
@@ -49,24 +54,25 @@ extern "C"
     const char *glfwGetGamepadName(int jid) { return g_joy[jid].name.c_str(); }
     const float *glfwGetJoystickAxes(int jid, int *count)
     {
-        static float axes[16] = {};
         *count = g_joy[jid].axes;
-        return axes;
+        return g_joy[jid].rawAxes;
     }
     const unsigned char *glfwGetJoystickButtons(int jid, int *count)
     {
-        static unsigned char buttons[64] = {};
         *count = g_joy[jid].buttons;
-        return buttons;
+        return g_joy[jid].rawButtons;
     }
     const unsigned char *glfwGetJoystickHats(int jid, int *count)
     {
-        static unsigned char hats[8] = {};
         *count = g_joy[jid].hats;
-        return hats;
+        return g_joy[jid].rawHats;
     }
     int glfwGetGamepadState(int, GLFWgamepadstate *) { return 0; }
-    int glfwUpdateGamepadMappings(const char *) { return 1; }
+    int glfwUpdateGamepadMappings(const char *mapping)
+    {
+        g_mappings.push_back(mapping);
+        return g_acceptMappings ? 1 : 0;
+    }
 
     bool IsKeyDown(int) { return false; }
     bool IsMouseButtonDown(int) { return false; }
@@ -230,6 +236,72 @@ int main(int argc, char **argv)
         int active = -2;
         readWord(backend, &active);
         CHECK(active == 0); // the automatic choice
+    }
+    else if (scenario == "mapping" || scenario == "rejected" || scenario == "badmapping")
+    {
+        // The launcher's hand-made mapping for the chosen device: handed to GLFW once, with the platform added by the runtime.
+        const std::string fields = "a:b0,b:b1,start:b7,dpup:h0.1,leftx:a0,lefttrigger:+a2";
+        const std::string mapping = std::string(kPadGuid) + ",Generic X-Box pad," + fields;
+        setEnv("GOW_PAD_SDL_MAPPING", scenario == "badmapping" ? "not a mapping" : mapping.c_str());
+        g_acceptMappings = scenario != "rejected";
+        connectDongle(3);
+        frames(90);
+        if (scenario == "badmapping")
+            CHECK(g_mappings.empty());
+        else
+        {
+            CHECK(g_mappings.size() == 1); // once, however many frames pass
+#ifdef _WIN32
+            CHECK(!g_mappings.empty() && g_mappings[0] == mapping + ",platform:Windows,\n");
+#else
+            CHECK(!g_mappings.empty() && g_mappings[0] == mapping + ",platform:Linux,\n");
+#endif
+        }
+    }
+    else if (scenario == "live")
+    {
+        // The raw input feed for the mapping dialog: only while a fresh `probe` file is next to the device list.
+        setEnv("GOW_PAD_LIST_FILE", list.string().c_str());
+        const std::filesystem::path probe = list.parent_path() / "probe";
+        const std::filesystem::path live = list.parent_path() / "live.json";
+        connectDongle(3);
+        g_joy[3].rawAxes[2] = -1.0f; // a trigger that rests at -1, as on many pads
+        frames(65);
+        CHECK(!std::filesystem::exists(live)); // nobody asked
+        std::ofstream(probe) << "x";
+        frames(30);
+        std::string text = readFile(live);
+        CHECK(text.find("\"schema\":1") != std::string::npos);
+        CHECK(text.find("\"index\":3") != std::string::npos);
+        CHECK(text.find("\"guid\":\"" + std::string(kPadGuid) + "\",\"buttons\":[],\"hats\":[],\"axes\":[]") != std::string::npos);
+        // Raw button 2, hat 0 up and axis 2 (a trigger resting at -1) pressed on the real pad: reported with GLFW's own numbers.
+        g_joy[3].rawButtons[2] = 1;
+        g_joy[3].rawHats[0] = 1;
+        g_joy[3].rawAxes[2] = 1.0f;
+        frames(10);
+        text = readFile(live);
+        const std::string pad = text.substr(text.find("\"index\":3"));
+        CHECK(pad.find("\"buttons\":[2]") != std::string::npos);
+        CHECK(pad.find("\"hats\":[[0,1]]") != std::string::npos);
+        CHECK(pad.find("[2,200]") != std::string::npos); // -1 -> +1: a distance of 2.00 from where the trigger rested
+        // Released: back to nothing.
+        g_joy[3].rawButtons[2] = 0;
+        g_joy[3].rawHats[0] = 0;
+        g_joy[3].rawAxes[2] = -1.0f;
+        frames(10);
+        CHECK(readFile(live).substr(readFile(live).find("\"index\":3")).find("\"buttons\":[]") != std::string::npos);
+        // The beat keeps changing while quiet (the launcher tells a quiet pad from a game that stopped).
+        const std::string quiet = readFile(live);
+        frames(60);
+        CHECK(readFile(live) != quiet);
+        // A probe file that nobody touches for ten seconds is stale and ignored: the feed stops.
+        std::error_code error;
+        std::filesystem::last_write_time(probe, std::filesystem::file_time_type::clock::now() - std::chrono::seconds(30), error);
+        frames(35);
+        const std::string stopped = readFile(live);
+        g_joy[3].rawButtons[5] = 1;
+        frames(60);
+        CHECK(readFile(live) == stopped);
     }
     else if (scenario == "map" || scenario == "badmap")
     {

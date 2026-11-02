@@ -49,6 +49,8 @@ pub struct Settings {
     pub pad_device: String,
     /// Its name, kept only to show it while the device is not connected.
     pub pad_device_name: String,
+    /// SDL mapping fields for that device when the system has none (`a:b0,start:b7,...`, see `controller.rs`); empty = none.
+    pub pad_sdl_map: String,
     pub cancel_animations: bool,
     pub esc_quits: bool,
     pub minimize_on_play: bool,
@@ -104,6 +106,7 @@ impl Default for Settings {
             pad_map: String::new(),
             pad_device: String::new(),
             pad_device_name: String::new(),
+            pad_sdl_map: String::new(),
             cancel_animations: true,
             esc_quits: false,
             minimize_on_play: true,
@@ -264,6 +267,7 @@ impl Settings {
         self.pad_map.clear();
         self.pad_device.clear();
         self.pad_device_name.clear();
+        self.pad_sdl_map.clear();
         self.cancel_animations = true;
         self.esc_quits = false;
         self.minimize_on_play = true;

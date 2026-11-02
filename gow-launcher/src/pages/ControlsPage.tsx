@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Circle, DoorOpen, Ellipsis, Gamepad2, Square, Swords, Triangle, Usb, X } from 'lucide-react';
+import { PadMappingDialog } from '../components/PadMappingDialog';
 import { Glyphs, GroupTitle, KeyCap, Note, SecondaryButton, Select, SettingRow, Switch, type Option } from '../components/ui';
 import { Modal } from '../components/Shell';
 import { upper } from '../lib/i18n';
@@ -102,6 +103,7 @@ const faceIcons = [X, Circle, Square, Triangle];
 function ControllerPicker() {
   const { api, settings, patch, t, f, lang } = useApp();
   const [list, setList] = useState<PadDeviceList | null>(null);
+  const [mapping, setMapping] = useState(false);
   const reload = () => api.padDevices().then(setList, () => setList(null));
   useEffect(() => {
     void reload();
@@ -133,7 +135,8 @@ function ControllerPicker() {
             value={chosen}
             onChange={(guid) => {
               const device = devices.find((candidate) => candidate.guid === guid);
-              patch({ padDevice: guid, padDeviceName: device?.name ?? '' });
+              // A mapping belongs to the device it was made for.
+              patch({ padDevice: guid, padDeviceName: device?.name ?? '', ...(guid === chosen ? {} : { padSdlMap: '' }) });
             }}
           />
           <SecondaryButton onClick={() => void reload()}>{t('padpickRefresh')}</SecondaryButton>
@@ -147,7 +150,30 @@ function ControllerPicker() {
       {current && !current.mapped && (
         <Note tone="warn" title={t('padpickUnmappedTitle')}>
           {f('padpickUnmappedText', current.name)}
+          <div className="mt-2">
+            <SecondaryButton onClick={() => setMapping(true)}>{t(settings.padSdlMap ? 'padsdlEdit' : 'padsdlOpen')}</SecondaryButton>
+          </div>
         </Note>
+      )}
+      {current && current.mapped && settings.padSdlMap !== '' && (
+        <Note>
+          {t('padsdlInUse')}
+          <div className="mt-2">
+            <SecondaryButton onClick={() => setMapping(true)}>{t('padsdlEdit')}</SecondaryButton>
+          </div>
+        </Note>
+      )}
+      {current && !current.mapped && settings.padSdlMap !== '' && <Note>{t('padsdlInUse')}</Note>}
+      {mapping && current && (
+        <PadMappingDialog
+          device={current}
+          initial={settings.padSdlMap}
+          onClose={() => setMapping(false)}
+          onSave={(padSdlMap) => {
+            patch({ padSdlMap });
+            setMapping(false);
+          }}
+        />
       )}
       {absentLast && <Note tone="warn">{t(list?.choice === 'outOfRange' ? 'padpickOutOfRange' : 'padpickAbsent')}</Note>}
     </>

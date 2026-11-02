@@ -79,7 +79,10 @@ the pad, each choosing the PS2 button it presses (`PC_PAD_MAP`); the first chang
 may share a target (a warning is shown), Start cannot be taken away, and **Back to a layout** clears the map.
 **Controller** lists the joysticks the game saw the last time it ran (name, and whether the system has a button layout for
 it) and stores which one to read (`GOW_PAD_DEVICE`); Automatic leaves it to the game. The list is a file the game writes,
-`pads/devices.json`, so it is empty until the game has run once with the controller connected. The default layout and what each action does are in
+`pads/devices.json`, so it is empty until the game has run once with the controller connected. For a device with no button layout, **Map its
+buttons** opens a dialog that learns each button from the running game: while it is open the launcher keeps `pads/probe`
+fresh and the game writes the raw buttons, hats and axes that moved to `pads/live.json`. The result is stored as SDL mapping
+fields (`padSdlMap`, for the chosen device only) and handed to the game as `GOW_PAD_SDL_MAPPING`. The default layout and what each action does are in
 [`PLAYING.md`](PLAYING.md#keyboard-and-mouse).
 
 Click a slot, then press the new key or click a mouse button. Right click clears it. **Esc** cancels. Keys are bound by
@@ -142,7 +145,7 @@ The data folder is `%APPDATA%\GOW_PC\Launcher` on Windows and `~/.local/share/GO
 | Installation kit shipped with the launcher | `kit/` in the data folder |
 | Kit repairs (a file that went missing and was restored) | `logs/kit.log` |
 | Last game session (how it ended) and your problem markers | `logs/last-session.json`, `logs/markers.jsonl` |
-| Joysticks the game saw last time (the Controls tab's list) | `pads/devices.json` |
+| Joysticks the game saw last time (the Controls tab's list), and the live feed of the mapping dialog | `pads/devices.json`, `pads/probe`, `pads/live.json` |
 | Window icon | `icon.png` in the data folder |
 | GL shader cache | `%LOCALAPPDATA%\GOW_PC\Launcher\cache\shaders` / `~/.cache/GOW_PC/Launcher/shaders` |
 | Game data, build and saves | inside your installation folder (`game/`, `build/`, `game/Mcd001.ps2`) |

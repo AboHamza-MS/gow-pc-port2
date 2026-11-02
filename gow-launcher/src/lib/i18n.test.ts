@@ -4,6 +4,7 @@ import ptBR from '../i18n/pt-BR.json';
 import { CHEATS } from '../pages/CheatsPage';
 import { actions, groups } from './keys';
 import { SOURCES, TARGETS } from './padmap';
+import { SDL_TARGETS } from './sdlmap';
 import { format, formatDuration, translate, upper } from './i18n';
 import type { Language } from './types';
 
@@ -115,6 +116,9 @@ describe('translations', () => {
       // The gamepad button map: one row per physical button, one option per PS2 button.
       ...SOURCES.map((source) => `padmapSrc_${source}`),
       ...TARGETS.map((target) => `padmapTarget_${target}`),
+      // The hand-made SDL mapping dialog: one label per target, one word per hat direction.
+      ...SDL_TARGETS.map((target) => `padsdlTarget_${target}`),
+      ...[1, 2, 4, 8].map((bits) => `padsdlDir_${bits}`),
     ];
     expect(keys.filter((key) => !(key in en))).toEqual([]);
   });

@@ -3,7 +3,7 @@
 
 import type {
   Bootstrap, DestinationValidation, GameFinished, GameStatus, GamepadCaptured, InstallOutcome,
-  InstallProgress, IsoValidation, OptimizerSnapshot, PadDeviceList, RebuildState, Settings, TexturePackInfo, TexturePackOutcome, TexturePackProgress,
+  InstallProgress, IsoValidation, LiveState, OptimizerSnapshot, PadDeviceList, RebuildState, Settings, TexturePackInfo, TexturePackOutcome, TexturePackProgress,
   UpdateMode, UpdateState, WizardInfo,
 } from './types';
 
@@ -60,6 +60,10 @@ export interface Api {
   raClearCredential(): Promise<boolean>;
   /** The joysticks the game saw the last time it ran; null before the first run. */
   padDevices(): Promise<PadDeviceList | null>;
+  /** The raw input of the joysticks right now, from the game; null when it has not written it (the game is not running). */
+  padLive(): Promise<LiveState | null>;
+  /** The mapping dialog asks the game for the live feed (true, repeated every few seconds) or stops asking (false). */
+  padProbe(active: boolean): Promise<void>;
   gamepadBegin(): Promise<boolean>;
   gamepadCancel(): Promise<void>;
   wizardInfo(): Promise<WizardInfo>;
@@ -123,6 +127,8 @@ async function createTauriApi(): Promise<Api> {
     raSaveCredential: (user, password) => call('ra_save_credential', { user, password }),
     raClearCredential: () => call('ra_clear_credential'),
     padDevices: () => call('pad_devices'),
+    padLive: () => call('pad_live'),
+    padProbe: (active) => call('pad_probe', { active }),
     gamepadBegin: () => call('gamepad_begin'),
     gamepadCancel: () => call('gamepad_cancel'),
     wizardInfo: () => call('wizard_info'),
@@ -164,7 +170,7 @@ export const defaultSettings: Settings = {
   language: '', gpu: 'auto', displayMode: 'fullscreen', widthPx: 1280, heightPx: 800, aspectMode: '', widescreen: true, stretch: false,
   filter: 'bilinear', sharpness: 0.8, fxaa: true, progressive480p: true, internalResolution: '2', fpsLimit: 60,
   vsync: false, showFps: false, elf: '', iso: '', executable: '', skipVideos: true, fastBoot: false, customTextures: false, asyncTextures: true,
-  settingsVersion: 0, dmc5Controls: false, padButtons: '', padMap: '', padDevice: '', padDeviceName: '', cancelAnimations: true, escQuits: false,
+  settingsVersion: 0, dmc5Controls: false, padButtons: '', padMap: '', padDevice: '', padDeviceName: '', padSdlMap: '', cancelAnimations: true, escQuits: false,
   minimizeOnPlay: true, secondsPlayed: 0, lastSession: 0, keys: '', cheats: '', cheatsShortcut: '',
   retroAchievementsEnabled: false, retroAchievementsUser: '',
   retroAchievementsHardcore: false, retroAchievementsNotifications: true, optimizationDestination: '',
@@ -296,6 +302,8 @@ export function createMockApi(
     raSaveCredential: async () => true,
     raClearCredential: async () => true,
     padDevices: async () => (options.padDevices === undefined ? dongleDevices : options.padDevices),
+    padLive: async () => null,
+    padProbe: async () => undefined,
     gamepadBegin: async () => {
       setTimeout(() => emit('gamepad-captured', { binding: '9+11', label: 'LB / L1 + RB / R1' }), 1500);
       return true;

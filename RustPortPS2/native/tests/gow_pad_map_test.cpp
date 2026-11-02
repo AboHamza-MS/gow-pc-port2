@@ -279,6 +279,58 @@ static void deviceTest()
     CHECK(jsonString(std::string("a") + '\x01' + "b") == "\"a\\u0001b\"");
 }
 
+// The manual mapping: the SDL line handed to GLFW, and the live raw input the launcher's dialog reads.
+static void manualMappingTest()
+{
+    const char *fields = "a:b0,b:b1,start:b7,dpup:h0.1,leftx:a0,lefttrigger:+a2";
+    const std::string guid = "0300dddd5e040000a102000000010000";
+    const std::string env = guid + ",Generic X-Box pad," + fields;
+    CHECK(glfwMappingLine(env.c_str(), "Windows") == env + ",platform:Windows,\n");
+    CHECK(glfwMappingLine(env.c_str(), "Linux") == env + ",platform:Linux,\n");
+    CHECK(glfwMappingLine((env + ",").c_str(), "Linux") == env + ",platform:Linux,\n"); // one comma, not two
+    // Everything that is not exactly one line of that shape is dropped, so GLFW never sees it.
+    CHECK(glfwMappingLine(nullptr, "Linux").empty() && glfwMappingLine("", "Linux").empty());
+    CHECK(glfwMappingLine(("03zz" + env).c_str(), "Linux").empty());                       // not a GUID
+    CHECK(glfwMappingLine((guid + ",no fields").c_str(), "Linux").empty());               // no second comma
+    CHECK(glfwMappingLine((guid + ",name,").c_str(), "Linux").empty());                   // no fields
+    CHECK(glfwMappingLine((env + "\nother,line").c_str(), "Linux").empty());              // two lines
+    CHECK(glfwMappingLine((env + ",platform:Mac OS X,").c_str(), "Linux").empty());       // the runtime names the platform itself
+    CHECK(isGuid(guid) && isGuid("0300DDDD5E040000A102000000010000") && !isGuid("0300dddd") && !isGuid(guid + "0") && !isGuid("0300dddd5e040000a10200000001000g"));
+
+    // Raw input against rest: a trigger resting at -1, a hat, a button and a stick that drifts a little.
+    RawSample rest;
+    rest.buttons = {0, 0, 0, 0};
+    rest.hats = {0};
+    rest.axes = {0.02f, 0.0f, -1.0f, 0.0f};
+    RawSample now = rest;
+    LiveDevice quiet = liveDevice(3, guid, now, rest);
+    CHECK(quiet.buttons.empty() && quiet.hats.empty() && quiet.axes.empty());
+    now.axes[0] = 0.30f; // drift: below the threshold
+    CHECK(liveDevice(3, guid, now, rest).axes.empty());
+    now.buttons[2] = 1;
+    now.hats[0] = 4;
+    now.axes[2] = 1.0f;  // the trigger goes from -1 to +1: a distance of 2.00
+    now.axes[1] = -0.9f; // stick pushed up: -0.90
+    LiveDevice moved = liveDevice(3, guid, now, rest);
+    CHECK(moved.buttons == std::vector<int>{2});
+    CHECK(moved.hats.size() == 1 && moved.hats[0].first == 0 && moved.hats[0].second == 4);
+    CHECK(moved.axes.size() == 2);
+    CHECK(moved.axes[0].first == 1 && moved.axes[0].second == -90);
+    CHECK(moved.axes[1].first == 2 && moved.axes[1].second == 200);
+    // A hat that rests off zero does not count until it changes.
+    RawSample restingHat;
+    restingHat.hats = {8};
+    RawSample sameHat = restingHat;
+    CHECK(liveDevice(0, guid, sameHat, restingHat).hats.empty());
+    sameHat.hats[0] = 2;
+    CHECK(liveDevice(0, guid, sameHat, restingHat).hats.size() == 1);
+
+    const std::string json = liveJson({moved, quiet}, 7);
+    CHECK(json == "{\"schema\":1,\"beat\":7,\"devices\":[{\"index\":3,\"guid\":\"" + guid + "\",\"buttons\":[2],\"hats\":[[0,4]],\"axes\":[[1,-90],[2,200]]},"
+                  "{\"index\":3,\"guid\":\"" + guid + "\",\"buttons\":[],\"hats\":[],\"axes\":[]}]}");
+    CHECK(liveJson({}, 0) == "{\"schema\":1,\"beat\":0,\"devices\":[]}");
+}
+
 // The table of cases the launcher's tests share (padmap-cases.json): one case per line, `"value": "...", "valid": true|false`.
 static void sharedCasesTest(const char *path)
 {
@@ -310,6 +362,7 @@ int main(int argc, char **argv)
     oracleTest();
     customMapTest();
     deviceTest();
+    manualMappingTest();
     if (argc > 1)
         sharedCasesTest(argv[1]);
     if (g_failures == 0)

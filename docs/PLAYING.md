@@ -101,6 +101,10 @@ If you prefer the original timing, turn the switch off.
   devices (a 2.4G dongle lists a media-keys device, keyboards and the real pad) can make that the wrong one: **Controls →
   Controller** lists what the game saw the last time it ran, marks the devices the system has no button layout for, and lets
   you pick the one to read. The list fills in after the first run with the controller connected.
+- **A controller with no button layout** (many generic 2.4G receivers: the game sees it but every button reads as released)
+  can be mapped by hand: choose it, press **Map its buttons**, start the game with it connected (the keyboard works in the
+  menus), and in the dialog press **Listen** next to each button and press it on the controller. The game reports which
+  input moved, so no numbers have to be typed. **Start** is required. The mapping applies the next time the game starts.
 - **Vibration works on Windows only**: the Linux build has no rumble.
 - Only port 1 is connected: the game's second controller slot does nothing.
 

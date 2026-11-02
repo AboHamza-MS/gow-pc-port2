@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace gowpad
@@ -375,6 +376,108 @@ namespace gowpad
                    ",\"guid\":" + jsonString(d.guid) + ",\"mapped\":" + (d.mapped ? "true" : "false") +
                    ",\"buttons\":" + std::to_string(d.buttons) + ",\"hats\":" + std::to_string(d.hats) +
                    ",\"axes\":" + std::to_string(d.axes) + "}";
+        }
+        return out + "]}";
+    }
+
+    // ------------------------------------------------------------------------------------------------ manual mapping
+
+    // A GLFW joystick GUID: 32 hexadecimal digits.
+    inline bool isGuid(const std::string &text)
+    {
+        if (text.size() != 32)
+            return false;
+        for (const char c : text)
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+                return false;
+        return true;
+    }
+
+    // GOW_PAD_SDL_MAPPING="<guid>,<name>,<fields>" is the launcher's hand-made SDL mapping for the chosen device (a pad that GLFW has
+    // no mapping for, so that every button reads as released). GLFW wants a full SDL_GameControllerDB line, which also names the
+    // platform; the runtime adds that itself so the launcher stays platform neutral. Returns "" for anything that is not exactly one
+    // line of that shape, so a bad variable is ignored instead of being handed to GLFW.
+    inline std::string glfwMappingLine(const char *text, const char *platform)
+    {
+        if (!text || !*text)
+            return "";
+        std::string line(text);
+        if (line.find('\n') != std::string::npos || line.find('\r') != std::string::npos)
+            return "";
+        const size_t first = line.find(',');
+        if (first == std::string::npos || !isGuid(line.substr(0, first)))
+            return "";
+        const size_t second = line.find(',', first + 1);
+        if (second == std::string::npos || second + 1 >= line.size())
+            return "";
+        if (line.find("platform:") != std::string::npos)
+            return "";
+        if (line.back() != ',')
+            line += ',';
+        return line + "platform:" + platform + ",\n";
+    }
+
+    // The raw input of one joystick, as GLFW reports it: buttons (0 or 1), hat bit sets, axes (-1 to 1).
+    struct RawSample
+    {
+        std::vector<unsigned char> buttons;
+        std::vector<unsigned char> hats;
+        std::vector<float> axes;
+    };
+
+    // What a joystick does right now compared with how it rests: the launcher's mapping dialog turns this into "button 3", "hat 0
+    // up" or "axis 2 +". An axis counts once it is `threshold` away from where it first was (a trigger rests at -1 on many pads,
+    // and sticks drift); the reported value is that distance.
+    struct LiveDevice
+    {
+        int index = 0;
+        std::string guid;
+        std::vector<int> buttons;                  // raw buttons held
+        std::vector<std::pair<int, int>> hats;     // raw hat index, hat bits, for the hats not at rest
+        std::vector<std::pair<int, int>> axes;     // raw axis index, distance from rest in hundredths
+    };
+
+    inline LiveDevice liveDevice(int index, const std::string &guid, const RawSample &now, const RawSample &rest, float threshold = 0.5f)
+    {
+        LiveDevice device;
+        device.index = index;
+        device.guid = guid;
+        for (size_t i = 0; i < now.buttons.size(); ++i)
+            if (now.buttons[i])
+                device.buttons.push_back(static_cast<int>(i));
+        for (size_t i = 0; i < now.hats.size(); ++i)
+        {
+            const unsigned char resting = i < rest.hats.size() ? rest.hats[i] : 0;
+            if (now.hats[i] != 0 && now.hats[i] != resting)
+                device.hats.emplace_back(static_cast<int>(i), static_cast<int>(now.hats[i]));
+        }
+        for (size_t i = 0; i < now.axes.size(); ++i)
+        {
+            const float resting = i < rest.axes.size() ? rest.axes[i] : 0.0f;
+            const float distance = now.axes[i] - resting;
+            if (distance >= threshold || distance <= -threshold)
+                device.axes.emplace_back(static_cast<int>(i), static_cast<int>(distance * 100.0f + (distance < 0 ? -0.5f : 0.5f)));
+        }
+        return device;
+    }
+
+    // The live file (schema 1). `beat` grows with every write, so the launcher can tell a quiet pad from a game that stopped.
+    inline std::string liveJson(const std::vector<LiveDevice> &devices, unsigned beat)
+    {
+        std::string out = "{\"schema\":1,\"beat\":" + std::to_string(beat) + ",\"devices\":[";
+        for (size_t d = 0; d < devices.size(); ++d)
+        {
+            const LiveDevice &device = devices[d];
+            out += std::string(d ? "," : "") + "{\"index\":" + std::to_string(device.index) + ",\"guid\":" + jsonString(device.guid) + ",\"buttons\":[";
+            for (size_t i = 0; i < device.buttons.size(); ++i)
+                out += (i ? "," : "") + std::to_string(device.buttons[i]);
+            out += "],\"hats\":[";
+            for (size_t i = 0; i < device.hats.size(); ++i)
+                out += std::string(i ? "," : "") + "[" + std::to_string(device.hats[i].first) + "," + std::to_string(device.hats[i].second) + "]";
+            out += "],\"axes\":[";
+            for (size_t i = 0; i < device.axes.size(); ++i)
+                out += std::string(i ? "," : "") + "[" + std::to_string(device.axes[i].first) + "," + std::to_string(device.axes[i].second) + "]";
+            out += "]}";
         }
         return out + "]}";
     }
