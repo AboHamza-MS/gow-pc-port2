@@ -61,7 +61,10 @@ describe('custom gamepad button map', () => {
     await user.click(within(screen.getByRole('listbox')).getByRole('option', { name: /Cross$/ }));
     expect(await screen.findByText('Two buttons press the same PS2 button')).toBeInTheDocument();
     // Start is the only button pressing start: moving it away is refused and explained.
-    await waitFor(() => expect(patch).toHaveBeenCalled()); // the change above reaches the backend after the debounce
+    // The change above reaches the backend after the debounce. Wait for THAT patch (the one that carries `b=cross`), not for any
+    // patch: the earlier switch to the custom layout is debounced too, and on a slow machine it can fire first, leaving this
+    // one to arrive after `mockClear` and be mistaken for a patch made by the refused change below.
+    await waitFor(() => expect(patch).toHaveBeenCalledWith(expect.objectContaining({ padMap: expect.stringContaining('b=cross') })));
     patch.mockClear();
     await user.click(screen.getByRole('combobox', { name: 'Start presses' }));
     await user.click(within(screen.getByRole('listbox')).getByRole('option', { name: /Cross$/ }));
