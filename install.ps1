@@ -4,6 +4,10 @@
 #
 #   -Destination   folder for the extracted disc, the generated code and the build (by default, the repository).
 #
+#   -Jobs N        build processes (default: logical processors minus a reserve of 2, 1 or 0, at most one per 2 GB of RAM).
+#   -NormalPriority  keep the build at normal priority (by default the installer lowers it so the PC stays usable).
+#   -SkipCpuCheck  do not stop on a processor without SSE4.1 (the game needs it; the check can be wrong inside a virtual machine).
+#
 #   -RecompExe     a built ps2_recomp.exe (the Rust recompiler, RustPortPS2/crates/ps2-recomp-cli). Without it the script uses
 #                  bin\ps2_recomp.exe next to itself (the launcher's kit carries it) and otherwise builds it with cargo (needs
 #                  Rust, a C compiler and the MSVC environment this script already loads).
@@ -30,6 +34,10 @@ param(
     [switch]$Optimize,
     [int]$Seconds = 240,
     [int]$Jobs = 0,
+    # GOW-Port: the installer lowers its own priority so the PC stays usable while the game builds; this keeps it normal.
+    [switch]$NormalPriority,
+    # GOW-Port: skips the processor check (SSE4.1), for virtualization that hides a feature the CPU really has.
+    [switch]$SkipCpuCheck,
     # GOW-Port: protects normal PCs from the VU1 AOT generator retaining every capture in a long session.
     # Zero preserves an explicit developer override; the installer and launcher default to 4 GB.
     [ValidateRange(0, 64)]
@@ -37,7 +45,9 @@ param(
     # GOW-Port: automated execution (the launcher's installation wizard).
     [switch]$NoPause,
     [switch]$AllowModifiedElf,
-    # GOW-Port: iteration without /GL or /LTCG; the full Release can take hours to link.
+    # GOW-Port: development iteration: RelWithDebInfo instead of Release, runtime logs and the console window on, and the VU1 AOT
+    # set frozen in a snapshot. The normal Release has no whole-program optimization either (PS2X_ENABLE_LTCG is opt-in and can take
+    # hours to link).
     [switch]$FastDev,
     [string]$Vu1BuildDir = '',
     # GOW-Port: folder where everything generated from the game goes (game\, build-gen\, build\, vu1_captures\).
@@ -67,11 +77,27 @@ if ($Vu1BuildDir -and -not (Test-Path -LiteralPath $Vu1BuildDir -PathType Contai
     throw "The VU1 directory does not exist: $Vu1BuildDir"
 }
 if ($Vu1BuildDir) { $Vu1ForBuild = (Resolve-Path -LiteralPath $Vu1BuildDir).Path }
-# Build processes: one per core, but at most one per 2 GB of memory (each unit of ~8 generated
-# files uses 1-2 GB with /O2 /GL). -Jobs N sets it.
+# GOW-Port: build processes: the logical processors minus a reserve that keeps the PC responsive (2 from 8 processors, 1 from 4,
+# none below that), but at most one per 2 GB of memory. The memory bound is an estimate for a unit of ~8 generated files; it was
+# first written for /GL builds and has not been re-measured with the current flags (/O2, no whole-program optimization).
+# Always at least one. -Jobs N sets it and skips the reserve. A function of its two inputs so that it can be tested without WMI
+# (scripts/ci/test-install-ps1.ps1).
+function Get-BuildJobs([int]$Cores, [int]$MemGb) {
+    $reserve = if ($Cores -ge 8) { 2 } elseif ($Cores -ge 4) { 1 } else { 0 }
+    return [int][math]::Max(1, [math]::Min($Cores - $reserve, [math]::Floor($MemGb / 2)))
+}
 if ($Jobs -le 0) {
     $memGb = [math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
-    $Jobs = [math]::Max(1, [math]::Min([Environment]::ProcessorCount, [math]::Floor($memGb / 2)))
+    $Jobs = Get-BuildJobs ([Environment]::ProcessorCount) $memGb
+}
+# GOW-Port: below-normal priority from the start: cargo, cmake, ninja, cl, link and ps2-tools inherit it, so a long build does not
+# freeze the player's PC. -NormalPriority keeps it normal. The optimization run of the game resets its own (stage 4).
+if (-not $NormalPriority) {
+    try {
+        [Diagnostics.Process]::GetCurrentProcess().PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal
+        Write-Host 'Build priority: below normal (use -NormalPriority to keep it normal)'
+    }
+    catch { Write-Host "Build priority: could not be lowered ($($_.Exception.Message))" }
 }
 function Step([string]$t) { Write-Host ''; Write-Host "==> $t" -ForegroundColor Red }
 function Warn([string]$t) { Write-Host "[warning] $t" -ForegroundColor Yellow }
@@ -85,6 +111,35 @@ function Run([string]$exe, [string[]]$arguments) {
     if ($LASTEXITCODE -ne 0) { Fail "$exe ended with code $LASTEXITCODE" }
 }
 function Slashes([string]$p) { return ($p -replace '\\', '/') }
+
+# GOW-Port: the processor must have SSE4.1, and nothing newer is needed: the runtime uses SSE4.1 intrinsics throughout (extract,
+# blendv, insert, min/max, mullo, round, testz) and none of POPCNT, SSE4.2, AVX or BMI. A machine without it would build for an hour
+# and then crash with an illegal instruction. Keep this in step with the launcher's check (gow-core installer.rs) and with
+# PS2X_VU1_AVX2: if the installer ever turns that on, AVX2 becomes a requirement too.
+$CpuRequirement = 'SSE4.1'
+# $hasSse41 is $true or $false from the processor feature query, or $null when it could not be asked (then nothing is blocked).
+function Get-CpuProblem($hasSse41) {
+    if ($hasSse41 -eq $false) {
+        return "This PC's processor does not support $CpuRequirement, which the game needs (Intel Core 2 'Penryn' from 2008 or newer, AMD 'Bulldozer' from 2011 or newer). The game cannot run here, so the installation is blocked."
+    }
+    return $null
+}
+# Windows' IsProcessorFeaturePresent, feature 37 = PF_SSE4_1_INSTRUCTIONS_AVAILABLE (winnt.h; 36 is SSSE3, 38 SSE4.2, 39 AVX, 40 AVX2).
+# $null when it cannot be asked: another architecture (the x64 build is what matters; an ARM PowerShell reports no SSE), or the
+# type cannot be added.
+function Test-Sse41 {
+    if ($env:PROCESSOR_ARCHITECTURE -notin @('AMD64', 'x86')) { return $null }
+    try {
+        if (-not ('GowCpu.Native' -as [type])) {
+            Add-Type -Namespace GowCpu -Name Native -MemberDefinition '[System.Runtime.InteropServices.DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(uint feature);'
+        }
+        return [bool][GowCpu.Native]::IsProcessorFeaturePresent(37)
+    }
+    catch {
+        Warn "Could not check the processor for ${CpuRequirement}: $($_.Exception.Message)"
+        return $null
+    }
+}
 
 # --- 0. Tools -----------------------------------------------------------------------------------------------------
 # GOW-Port: the installer is self-sufficient. Git, and CMake and Ninja when the system has no usable ones, are downloaded in portable
@@ -169,6 +224,12 @@ function InstallVsBuildTools {
         }
         Fail "The Visual Studio installer ended with code $($p.ExitCode). Close any open Visual Studio Installer window, restart Windows if an installation is pending, and try again; if you already installed Visual Studio yourself, run this installation again without asking for the tools. Details: $env:TEMP\dd_*.log"
     }
+}
+# GOW-Port: before anything long (the Visual Studio installation included): a processor without SSE4.1 cannot run the game.
+if ($SkipCpuCheck) { Write-Host "CPU: the $CpuRequirement check was skipped (-SkipCpuCheck)." }
+else {
+    $cpuProblem = Get-CpuProblem (Test-Sse41)
+    if ($cpuProblem) { Fail "$cpuProblem To install anyway (a virtual machine may hide a feature the CPU has), pass -SkipCpuCheck." }
 }
 if ($InstallTools -and -not (FindVs)) { InstallVsBuildTools }
 
@@ -448,7 +509,7 @@ function Configure {
         }
     }
     $extra = @()
-    # GOW-Port: RelWithDebInfo keeps /O2 but avoids MSVC's whole-program link optimization.
+    # GOW-Port: Release and RelWithDebInfo both build with /O2 and no whole-program optimization (PS2X_ENABLE_LTCG, off by default).
     $buildType = if ($FastDev) { 'RelWithDebInfo' } else { 'Release' }
     $runtimeLogs = if ($FastDev) { 'ON' } else { 'OFF' }
     $console = if ($FastDev) { 'ON' } else { 'OFF' }
@@ -541,6 +602,8 @@ if ($Optimize -or (-not $NoOptimize -and -not $hasVu1)) {
     }
     foreach ($k in $vars.Keys) { Set-Item -Path "env:$k" -Value $vars[$k] }
     $p = Start-Process -FilePath $GameExe -ArgumentList "`"$(Join-Path $Game 'SCUS_973.99')`"" -WorkingDirectory $Native -PassThru
+    # GOW-Port: the game inherited the lowered priority; this run feeds the VU1 and IOP capture, so it must run at normal speed.
+    try { $p.PriorityClass = [Diagnostics.ProcessPriorityClass]::Normal } catch { Warn "Could not restore the game's priority: $($_.Exception.Message)" }
     if (-not $p.WaitForExit($Seconds * 1000)) { Stop-Process -Id $p.Id -Force }
     foreach ($k in $vars.Keys) { Remove-Item -Path "env:$k" -ErrorAction SilentlyContinue }
     $vu1Count = (Get-ChildItem -Path $Vu1 -Filter *.bin -ErrorAction SilentlyContinue).Count

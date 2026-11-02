@@ -426,6 +426,85 @@ fn iop_gen_matches_the_python_tool_on_a_small_module() {
     let _ = fs::remove_dir_all(&output);
 }
 
+fn modified(path: &Path) -> std::time::SystemTime {
+    fs::metadata(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())).modified().unwrap()
+}
+
+/// A pause longer than the file system's timestamp granularity, so that a rewrite is visible in `modified`.
+fn let_timestamps_move() {
+    std::thread::sleep(std::time::Duration::from_millis(150));
+}
+
+#[test]
+fn write_if_changed_writes_only_what_differs() {
+    let dir = scratch("writeifchanged");
+    let file = dir.join("out.cpp");
+    assert!(ps2_tools::write_if_changed(&file, "a\nb\n").unwrap(), "a new file is written");
+    let first = modified(&file);
+    let_timestamps_move();
+    assert!(!ps2_tools::write_if_changed(&file, "a\nb\n").unwrap(), "the same text is not written again");
+    assert_eq!(modified(&file), first);
+    fs::write(&file, "a\r\nb\r\n").unwrap();
+    let crlf = modified(&file);
+    let_timestamps_move();
+    assert!(!ps2_tools::write_if_changed(&file, "a\nb\n").unwrap(), "Windows line endings count as the same text");
+    assert_eq!(modified(&file), crlf);
+    assert!(ps2_tools::write_if_changed(&file, "a\nc\n").unwrap(), "different text is written");
+    assert_eq!(fs::read_to_string(&file).unwrap(), "a\nc\n");
+    fs::write(&file, [0xff, 0xfe, 0x00]).unwrap();
+    assert!(ps2_tools::write_if_changed(&file, "a\nc\n").unwrap(), "a file that is not UTF-8 is replaced");
+    assert!(
+        ps2_tools::write_if_changed(&dir.join("missing").join("out.cpp"), "x").is_err(),
+        "an unwritable path is an error"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn iop_gen_leaves_the_files_alone_when_nothing_changed() {
+    let output = scratch("iopgen-twice");
+    iop_gen::run(&golden("iop"), &output, "").unwrap();
+    let names = ["iopn_gold_1000.cpp", "iopn_registry.cpp"];
+    let first: Vec<_> = names.iter().map(|n| modified(&output.join(n))).collect();
+    let_timestamps_move();
+    iop_gen::run(&golden("iop"), &output, "").unwrap();
+    for (name, before) in names.iter().zip(first) {
+        assert_eq!(modified(&output.join(name)), before, "{name} was rewritten");
+        assert_eq!(normalized(&output.join(name)), normalized(&golden("iop/expected").join(name)), "{name}");
+    }
+    let _ = fs::remove_dir_all(&output);
+}
+
+#[test]
+fn iop_gen_rewrites_only_the_module_whose_code_changed() {
+    let dump = scratch("iopgen-dump");
+    let output = scratch("iopgen-changed");
+    let code = fs::read(golden("iop/gold.bin")).unwrap();
+    fs::write(dump.join("gold.bin"), &code).unwrap();
+    fs::write(dump.join("other.bin"), &code).unwrap();
+    // The listing carries the module's hash; it is left as it is, so the registry does not change either.
+    fs::write(dump.join("modules.txt"), "gold 1000 58 1234\nother 2000 58 1234\n").unwrap();
+    iop_gen::run(&dump, &output, "").unwrap();
+    let gold = output.join("iopn_gold_1000.cpp");
+    let other = output.join("iopn_other_2000.cpp");
+    let registry = output.join("iopn_registry.cpp");
+    let (gold_time, other_time, registry_time) = (modified(&gold), modified(&other), modified(&registry));
+    let other_before = fs::read_to_string(&other).unwrap();
+
+    // The first instruction becomes a different one (the lowest bit of its first byte flips).
+    let mut changed = code.clone();
+    changed[0] ^= 1;
+    fs::write(dump.join("other.bin"), &changed).unwrap();
+    let_timestamps_move();
+    iop_gen::run(&dump, &output, "").unwrap();
+    assert_ne!(fs::read_to_string(&other).unwrap(), other_before, "the changed module must generate other code");
+    assert_ne!(modified(&other), other_time, "the changed module is rewritten");
+    assert_eq!(modified(&gold), gold_time, "the unchanged module is not rewritten");
+    assert_eq!(modified(&registry), registry_time, "the registry did not change");
+    let _ = fs::remove_dir_all(&dump);
+    let _ = fs::remove_dir_all(&output);
+}
+
 #[test]
 fn iop_gen_reads_the_overrides_that_ship_with_it() {
     let overrides = iop_gen::parse_overrides(iop_gen::DEFAULT_OVERRIDES);

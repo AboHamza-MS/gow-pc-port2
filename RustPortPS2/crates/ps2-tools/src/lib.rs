@@ -13,3 +13,17 @@ pub mod iop_gen;
 pub mod iso;
 pub mod vu1;
 pub mod vu1n_gen;
+
+/// Writes `text` to `path` only when the file does not already hold it, and says whether it wrote.
+///
+/// The generators run on every installation, and the generated sources sit in a tree that CMake globs: rewriting an identical
+/// file still moves its timestamp, so the next build recompiles it for nothing. The old content is compared with `\r\n` read as
+/// `\n`, so a copy that was checked out with Windows line endings counts as unchanged too. A file that cannot be read as UTF-8
+/// is replaced.
+pub fn write_if_changed(path: &std::path::Path, text: &str) -> std::io::Result<bool> {
+    if std::fs::read_to_string(path).is_ok_and(|old| old.replace("\r\n", "\n") == text) {
+        return Ok(false);
+    }
+    std::fs::write(path, text)?;
+    Ok(true)
+}

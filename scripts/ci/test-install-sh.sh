@@ -109,6 +109,39 @@ case "$(run_check 100 6)" in 0\|*"8 GB are recommended"*) pass "little RAM only 
 case "$(run_check '' 16)" in 0\|*"Could not read the free space"*) pass "an unreadable disk only warns" ;; *) fail "unreadable disk: $(run_check '' 16)" ;; esac
 case "$( GOW_SKIP_RESOURCE_CHECK=1 run_check 1 1 )" in 0\|) pass "GOW_SKIP_RESOURCE_CHECK skips both" ;; *) fail "skip: $(GOW_SKIP_RESOURCE_CHECK=1 run_check 1 1)" ;; esac
 
+echo "build jobs: cores, RAM in GB"
+# The reserve is 2 from 8 cores, 1 from 4, 0 below; one job per 2 GB; never below 1.
+expect "16 cores, 32 GB" 14 "$(build_jobs 16 32)"
+expect "8 cores, 32 GB" 6 "$(build_jobs 8 32)"
+expect "6 cores, 16 GB" 5 "$(build_jobs 6 16)"
+expect "4 cores, 16 GB" 3 "$(build_jobs 4 16)"
+expect "2 cores, 16 GB" 2 "$(build_jobs 2 16)"
+expect "16 cores, 8 GB (memory bound)" 4 "$(build_jobs 16 8)"
+expect "1 core, 4 GB" 1 "$(build_jobs 1 4)"
+expect "12 cores, 16 GB" 8 "$(build_jobs 12 16)"
+expect "7 cores, 64 GB" 6 "$(build_jobs 7 64)"
+expect "3 cores, 64 GB" 3 "$(build_jobs 3 64)"
+expect "4 cores, 2 GB" 1 "$(build_jobs 4 2)"
+expect "8 cores, 1 GB (less than 2 GB still gets one)" 1 "$(build_jobs 8 1)"
+
+echo "low priority"
+printf '#!/bin/bash\necho "nice $*" >> "%s/calls"\nshift 2\nexec "$@"\n' "$scratch" > "$fake/nice"
+printf '#!/bin/bash\necho "ionice $*" >> "%s/calls"\nshift 2\nexec "$@"\n' "$scratch" > "$fake/ionice"
+chmod +x "$fake/nice" "$fake/ionice"
+: > "$scratch/calls"
+LOW_PRIORITY=1; unset IONICE_OK
+out="$(PATH="$fake:$PATH" low_priority echo hello)"
+expect "the command still runs and keeps its output" hello "$out"
+expect "it runs under ionice idle and nice 10" "ionice -c 3 true
+ionice -c 3 nice -n 10 echo hello
+nice -n 10 echo hello" "$(cat "$scratch/calls")"
+: > "$scratch/calls"; IONICE_OK=0
+PATH="$fake:$PATH" low_priority true
+expect "without a working ionice only nice is used" "nice -n 10 true" "$(cat "$scratch/calls")"
+: > "$scratch/calls"; LOW_PRIORITY=0
+out="$(PATH="$fake:$PATH" low_priority echo plain)"
+expect "--normal-priority runs the command directly" "plain|" "$out|$(cat "$scratch/calls")"
+
 if [ "$failures" -gt 0 ]; then
     printf '\n%s test(s) failed\n' "$failures"
     exit 1
