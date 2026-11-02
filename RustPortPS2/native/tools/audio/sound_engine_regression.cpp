@@ -1,9 +1,13 @@
 // GOW-Port: regression cases of the SPU2 engine (ps2xIOP/src/emulator/core/sound_engine.cpp) through its public API, no game
-// needed. Covers the exponential envelope: a keyed-off voice must fall to silence and a decay must reach the sustain level.
-// Prints one PASS / FAIL line per case; the exit code is non-zero when any case fails.
+// needed. Covers the exponential envelope (a keyed-off voice must fall to silence, a decay must reach the sustain level) and
+// the master volume stage of the mix (a loud mix must keep its sign). Prints one PASS / FAIL line per case; the exit code is
+// non-zero when any case fails.
 // Build (MSVC, from a developer prompt), in this folder:
 //   cl /std:c++20 /O2 /EHsc /D_CRT_SECURE_NO_WARNINGS /I ..\..\ps2xIOP\src sound_engine_regression.cpp
 //      ..\..\ps2xIOP\src\emulator\core\sound_engine.cpp
+// Note on "loud mix keeps its sign": before the 64-bit master volume stage the int32 product overflowed, which is undefined
+// behavior. The case detects the wrap on the compilers that wrap (MSVC); it is a detector for that compiler, not a proof.
+// The limiter flag of the engine is a function-local static, so GOW_AUDIO_LIMIT=0 is set before the first sample is made.
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -118,13 +122,71 @@ namespace
             report(name, peak == 0x7FFF && after == 0, detail);
         }
     }
+
+    // 24 voices of core 1 at full scale through full master volume: the sum is about 690000 and the old int32 product with
+    // the master volume (16383) wrapped to a negative number
+    void loudMixKeepsItsSign()
+    {
+        char detail[160];
+        Bench b;
+        SoundEngine &e = b.engine;
+        // one looping ADPCM block of constant samples: header 0x0700 (shift 0, filter 0, flags loop start | repeat | end),
+        // then seven halfwords 0x7777
+        uint8_t block[16];
+        block[0] = 0x00;
+        block[1] = 0x07;
+        for (int i = 1; i < 8; ++i)
+        {
+            block[i * 2] = 0x77;
+            block[i * 2 + 1] = 0x77;
+        }
+        e.writeSampleRam(0u, block, sizeof block);
+        for (uint32_t voice = 0; voice < SoundEngine::VoicesPerCore; ++voice)
+        {
+            e.setParam(voiceEntry(IdPitch, 1, voice), 0x1000);
+            // fast attack; the slowest decay with SL 15 hands over to sustain at once and the sustain (rate 0, increasing)
+            // climbs back to full scale within a sample
+            e.setParam(voiceEntry(IdAdsr1, 1, voice), 0x00FF);
+            e.setParam(voiceEntry(IdAdsr2, 1, voice), 0x0000);
+            e.setParam(voiceEntry(IdVolL, 1, voice), 0x3FFF);
+            e.setParam(voiceEntry(IdVolR, 1, voice), 0x3FFF);
+            e.setAddr(voiceEntry(IdSsa, 1, voice), 0u);
+        }
+        e.setSwitch(voiceEntry(IdVmixL, 1, 0), 0xFFFFFFu);
+        e.setSwitch(voiceEntry(IdVmixR, 1, 0), 0xFFFFFFu);
+        e.setParam(masterEntry(IdMvolL, 1), 0x3FFF);
+        e.setParam(masterEntry(IdMvolR, 1), 0x3FFF);
+        e.setSwitch(voiceEntry(IdKon, 1, 0), 0xFFFFFFu);
+        b.run(4000);
+        std::vector<int16_t> out(4000u * 2u);
+        const size_t frames = e.drainOutput(out.data(), 4000, SIZE_MAX);
+        size_t bad = 0;
+        int firstBad = 0;
+        for (size_t i = 100; i < frames; ++i)
+            for (size_t side = 0; side < 2u; ++side)
+                if (out[i * 2u + side] != 32767)
+                {
+                    if (bad == 0)
+                        firstBad = out[i * 2u + side];
+                    ++bad;
+                }
+        std::snprintf(detail, sizeof detail, "%zu frames drained, %zu samples after frame 100 differ from +32767 (first: %d)", frames, bad,
+                      firstBad);
+        report("loud mix keeps its sign", frames > 1000u && bad == 0u, detail);
+    }
 }
 
 int main()
 {
+#ifdef _WIN32
+    _putenv_s("GOW_AUDIO_LIMIT", "0");
+#else
+    setenv("GOW_AUDIO_LIMIT", "0", 1);
+#endif
     exponentialReleaseReachesSilence();
     exponentialDecayEntersSustain();
     slowExponentialReleaseForEachShift();
+    loudMixKeepsItsSign();
     std::printf("%s (%d failure%s)\n", g_failures == 0 ? "ALL PASS" : "FAILED", g_failures, g_failures == 1 ? "" : "s");
     return g_failures == 0 ? 0 : 1;
 }

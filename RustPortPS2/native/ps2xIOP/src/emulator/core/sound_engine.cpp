@@ -572,8 +572,10 @@ namespace ps2x::iop::detail
         int32_t sums[2];
         for (uint32_t side = 0; side < 2u; ++side)
         {
-            const int32_t core0 = (coreOut[0][side] * master[0][side]) >> 14;
-            sums[side] = ((core0 + coreOut[1][side]) * master[1][side]) >> 14;
+            // GOW-Port: 64-bit products: 24 voices at full scale sum to ~690000 and the int32 product with a master volume of
+            // 0x3FFF overflowed (undefined behavior, a wrapped sign on MSVC). After the shift the result fits int32 again.
+            const int32_t core0 = static_cast<int32_t>((static_cast<int64_t>(coreOut[0][side]) * master[0][side]) >> 14);
+            sums[side] = static_cast<int32_t>((static_cast<int64_t>(core0 + coreOut[1][side]) * master[1][side]) >> 14);
         }
         // GOW-Port: in a fight the mix often exceeds full scale (up to 3 % of the samples) and the hard clip is heard as a
         // blown-out sound. A peak limiter takes over only then: the gain drops at once to keep the peak at full scale and
