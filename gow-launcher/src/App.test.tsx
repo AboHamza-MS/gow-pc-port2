@@ -165,10 +165,29 @@ describe('installation wizard', () => {
     await waitFor(() => expect(screen.queryByText('All set!')).not.toBeInTheDocument());
   });
 
+  it('blocks the first step when the processor lacks SSE4.1, even with the ISO verified', async () => {
+    boot(false);
+    vi.spyOn(api, 'wizardInfo').mockResolvedValue({
+      environment: { vs: true, cmakeUnusable: false, git: true, installer: true, missing: [], missingPackages: [], installCommand: '', cpuMissing: ['SSE4.1'] },
+      hasManifest: true, defaultDestination: 'C:\\GodOfWar-PC',
+    });
+    expect(await screen.findByRole('alert')).toHaveTextContent(/does not support SSE4\.1/);
+    // The ISO is found and verified, so only the processor keeps NEXT disabled.
+    expect(await screen.findByText(/original ISO verified/, {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'NEXT' })).toBeDisabled();
+  });
+
+  it('shows no processor warning when nothing is missing', async () => {
+    boot(false);
+    const next = () => screen.getByRole('button', { name: 'NEXT' });
+    await waitFor(() => expect(next()).toBeEnabled(), { timeout: 4000 });
+    expect(screen.queryByText(/does not support SSE4\.1/)).not.toBeInTheDocument();
+  });
+
   it('shows no components when Visual Studio has a usable CMake, and installs nothing', async () => {
     boot(false);
     vi.spyOn(api, 'wizardInfo').mockResolvedValue({
-      environment: { vs: true, cmakeUnusable: false, git: true, installer: true, missing: [], missingPackages: [], installCommand: '' },
+      environment: { vs: true, cmakeUnusable: false, git: true, installer: true, missing: [], missingPackages: [], installCommand: '', cpuMissing: [] },
       hasManifest: true, defaultDestination: 'C:\\GodOfWar-PC',
     });
     const user = userEvent.setup();
@@ -188,7 +207,7 @@ describe('installation wizard', () => {
   it('offers nothing for a Visual Studio without a usable CMake: the installer downloads a portable one', async () => {
     boot(false);
     vi.spyOn(api, 'wizardInfo').mockResolvedValue({
-      environment: { vs: true, cmakeUnusable: true, git: true, installer: true, missing: [], missingPackages: [], installCommand: '' },
+      environment: { vs: true, cmakeUnusable: true, git: true, installer: true, missing: [], missingPackages: [], installCommand: '', cpuMissing: [] },
       hasManifest: true, defaultDestination: 'C:\\GodOfWar-PC',
     });
     const user = userEvent.setup();
@@ -210,12 +229,12 @@ describe('installation wizard', () => {
     setApi(api);
     const environment = {
       vs: false, cmakeUnusable: false, git: true, installer: true, missing: ['ninja', 'alsa'], missingPackages: ['ninja-build', 'libasound2-dev'],
-      installCommand: 'sudo apt install ninja-build libasound2-dev',
+      installCommand: 'sudo apt install ninja-build libasound2-dev', cpuMissing: [],
     };
     vi.spyOn(api, 'wizardInfo')
       .mockResolvedValueOnce({ environment, hasManifest: true, defaultDestination: '/home/me/gow' })
       .mockResolvedValue({
-        environment: { ...environment, vs: true, missing: [], missingPackages: [], installCommand: '' },
+        environment: { ...environment, vs: true, missing: [], missingPackages: [], installCommand: '', cpuMissing: [] },
         hasManifest: true, defaultDestination: '/home/me/gow',
       });
     const user = userEvent.setup();

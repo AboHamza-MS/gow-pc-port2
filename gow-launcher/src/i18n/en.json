@@ -417,5 +417,6 @@
   "updateBlocked_optimizer": "Wait for the optimization to finish.",
   "updateBlocked_texturePack": "Wait for the texture pack to install.",
   "autoUpdate": "Automatic updates",
-  "autoUpdateDesc": "Checks for a new version of the launcher at start-up and installs it by itself when the game, the installer and the optimization are idle, then restarts the launcher. Off: you only see a notice and press Update. A portable copy only shows the notice."
+  "autoUpdateDesc": "Checks for a new version of the launcher at start-up and installs it by itself when the game, the installer and the optimization are idle, then restarts the launcher. Off: you only see a notice and press Update. A portable copy only shows the notice.",
+  "wizCpuUnsupported": "This PC's processor does not support SSE4.1, which the game needs (Intel Core 2 'Penryn' from 2008 or newer, AMD 'Bulldozer' from 2011 or newer). The game cannot run here, so the installation is blocked."
 }

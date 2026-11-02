@@ -12,7 +12,7 @@ type Step = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 const emptyIso: IsoValidation = { ok: false, reason: 'empty', hash: '' };
 const emptyDestination: DestinationValidation = { ok: false, reason: 'empty', freeGb: 0 };
 const noInfo: WizardInfo = {
-  environment: { vs: true, cmakeUnusable: false, git: true, installer: true, missing: [], missingPackages: [], installCommand: '' },
+  environment: { vs: true, cmakeUnusable: false, git: true, installer: true, missing: [], missingPackages: [], installCommand: '', cpuMissing: [] },
   hasManifest: false, defaultDestination: '',
 };
 
@@ -68,6 +68,7 @@ export function Wizard() {
   // Linux: the installer cannot install system packages by itself (it needs the user's password), so the wizard lists
   // them and waits until a new check finds none missing.
   const manual = environment.missing.length > 0;
+  const cpuSupported = environment.cpuMissing.length === 0;
   // Only a missing Visual Studio (the C++ compiler) is offered. A Visual Studio without a usable CMake or Ninja needs nothing
   // here: the installer downloads portable ones by itself (environment.cmakeUnusable is informational).
   const needVs = !environment.vs;
@@ -173,7 +174,7 @@ export function Wizard() {
 
   const canAdvance = (() => {
     switch (step) {
-      case 0: return isoCheck.ok;
+      case 0: return isoCheck.ok && cpuSupported;
       case 1: return destinationCheck.ok && environment.installer;
       case 2: return componentsReady;
       case 3: case 5: case 6: return true;
@@ -324,6 +325,7 @@ export function Wizard() {
               <SecondaryButton onClick={() => void browseIso()}>{t('browse')}</SecondaryButton>
             </div>
             <TextInput value={iso} onChange={(event) => typeIso(event.target.value)} placeholder={t('wizIsoPlaceholder')} className="h-[38px]" />
+            {!cpuSupported && <p role="alert" className="text-[13px] font-semibold text-bad">{t('wizCpuUnsupported')}</p>}
           </Body>
         )}
 

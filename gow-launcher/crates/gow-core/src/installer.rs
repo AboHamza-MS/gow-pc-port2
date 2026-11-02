@@ -61,6 +61,9 @@ pub struct Environment {
     pub missing_packages: Vec<String>,
     /// Linux: the command that installs those packages, to run in a terminal.
     pub install_command: String,
+    /// Windows x86-64: the CPU features the game needs that this processor lacks (see [`REQUIRED_CPU_FEATURE`]); empty when
+    /// all are there, on Linux (the build uses `-march=native` there) and on other architectures.
+    pub cpu_missing: Vec<String>,
 }
 
 /// What `install.sh --check-deps` printed: the missing checks, their packages and the command that installs them.
@@ -117,6 +120,33 @@ fn cmake_is_usable(cmake: &Path) -> bool {
     system::output_with_timeout(command, Duration::from_secs(8)).is_some_and(|out| cmake_version_is_enough(&out))
 }
 
+/// The one CPU requirement of the Windows build, named as the interface shows it. The generated code and the runtime use
+/// SSE4.1 intrinsics (`_mm_extract_epi*`, `_mm_blendv_*`, `_mm_round_*`, `_mm_testz_*`...) and nothing newer: no POPCNT,
+/// SSE4.2, AVX or BMI. If AVX2 ever becomes a requirement (`PS2X_VU1_AVX2`, `PS2X_FAST_MATH_AVX2`), add it here and in the
+/// script's check; `install.ps1` repeats this requirement with `IsProcessorFeaturePresent`.
+pub const REQUIRED_CPU_FEATURE: &str = "SSE4.1";
+
+/// What the CPU is missing, given whether it has the feature: `None` means detection could not run, and then nothing is
+/// reported (fail open: a wrong block is worse than a game that does not start).
+pub fn missing_cpu_features(has_required: Option<bool>) -> Vec<String> {
+    match has_required {
+        Some(false) => vec![REQUIRED_CPU_FEATURE.to_string()],
+        _ => Vec::new(),
+    }
+}
+
+/// Windows x86-64 only: the runtime detection of the standard library; anywhere else there is nothing to check.
+fn detect_required_cpu_feature() -> Option<bool> {
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    {
+        Some(std::arch::is_x86_feature_detected!("sse4.1"))
+    }
+    #[cfg(not(all(windows, target_arch = "x86_64")))]
+    {
+        None
+    }
+}
+
 pub fn check_environment(script: Option<&Path>) -> Environment {
     let mut environment = Environment {
         vs: false,
@@ -126,6 +156,7 @@ pub fn check_environment(script: Option<&Path>) -> Environment {
         missing: Vec::new(),
         missing_packages: Vec::new(),
         install_command: String::new(),
+        cpu_missing: missing_cpu_features(detect_required_cpu_feature()),
     };
     if !cfg!(windows) {
         let report = script.map(linux_dependencies).unwrap_or_default();
@@ -445,6 +476,14 @@ pub fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cpu_without_the_required_feature_is_reported_and_detection_failing_reports_nothing() {
+        assert_eq!(missing_cpu_features(Some(false)), ["SSE4.1"]);
+        assert!(missing_cpu_features(Some(true)).is_empty());
+        // Fail open: no answer means no block.
+        assert!(missing_cpu_features(None).is_empty());
+    }
 
     #[test]
     fn the_dependency_report_of_install_sh_is_read() {

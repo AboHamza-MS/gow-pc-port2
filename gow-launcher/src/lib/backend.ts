@@ -267,7 +267,7 @@ export function createMockApi(options: { ready?: boolean; update?: UpdateState }
     },
     gamepadCancel: async () => undefined,
     wizardInfo: async () => ({
-      environment: { vs: false, cmakeUnusable: false, git: false, installer: true, missing: [], missingPackages: [], installCommand: '' },
+      environment: { vs: false, cmakeUnusable: false, git: false, installer: true, missing: [], missingPackages: [], installCommand: '', cpuMissing: [] },
       hasManifest: true,
       defaultDestination: 'C:\\GodOfWar-PC',
     }),

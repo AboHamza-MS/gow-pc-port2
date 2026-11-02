@@ -135,6 +135,8 @@ export interface WizardInfo {
     missingPackages: string[];
     /** Linux: the command that installs those packages, to run in a terminal. */
     installCommand: string;
+    /** Windows x86-64: CPU features the game needs that this processor lacks (`['SSE4.1']`); empty when all are there. */
+    cpuMissing: string[];
   };
   hasManifest: boolean;
   defaultDestination: string;

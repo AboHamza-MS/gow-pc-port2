@@ -21,7 +21,7 @@ PS2. On Windows a launcher does all of it for you, and two installer scripts cov
 |---|---|
 | **Game** | Your own *God of War* (USA, `SCUS-97399`) disc image (`.iso`, about 8 GB). Rip it from your own disc with any DVD tool. Please don't pirate it |
 | **Disk** | About **30 GB** free (the extracted disc is about 8 GB, the build a few more) |
-| **CPU** | 64-bit x86, 4 cores or more recommended. AVX2 is **not** required by the shipped build |
+| **CPU** | 64-bit x86 with **SSE4.1** (Intel Core 2 "Penryn", 2008, or newer; AMD "Bulldozer", 2011, or newer; the AMD Phenom II does not have it), 4 cores or more recommended. AVX2 is **not** required by the shipped build |
 | **RAM** | 8 GB (16 GB recommended while building) |
 | **GPU** | OpenGL 4.6 or newer: any recent NVIDIA/AMD card, or the integrated graphics of a recent Intel/AMD CPU |
 | **OS** | Windows 10/11 x64, or Linux: Arch/CachyOS, Ubuntu 24.04+, Fedora 40+ or similar (**experimental**, see above) |
