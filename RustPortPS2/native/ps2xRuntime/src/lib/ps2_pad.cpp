@@ -2,11 +2,13 @@
 #include "ps2_host_backend.h"
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -193,6 +195,7 @@ extern "C"
     const unsigned char *glfwGetJoystickButtons(int jid, int *count);
     const unsigned char *glfwGetJoystickHats(int jid, int *count);
     int glfwGetGamepadState(int jid, GLFWgamepadstate *state);
+    int glfwUpdateGamepadMappings(const char *string);
 }
 
 namespace
@@ -249,9 +252,72 @@ namespace
     }
 }
 
+namespace
+{
+    // GOW-Port (issue #12): GLFW (and raylib on top of it) reads a pad only through an SDL mapping; a device without one is listed
+    // but every button reads as released. On Linux a generic Xbox-class pad (kernel xpad driver: "Generic X-Box pad", a clone
+    // behind a 2.4G dongle) often has no entry in GLFW's database, although its layout is the well-known xpad one: 15 buttons,
+    // 1 hat, 6 axes with the two triggers resting at -1. Such a device gets that layout as its mapping. Anything that does not look
+    // like it is left alone: a wrong guess would be worse than no mapping.
+    bool looksLikeXpad(const char *name, int buttons, int hats, int axes)
+    {
+        if (!name || buttons < 11 || hats < 1 || axes < 6)
+            return false;
+        std::string lower(name);
+        for (char &c : lower)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return lower.find("x-box") != std::string::npos || lower.find("xbox") != std::string::npos;
+    }
+
+    // One SDL_GameControllerDB line: Linux evdev numbering (A B X Y LB RB Back Start Guide L3 R3 = buttons 0 to 10, d-pad on hat 0
+    // with the GLFW bits up=1 right=2 down=4 left=8, axes LX LY LT RX RY RT).
+    std::string xpadMapping(const char *guid, const char *name)
+    {
+        std::string clean(name);
+        for (char &c : clean)
+            if (c == ',')
+                c = ' ';
+        return std::string(guid) + "," + clean +
+               ",a:b0,b:b1,x:b2,y:b3,back:b6,guide:b8,start:b7,leftshoulder:b4,rightshoulder:b5,leftstick:b9,rightstick:b10,"
+               "dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,leftx:a0,lefty:a1,lefttrigger:a2,righttrigger:a5,rightx:a3,righty:a4,"
+               "platform:Linux,\n";
+    }
+
+    void mapUnmappedXpads()
+    {
+#if defined(__linux__)
+        static std::set<std::string> handled; // GUIDs already looked at (a mapping covers every device with that GUID)
+        static int frame = 0;
+        if (frame++ % 30 != 0) // twice a second is plenty for hot-plugging
+            return;
+        for (int jid = 0; jid < 16; ++jid)
+        {
+            if (!glfwJoystickPresent(jid) || glfwJoystickIsGamepad(jid))
+                continue;
+            const char *guid = glfwGetJoystickGUID(jid);
+            const char *name = glfwGetJoystickName(jid);
+            if (!guid || !*guid || !handled.insert(guid).second)
+                continue;
+            int buttons = 0, hats = 0, axes = 0;
+            glfwGetJoystickButtons(jid, &buttons);
+            glfwGetJoystickHats(jid, &hats);
+            glfwGetJoystickAxes(jid, &axes);
+            if (!looksLikeXpad(name, buttons, hats, axes))
+                continue;
+            const bool ok = glfwUpdateGamepadMappings(xpadMapping(guid, name).c_str()) != 0;
+            std::fprintf(stderr, "[pad] joystick %d \"%s\" has no SDL mapping: %s\n", jid, name,
+                         ok ? "using the Xbox (xpad) layout" : "the Xbox (xpad) layout was rejected");
+        }
+#endif
+    }
+}
+
 // GOW-Port: window loop (gowFrameInput), the thread that owns the raylib window: GLFW's joystick calls belong to it.
+// It also gives unmapped Xbox-class pads their mapping (always, with or without GOW_PAD_DIAG); the diagnostic below runs only
+// with the variable.
 void gowPadDiagFrame()
 {
+    mapUnmappedXpads();
     if (!padDiagEnabled())
         return;
     static JoystickDiag joysticks[kDiagJoysticks];
