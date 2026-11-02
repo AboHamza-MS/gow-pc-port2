@@ -508,6 +508,22 @@ function Configure {
             Remove-Item -LiteralPath (Join-Path $Build 'CMakeFiles') -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
+    # GOW-Port: the cache also remembers the full path of the C++ compiler it found. A Visual Studio update replaces the MSVC
+    # toolset folder (...\MSVC\14.38.x\bin\...\cl.exe), and a build folder made before it then stops with "not a full path to an
+    # existing compiler". That is what an old installation (launcher 0.1.0 or 0.2.x) meets when its game is rebuilt after an
+    # update, so the cache is dropped here too; again the downloaded dependencies (_deps) are kept.
+    if (Test-Path -LiteralPath $cache) {
+        $cachedCompiler = Select-String -LiteralPath $cache -Pattern '^CMAKE_CXX_COMPILER:(?:FILEPATH|STRING)=(.*)$' | Select-Object -First 1
+        if ($cachedCompiler) {
+            $compiler = $cachedCompiler.Matches[0].Groups[1].Value.Trim()
+            # An absolute path that is not there. A bare name (cl, c++) is looked up in PATH by CMake itself.
+            if ($compiler -match '^(?:[A-Za-z]:[\\/]|/)' -and -not (Test-Path -LiteralPath $compiler)) {
+                Warn "The build folder remembers a C++ compiler that is gone ($compiler): reconfiguring."
+                Remove-Item -LiteralPath $cache -Force
+                Remove-Item -LiteralPath (Join-Path $Build 'CMakeFiles') -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
     $extra = @()
     # GOW-Port: Release and RelWithDebInfo both build with /O2 and no whole-program optimization (PS2X_ENABLE_LTCG, off by default).
     $buildType = if ($FastDev) { 'RelWithDebInfo' } else { 'Release' }
