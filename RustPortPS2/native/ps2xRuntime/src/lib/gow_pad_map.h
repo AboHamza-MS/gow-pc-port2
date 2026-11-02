@@ -414,7 +414,18 @@ namespace gowpad
             return "";
         if (line.back() != ',')
             line += ',';
-        return line + "platform:" + platform + ",\n";
+        // GLFW compares GUIDs as text, in lower case (the case its own `glfwGetJoystickGUID` returns), so a line with a GUID in
+        // capitals would be accepted and never attach to the joystick.
+        for (size_t i = 0; i < first; ++i)
+            if (line[i] >= 'A' && line[i] <= 'F')
+                line[i] = static_cast<char>(line[i] - 'A' + 'a');
+        line += "platform:";
+        line += platform;
+        line += ",\n";
+        // GLFW's parser reads a line into a 1024 byte buffer and silently skips a longer one: better to say no here.
+        if (line.size() >= 1024)
+            return "";
+        return line;
     }
 
     // The raw input of one joystick, as GLFW reports it: buttons (0 or 1), hat bit sets, axes (-1 to 1).

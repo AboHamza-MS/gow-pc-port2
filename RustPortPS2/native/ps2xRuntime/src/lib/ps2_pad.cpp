@@ -264,6 +264,15 @@ namespace
     // behind a 2.4G dongle) often has no entry in GLFW's database, although its layout is the well-known xpad one: 15 buttons,
     // 1 hat, 6 axes with the two triggers resting at -1. Such a device gets that layout as its mapping. Anything that does not look
     // like it is left alone: a wrong guess would be worse than no mapping.
+    // GLFW's `glfwGetJoystickButtons` returns the real buttons followed by four synthetic ones per hat (the init hint
+    // GLFW_JOYSTICK_HAT_BUTTONS, on by default). The Generic X-Box pad of issue #12 reports 15 buttons and 1 hat: 11 real
+    // buttons plus 4. A mapping may only name real buttons (`b0` to `b10` there): GLFW drops the whole mapping of a joystick
+    // that names one past its real count. So everything that counts or numbers buttons uses the real count.
+    int realButtonCount(int reported, int hats)
+    {
+        return reported >= 4 * hats ? reported - 4 * hats : reported;
+    }
+
     bool looksLikeXpad(const char *name, int buttons, int hats, int axes)
     {
         if (!name || buttons < 11 || hats < 1 || axes < 6)
@@ -307,7 +316,7 @@ namespace
             glfwGetJoystickButtons(jid, &buttons);
             glfwGetJoystickHats(jid, &hats);
             glfwGetJoystickAxes(jid, &axes);
-            if (!looksLikeXpad(name, buttons, hats, axes))
+            if (!looksLikeXpad(name, realButtonCount(buttons, hats), hats, axes))
                 continue;
             const bool ok = glfwUpdateGamepadMappings(xpadMapping(guid, name).c_str()) != 0;
             std::fprintf(stderr, "[pad] joystick %d \"%s\" has no SDL mapping: %s\n", jid, name,
@@ -360,6 +369,7 @@ namespace
             glfwGetJoystickButtons(jid, &device.buttons);
             glfwGetJoystickHats(jid, &device.hats);
             glfwGetJoystickAxes(jid, &device.axes);
+            device.buttons = realButtonCount(device.buttons, device.hats);
             devices.push_back(device);
         }
         return devices;
@@ -511,17 +521,21 @@ namespace
                 haveRest[jid] = false;
                 continue;
             }
+            // Each array is copied right after the call that returned it: every GLFW joystick call polls the device, and a poll
+            // that finds it unplugged frees the arrays of the earlier calls.
             int buttonCount = 0, hatCount = 0, axisCount = 0;
-            const unsigned char *buttons = glfwGetJoystickButtons(jid, &buttonCount);
-            const unsigned char *hats = glfwGetJoystickHats(jid, &hatCount);
-            const float *axes = glfwGetJoystickAxes(jid, &axisCount);
             gowpad::RawSample now;
+            const unsigned char *buttons = glfwGetJoystickButtons(jid, &buttonCount);
             if (buttons)
                 now.buttons.assign(buttons, buttons + buttonCount);
+            const unsigned char *hats = glfwGetJoystickHats(jid, &hatCount);
             if (hats)
                 now.hats.assign(hats, hats + hatCount);
+            const float *axes = glfwGetJoystickAxes(jid, &axisCount);
             if (axes)
                 now.axes.assign(axes, axes + axisCount);
+            // Only the real buttons: the synthetic hat buttons would let a D-pad be saved as `b11`, which GLFW rejects.
+            now.buttons.resize(static_cast<size_t>(realButtonCount(static_cast<int>(now.buttons.size()), static_cast<int>(now.hats.size()))));
             if (!haveRest[jid])
             {
                 rest[jid] = now;

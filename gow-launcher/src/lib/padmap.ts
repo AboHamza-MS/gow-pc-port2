@@ -16,20 +16,23 @@ const isTarget = (name: string): name is Target => (TARGETS as readonly string[]
 
 export type ParseResult = { ok: true; layout: Layout } | { ok: false; error: string };
 
+/** A space or a tab at either end, and nothing else: what the game's parser trims (`gow_pad_map.h`). */
+const blankTrim = (text: string) => text.replace(/^[ \t]+|[ \t]+$/g, '');
+
 /** Reads a `PC_PAD_MAP` text. Same rules as the game: a source once, `start` pressed by some source, nothing else unknown. */
 export function parsePadMap(text: string): ParseResult {
   if (text === '') return { ok: false, error: 'empty' };
   const layout = Object.fromEntries(SOURCES.map((source) => [source, 'none'])) as Layout;
   const listed = new Set<Source>();
   const parts = text.split(';');
-  if (parts.length > 1 && parts[parts.length - 1].trim() === '') parts.pop(); // one trailing separator is fine
+  if (parts.length > 1 && blankTrim(parts[parts.length - 1]) === '') parts.pop(); // one trailing separator is fine
   for (const part of parts) {
-    const entry = part.trim();
+    const entry = blankTrim(part);
     if (entry === '') return { ok: false, error: 'empty entry' };
     const equals = entry.indexOf('=');
     if (equals < 0) return { ok: false, error: `'${entry}' is not source=target` };
-    const source = entry.slice(0, equals).trim();
-    const target = entry.slice(equals + 1).trim();
+    const source = blankTrim(entry.slice(0, equals));
+    const target = blankTrim(entry.slice(equals + 1));
     if (!isSource(source)) return { ok: false, error: `unknown source '${source}'` };
     if (!isTarget(target)) return { ok: false, error: `unknown target '${target}'` };
     if (listed.has(source)) return { ok: false, error: `source '${source}' appears twice` };

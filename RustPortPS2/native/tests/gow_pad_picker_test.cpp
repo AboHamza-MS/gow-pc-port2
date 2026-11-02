@@ -174,7 +174,7 @@ int main(int argc, char **argv)
         // The list is written at once, with every joystick, whether it has an SDL mapping, and the pad found.
         const std::string text = readFile(list);
         CHECK(text.find("\"choice\":\"found\"") != std::string::npos);
-        CHECK(text.find("\"name\":\"Generic X-Box pad\",\"guid\":\"0300dddd5e040000a102000000010000\",\"mapped\":false,\"buttons\":15,\"hats\":1,\"axes\":6") != std::string::npos);
+        CHECK(text.find("\"name\":\"Generic X-Box pad\",\"guid\":\"0300dddd5e040000a102000000010000\",\"mapped\":false,\"buttons\":11,\"hats\":1,\"axes\":6") != std::string::npos); // GLFW says 15 (11 + 4 for the hat): 11 are real
         CHECK(text.find("\"name\":\"2.4G Keyboard\"") != std::string::npos);
         CHECK(text.find("\"preferred\":\"0300DDDD5E040000A102000000010000\"") != std::string::npos);
         // Pressing a button on another device does not take over; the chosen one is read from the first read on.
@@ -276,16 +276,18 @@ int main(int argc, char **argv)
         CHECK(text.find("\"guid\":\"" + std::string(kPadGuid) + "\",\"buttons\":[],\"hats\":[],\"axes\":[]") != std::string::npos);
         // Raw button 2, hat 0 up and axis 2 (a trigger resting at -1) pressed on the real pad: reported with GLFW's own numbers.
         g_joy[3].rawButtons[2] = 1;
+        g_joy[3].rawButtons[11] = 1; // what GLFW adds for hat 0 up (real buttons 0 to 10, then four per hat): never a real button
         g_joy[3].rawHats[0] = 1;
         g_joy[3].rawAxes[2] = 1.0f;
         frames(10);
         text = readFile(live);
         const std::string pad = text.substr(text.find("\"index\":3"));
-        CHECK(pad.find("\"buttons\":[2]") != std::string::npos);
+        CHECK(pad.find("\"buttons\":[2]") != std::string::npos); // not [2,11]: a mapping naming b11 is dropped whole by GLFW
         CHECK(pad.find("\"hats\":[[0,1]]") != std::string::npos);
         CHECK(pad.find("[2,200]") != std::string::npos); // -1 -> +1: a distance of 2.00 from where the trigger rested
         // Released: back to nothing.
         g_joy[3].rawButtons[2] = 0;
+        g_joy[3].rawButtons[11] = 0;
         g_joy[3].rawHats[0] = 0;
         g_joy[3].rawAxes[2] = -1.0f;
         frames(10);

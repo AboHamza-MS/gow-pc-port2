@@ -295,6 +295,11 @@ static void manualMappingTest()
     CHECK(glfwMappingLine((guid + ",name,").c_str(), "Linux").empty());                   // no fields
     CHECK(glfwMappingLine((env + "\nother,line").c_str(), "Linux").empty());              // two lines
     CHECK(glfwMappingLine((env + ",platform:Mac OS X,").c_str(), "Linux").empty());       // the runtime names the platform itself
+    // A GUID in capitals is lowered (GLFW compares the text); the name and fields keep their case.
+    const std::string upper = "0300DDDD5E040000A102000000010000,Pad X," + std::string(fields);
+    CHECK(glfwMappingLine(upper.c_str(), "Linux") == guid + ",Pad X," + fields + ",platform:Linux,\n");
+    // A line GLFW would skip silently (1024 bytes or more) is refused.
+    CHECK(glfwMappingLine((guid + ",name," + std::string(1100, 'a')).c_str(), "Linux").empty());
     CHECK(isGuid(guid) && isGuid("0300DDDD5E040000A102000000010000") && !isGuid("0300dddd") && !isGuid(guid + "0") && !isGuid("0300dddd5e040000a10200000001000g"));
 
     // Raw input against rest: a trigger resting at -1, a hat, a button and a stick that drifts a little.
@@ -331,6 +336,35 @@ static void manualMappingTest()
     CHECK(liveJson({}, 0) == "{\"schema\":1,\"beat\":0,\"devices\":[]}");
 }
 
+// The few JSON escapes the shared cases use: \t \n \r,   (a no-break space, as its UTF-8 bytes), \\ and \".
+static std::string unescapeJson(const std::string &text)
+{
+    std::string out;
+    for (size_t i = 0; i < text.size(); ++i)
+    {
+        if (text[i] != '\\' || i + 1 >= text.size())
+        {
+            out += text[i];
+            continue;
+        }
+        const char c = text[++i];
+        if (c == 't')
+            out += '\t';
+        else if (c == 'n')
+            out += '\n';
+        else if (c == 'r')
+            out += '\r';
+        else if (c == 'u' && text.compare(i + 1, 4, "00a0") == 0)
+        {
+            out += "\xC2\xA0";
+            i += 4;
+        }
+        else
+            out += c;
+    }
+    return out;
+}
+
 // The table of cases the launcher's tests share (padmap-cases.json): one case per line, `"value": "...", "valid": true|false`.
 static void sharedCasesTest(const char *path)
 {
@@ -346,7 +380,7 @@ static void sharedCasesTest(const char *path)
         const size_t begin = key + std::strlen("\"value\": \"");
         const size_t end = line.find("\", \"valid\":", begin);
         CHECK(end != std::string::npos);
-        const std::string value = line.substr(begin, end - begin);
+        const std::string value = unescapeJson(line.substr(begin, end - begin));
         const bool valid = line.find("\"valid\": true") != std::string::npos;
         if (parsePadMap(value.c_str()).ok != valid)
             std::printf("FAIL shared case: [%s] should be %s\n", value.c_str(), valid ? "valid" : "invalid");

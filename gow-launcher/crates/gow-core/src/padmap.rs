@@ -40,6 +40,13 @@ impl std::fmt::Display for PadMapError {
     }
 }
 
+/// Trims a space or a tab at either end, and nothing else: the game's parser (`gow_pad_map.h`) does exactly that, so a value
+/// with a stray line break (or a no-break space) is as invalid here as it is there, instead of passing in the launcher and
+/// being refused by the game.
+fn blank_trim(text: &str) -> &str {
+    text.trim_matches(|c| c == ' ' || c == '\t')
+}
+
 /// The `(source, target)` pairs of a valid map, in the order written.
 pub fn parse(value: &str) -> Result<Vec<(&'static str, &'static str)>, PadMapError> {
     if value.is_empty() {
@@ -48,18 +55,18 @@ pub fn parse(value: &str) -> Result<Vec<(&'static str, &'static str)>, PadMapErr
     let mut entries: Vec<(&'static str, &'static str)> = Vec::new();
     let mut parts: Vec<&str> = value.split(';').collect();
     // One trailing separator is fine.
-    if parts.len() > 1 && parts.last().is_some_and(|last| last.trim().is_empty()) {
+    if parts.len() > 1 && parts.last().is_some_and(|last| blank_trim(last).is_empty()) {
         parts.pop();
     }
     for part in parts {
-        let entry = part.trim();
+        let entry = blank_trim(part);
         if entry.is_empty() {
             return Err(PadMapError::EmptyEntry);
         }
         let Some((source, target)) = entry.split_once('=') else {
             return Err(PadMapError::NotAssignment(entry.to_string()));
         };
-        let (source, target) = (source.trim(), target.trim());
+        let (source, target) = (blank_trim(source), blank_trim(target));
         let source = SOURCES
             .iter()
             .find(|name| **name == source)
