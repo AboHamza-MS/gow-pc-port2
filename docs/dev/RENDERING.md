@@ -2,7 +2,7 @@
 
 The PS2 graphics synthesizer (GS) is implemented as a **host GPU renderer**. There is no VRAM-based software
 rasterizer in the shipped path: `GSHwBackend` (`RustPortPS2/native/ps2xRuntime/src/lib/gs/gpu/gs_hw_backend.cpp`)
-rasterizes every primitive with OpenGL 4.6 into RGBA8 render targets, one per frame-buffer base, and keeps the 4 MiB
+rasterizes every primitive with OpenGL 4.6 (4.3 as the floor) into RGBA8 render targets, one per frame-buffer base, and keeps the 4 MiB
 GS memory image only as the upload/readback source of truth (image transfers, CLUT loads, EE reads, dumps). What
 remains of the hardware model is the frontend (`src/lib/gs/gs_frontend.cpp`): register state, GIF tag parsing, vertex
 assembly, primitive construction and presentation requests.
@@ -21,7 +21,7 @@ For the environment variables of this layer see [`ENVIRONMENT.md`](ENVIRONMENT.m
 | Type | Where | Role |
 |---|---|---|
 | `GSRasterBackend` | `include/runtime/gs/gs_backend.h` | Interface the frontend drives: `Submit`, `LoadClut`, `BeginTransfer`/`UploadImage`, `Flush`, `TextureFlush`, `Sync`, `Present`, `ClearFramebuffer`, `ReadVram`/`WriteVram`, `SnapshotVram` |
-| `GSHwBackend` | `src/lib/gs/gpu/gs_hw_backend.cpp` | The renderer: native OpenGL 4.6 render-target path, texture decode + CLUT, channel shuffles, CRTC composition, texture replacement |
+| `GSHwBackend` | `src/lib/gs/gpu/gs_hw_backend.cpp` | The renderer: native OpenGL 4.6 render-target path (context ladder down to 4.3, `PS2X_GS_GL_MAX_MINOR`), texture decode + CLUT, channel shuffles, CRTC composition, texture replacement |
 | `GSThreadedBackend` | `src/lib/gs/gs_threaded_backend.cpp` | Queue/worker wrapper around any inner backend: serializes commands, replays the producer's MXCSR per command, coalesces identical draw states |
 | `GSTextureStore` | `src/lib/gs/gpu/gs_texture_store.{h,cpp}` | Native texture/CLUT store: uploaded bytes at their GS block addresses, CLD rules, palettes, transfers. No rasteriser |
 | `GSMem` / `GSSwizzle` | `src/lib/gs/ps2_gs_memory.cpp`, `gs_swizzle.{h,cpp}` | The 13 PSMs' page/block/column addressing. Shared by the store, the renderer, the replacement hashing and the tests |

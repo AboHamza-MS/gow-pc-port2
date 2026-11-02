@@ -36,6 +36,23 @@ namespace
     int s_readingSlot = -1;
     uint64_t s_sharedSequence = 0;
     std::atomic<bool> s_sharedActive{false};
+    // GOW-Port: minor version of the GS context (4.x core); the worker contexts must ask for the same one to share with it.
+    int s_contextMinor = 6;
+
+    // GOW-Port: the first minor of the 4.6 -> 4.3 ladder. PS2X_GS_GL_MAX_MINOR=<3..6> (test knob) starts lower, to exercise
+    // the 4.3 path on a newer GPU.
+    int firstContextMinor()
+    {
+        const char *value = std::getenv("PS2X_GS_GL_MAX_MINOR");
+        return value && *value ? std::clamp(static_cast<int>(std::strtol(value, nullptr, 10)), 3, 6) : 6;
+    }
+
+    void reportContext(const GSGL::Api &api, int minor)
+    {
+        s_contextMinor = minor;
+        const char *version = api.GetString ? reinterpret_cast<const char *>(api.GetString(GSGL::kVersion)) : nullptr;
+        std::fprintf(stderr, "[gs-gl] OpenGL 4.%d core context (%s)\n", minor, version ? version : "unknown version");
+    }
 
     bool completed(const GSGL::Api &gl, GSGL::GLsync fence)
     {
@@ -101,7 +118,9 @@ namespace
         load(a.BindBufferRange, "glBindBufferRange", missing);
         load(a.ClearBufferData, "glClearBufferData", missing);
         load(a.CopyBufferSubData, "glCopyBufferSubData", missing);
-        load(a.BufferStorage, "glBufferStorage", missing);
+        // GOW-Port: glBufferStorage is 4.4: optional, only the persistent hash buffer of the presented frame uses it
+        std::string storageMissing;
+        load(a.BufferStorage, "glBufferStorage", storageMissing);
         load(a.MapBufferRange, "glMapBufferRange", missing);
         load(a.UnmapBuffer, "glUnmapBuffer", missing);
         load(a.GenQueries, "glGenQueries", missing);
@@ -184,7 +203,13 @@ namespace
         load(a.ReadPixels, "glReadPixels", hwMissing);
         load(a.BlitFramebuffer, "glBlitFramebuffer", hwMissing);
         load(a.PixelStorei, "glPixelStorei", hwMissing);
-        load(a.TextureBarrier, "glTextureBarrier", hwMissing);
+        // GOW-Port: glTextureBarrier is 4.5; a 4.3 / 4.4 driver exposes it as ARB_texture_barrier (same name) or as the
+        // NVIDIA extension
+        std::string barrierMissing;
+        if (!load(a.TextureBarrier, "glTextureBarrier", barrierMissing))
+            load(a.TextureBarrier, "glTextureBarrierNV", barrierMissing);
+        if (!a.TextureBarrier)
+            hwMissing += hwMissing.empty() ? "glTextureBarrier" : ", glTextureBarrier";
         std::string mipmapMissing;
         load(a.GenerateMipmap, "glGenerateMipmap", mipmapMissing);
         std::string copyMissing;
@@ -336,17 +361,25 @@ namespace GSGL
         }
         const auto createAttribs = reinterpret_cast<CreateContextAttribs>(wglGetProcAddress("wglCreateContextAttribsARB"));
         HGLRC context = nullptr;
-        if (createAttribs)
+        int contextMinor = 0;
+        m_shared = false;
+        // GOW-Port: 4.6 core first, then 4.5, 4.4 and 4.3; at each version shared with the window's context first, then without
+        // sharing (RAM presentation)
+        for (int minor = firstContextMinor(); createAttribs && !context && minor >= 3; --minor)
         {
-            const int attributes[] = {kContextMajorVersion, 4, kContextMinorVersion, 6, kContextProfileMask, kContextCoreProfileBit,
+            const int attributes[] = {kContextMajorVersion, 4, kContextMinorVersion, minor, kContextProfileMask, kContextCoreProfileBit,
                                       kContextFlags, 0, 0};
             context = createAttribs(dc, s_hostContext, attributes);
             m_shared = context && s_hostContext;
             if (!context && s_hostContext)
             {
-                std::fprintf(stderr, "[gs-present] WGL sharing failed (%lu); using RAM presentation\n", GetLastError());
+                const DWORD sharingError = GetLastError();
                 context = createAttribs(dc, nullptr, attributes);
+                if (context)
+                    std::fprintf(stderr, "[gs-present] WGL sharing failed (%lu); using RAM presentation\n", sharingError);
             }
+            if (context)
+                contextMinor = minor;
         }
         wglMakeCurrent(nullptr, nullptr);
         wglDeleteContext(legacy);
@@ -356,7 +389,7 @@ namespace GSGL
                 wglDeleteContext(context);
             ReleaseDC(window, dc);
             DestroyWindow(window);
-            error = "OpenGL 4.6 core context unavailable";
+            error = "OpenGL 4.3 core context unavailable";
             return false;
         }
         m_window = window;
@@ -371,6 +404,7 @@ namespace GSGL
             Destroy();
             return false;
         }
+        reportContext(m_api, contextMinor);
         if (m_shared)
         {
             s_sharedActive.store(true, std::memory_order_release);
@@ -384,8 +418,8 @@ namespace GSGL
         const auto createAttribs = reinterpret_cast<CreateContextAttribs>(wglGetProcAddress("wglCreateContextAttribsARB"));
         if (!createAttribs || !m_context || !m_dc)
             return nullptr;
-        const int attributes[] = {kContextMajorVersion, 4, kContextMinorVersion, 6, kContextProfileMask, kContextCoreProfileBit,
-                                  kContextFlags, 0, 0};
+        const int attributes[] = {kContextMajorVersion, 4, kContextMinorVersion, s_contextMinor, kContextProfileMask,
+                                  kContextCoreProfileBit, kContextFlags, 0, 0};
         return createAttribs(static_cast<HDC>(m_dc), static_cast<HGLRC>(m_context), attributes);
     }
 
@@ -493,17 +527,28 @@ namespace GSGL
         }
         // GOW-Port: glfwInit sets the system's LC_CTYPE (tr_TR breaks ASCII tolower/toupper of 'I'/'i'); "C" is restored.
         std::setlocale(LC_CTYPE, "C");
-        contextHints(6);
-        GLFWwindow *window = glfwCreateWindow(16, 16, "gs", nullptr, s_hostWindow);
-        m_shared = window && s_hostWindow;
-        if (!window && s_hostWindow)
+        // GOW-Port: 4.6 core first, then 4.5, 4.4 and 4.3; at each version shared with the window's context first, then without
+        // sharing (RAM presentation)
+        GLFWwindow *window = nullptr;
+        int contextMinor = 0;
+        m_shared = false;
+        for (int minor = firstContextMinor(); !window && minor >= 3; --minor)
         {
-            std::fprintf(stderr, "[gs-present] GLX/EGL sharing failed; using RAM presentation\n");
-            window = glfwCreateWindow(16, 16, "gs", nullptr, nullptr);
+            contextHints(minor);
+            window = glfwCreateWindow(16, 16, "gs", nullptr, s_hostWindow);
+            m_shared = window && s_hostWindow;
+            if (!window && s_hostWindow)
+            {
+                window = glfwCreateWindow(16, 16, "gs", nullptr, nullptr);
+                if (window)
+                    std::fprintf(stderr, "[gs-present] GLX/EGL sharing failed; using RAM presentation\n");
+            }
+            if (window)
+                contextMinor = minor;
         }
         if (!window)
         {
-            error = "OpenGL 4.6 core context unavailable";
+            error = "OpenGL 4.3 core context unavailable";
             return false;
         }
         glfwMakeContextCurrent(window);
@@ -518,6 +563,7 @@ namespace GSGL
             Destroy();
             return false;
         }
+        reportContext(m_api, contextMinor);
         if (m_shared)
         {
             s_sharedActive.store(true, std::memory_order_release);
@@ -530,7 +576,7 @@ namespace GSGL
     {
         if (!m_window)
             return nullptr;
-        contextHints(6);
+        contextHints(s_contextMinor);
         return glfwCreateWindow(16, 16, "gs-worker", nullptr, static_cast<GLFWwindow *>(m_window));
     }
 
@@ -715,7 +761,8 @@ namespace GSGL
             gl.DeleteSync(slot.consumed);
         slot.produced = slot.consumed = nullptr;
         slot.frame.hashValid = false;
-        if (hashProgram)
+        // GOW-Port: without glBufferStorage (a 4.3 driver) there is no device hash: hashValid stays false
+        if (hashProgram && gl.BufferStorage)
         {
             if (!slot.hashBuffer)
             {

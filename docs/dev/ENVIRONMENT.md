@@ -41,6 +41,7 @@ arrives as `GOW_SHARPEN` and the render scale as `PS2X_GS_HW_SCALE`.
 | `GOW_SCALER=sharp\|bilinear`, `GOW_SHARPEN` (0–1) | The scaler that actually runs: bicubic + contrast-adaptive sharpening, or a linear tap |
 | `PS2X_GS_HW_SCALE=<n>` | Internal render scale (float, clamped to ≥ 1). This is the one the runtime reads |
 | `PS2X_GS_DIRECT_PRESENT=0` | Forces the RAM (readback + upload) presentation; shared GL textures are the default |
+| `PS2X_GS_GL_MAX_MINOR=<3..6>` | Test only: the GS context ladder starts at OpenGL 4.<n> instead of 4.6 (then falls down to 4.3), to exercise the 4.3 path on a newer GPU. `[gs-gl]` in the log reports the version obtained |
 | `GOW_PRESENT_BLOCKING`, `GOW_PRESENT_FIFO`, `GOW_PRESENT_MIN_INTERVAL_US` | Presentation pacing |
 | `PC_GAME_FPS`, `PC_WINDOW_FPS`, `PC_VSYNC`, `PC_SHOW_FPS` | Limits, vsync, counter |
 | `PC_PROGRESSIVE` / `GOW_PROGRESSIVE` | 480p progressive mode |
