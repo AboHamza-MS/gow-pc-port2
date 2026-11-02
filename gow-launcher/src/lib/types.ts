@@ -32,6 +32,10 @@ export interface Settings {
   padButtons: string;
   /** `source=target;...` for every gamepad button (the game's `PC_PAD_MAP`); empty = the layout and face buttons above. */
   padMap: string;
+  /** GUID of the joystick the game reads (`GOW_PAD_DEVICE`); empty = the game picks the pad itself. */
+  padDevice: string;
+  /** Its name, only to show it while it is not connected. */
+  padDeviceName: string;
   cancelAnimations: boolean;
   escQuits: boolean;
   minimizeOnPlay: boolean;
@@ -50,6 +54,30 @@ export interface Settings {
   optimizationCompiled: number;
   /** Install a newer launcher at start-up when nothing is running (off: only the notice). */
   autoUpdate: boolean;
+}
+
+/** A joystick as the game listed it the last time it ran (`gow_core::controller::PadDevice`). */
+export interface PadDevice {
+  /** GLFW's joystick id; the game only reads 0 to 3. */
+  index: number;
+  name: string;
+  guid: string;
+  /** GLFW has an SDL mapping for it; without one the game sees every button released. */
+  mapped: boolean;
+  buttons: number;
+  hats: number;
+  axes: number;
+}
+
+/** The list the game wrote (`gow_core::controller::PadDeviceList`). */
+export interface PadDeviceList {
+  /** What the game did with the device it was asked for: `automatic`, `found`, `absent` or `outOfRange`. */
+  choice: string;
+  /** The joystick the game read when it wrote the list (-1: none). */
+  active: number;
+  devices: PadDevice[];
+  /** Unix seconds of the last change of the list. */
+  seenAt: number;
 }
 
 export interface DisplayInfo {

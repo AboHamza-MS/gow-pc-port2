@@ -494,5 +494,17 @@
   "padmapTarget_down": "D-pad down ↓",
   "padmapTarget_left": "D-pad left ←",
   "padmapTarget_right": "D-pad right →",
-  "padmapTarget_none": "Nothing"
+  "padmapTarget_none": "Nothing",
+  "padpickTitle": "Controller",
+  "padpickDesc": "Which device the game reads. Automatic uses the first controller that answers. The list is what the game saw the last time it ran.",
+  "padpickAuto": "Automatic",
+  "padpickUnmapped": "%1 (no button layout)",
+  "padpickNotSeen": "%1 (not seen last time)",
+  "padpickRefresh": "Refresh",
+  "padpickNone": "No controller has been seen yet. Start the game once with the controller connected and it will be listed here.",
+  "padpickSeen": "Seen at %1",
+  "padpickUnmappedTitle": "The system has no button layout for this device",
+  "padpickUnmappedText": "The game would see every button of %1 as released. This is common with generic 2.4G receivers. Pick another device from the list, or play with the keyboard.",
+  "padpickAbsent": "The device you chose was not connected the last time the game ran, so the game picked a pad by itself.",
+  "padpickOutOfRange": "The device you chose was past the first four the game can read the last time it ran, so the game picked a pad by itself."
 }

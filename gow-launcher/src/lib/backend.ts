@@ -3,7 +3,7 @@
 
 import type {
   Bootstrap, DestinationValidation, GameFinished, GameStatus, GamepadCaptured, InstallOutcome,
-  InstallProgress, IsoValidation, OptimizerSnapshot, RebuildState, Settings, TexturePackInfo, TexturePackOutcome, TexturePackProgress,
+  InstallProgress, IsoValidation, OptimizerSnapshot, PadDeviceList, RebuildState, Settings, TexturePackInfo, TexturePackOutcome, TexturePackProgress,
   UpdateMode, UpdateState, WizardInfo,
 } from './types';
 
@@ -58,6 +58,8 @@ export interface Api {
   raHasCredential(user: string): Promise<boolean>;
   raSaveCredential(user: string, password: string): Promise<boolean>;
   raClearCredential(): Promise<boolean>;
+  /** The joysticks the game saw the last time it ran; null before the first run. */
+  padDevices(): Promise<PadDeviceList | null>;
   gamepadBegin(): Promise<boolean>;
   gamepadCancel(): Promise<void>;
   wizardInfo(): Promise<WizardInfo>;
@@ -120,6 +122,7 @@ async function createTauriApi(): Promise<Api> {
     raHasCredential: (user) => call('ra_has_credential', { user }),
     raSaveCredential: (user, password) => call('ra_save_credential', { user, password }),
     raClearCredential: () => call('ra_clear_credential'),
+    padDevices: () => call('pad_devices'),
     gamepadBegin: () => call('gamepad_begin'),
     gamepadCancel: () => call('gamepad_cancel'),
     wizardInfo: () => call('wizard_info'),
@@ -161,7 +164,7 @@ export const defaultSettings: Settings = {
   language: '', gpu: 'auto', displayMode: 'fullscreen', widthPx: 1280, heightPx: 800, aspectMode: '', widescreen: true, stretch: false,
   filter: 'bilinear', sharpness: 0.8, fxaa: true, progressive480p: true, internalResolution: '2', fpsLimit: 60,
   vsync: false, showFps: false, elf: '', iso: '', executable: '', skipVideos: true, fastBoot: false, customTextures: false, asyncTextures: true,
-  settingsVersion: 0, dmc5Controls: false, padButtons: '', padMap: '', cancelAnimations: true, escQuits: false,
+  settingsVersion: 0, dmc5Controls: false, padButtons: '', padMap: '', padDevice: '', padDeviceName: '', cancelAnimations: true, escQuits: false,
   minimizeOnPlay: true, secondsPlayed: 0, lastSession: 0, keys: '', cheats: '', cheatsShortcut: '',
   retroAchievementsEnabled: false, retroAchievementsUser: '',
   retroAchievementsHardcore: false, retroAchievementsNotifications: true, optimizationDestination: '',
@@ -180,7 +183,21 @@ type Handler = (payload: never) => void;
 
 export type MockApi = Api & { emit: <K extends keyof EventMap>(event: K, payload: EventMap[K]) => void };
 
-export function createMockApi(options: { ready?: boolean; update?: UpdateState; rebuildNeeded?: boolean } = {}): MockApi {
+/** What the mock backend lists as the last session's joysticks: the 2.4G dongle of issue #12, whose real pad has no SDL mapping. */
+export const dongleDevices: PadDeviceList = {
+  choice: 'automatic',
+  active: 0,
+  seenAt: 1_790_000_000,
+  devices: [
+    { index: 0, name: '2.4G Consumer Control', guid: '0300aaaa5e040000a102000000010000', mapped: true, buttons: 1, hats: 0, axes: 0 },
+    { index: 1, name: '2.4G Keyboard', guid: '0300bbbb5e040000a102000000010000', mapped: true, buttons: 1, hats: 0, axes: 0 },
+    { index: 3, name: 'Generic X-Box pad', guid: '0300dddd5e040000a102000000010000', mapped: false, buttons: 15, hats: 1, axes: 6 },
+  ],
+};
+
+export function createMockApi(
+  options: { ready?: boolean; update?: UpdateState; rebuildNeeded?: boolean; padDevices?: PadDeviceList | null } = {},
+): MockApi {
   const ready = options.ready ?? true;
   let update = options.update ?? noUpdate;
   let rebuild: RebuildState = {
@@ -278,6 +295,7 @@ export function createMockApi(options: { ready?: boolean; update?: UpdateState; 
     raHasCredential: async (user) => user === 'player',
     raSaveCredential: async () => true,
     raClearCredential: async () => true,
+    padDevices: async () => (options.padDevices === undefined ? dongleDevices : options.padDevices),
     gamepadBegin: async () => {
       setTimeout(() => emit('gamepad-captured', { binding: '9+11', label: 'LB / L1 + RB / R1' }), 1500);
       return true;

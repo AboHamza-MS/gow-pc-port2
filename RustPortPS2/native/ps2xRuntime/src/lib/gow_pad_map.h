@@ -8,13 +8,18 @@
 // Rules: a source appears once; several sources may press the same target; a source that is not listed presses nothing;
 // `start` must be the target of at least one source (without it the game cannot be started). Anything else makes the whole value
 // invalid and the launcher's layouts (face map and shoulder preset) stay in force.
+//
+// It also holds what the launcher's controller picker needs: the list of joysticks the runtime writes for the launcher
+// (GOW_PAD_LIST_FILE) and the choice of the joystick the game reads (GOW_PAD_DEVICE, a GLFW GUID).
 #pragma once
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace gowpad
 {
@@ -246,5 +251,131 @@ namespace gowpad
             if (table[id] != 0 && down(id))
                 bits |= table[id];
         return bits;
+    }
+
+    // ------------------------------------------------------------------------------------------------ controller picker
+
+    // A joystick GLFW lists, as the launcher is told about it. `mapped`: GLFW has an SDL mapping for it (without one every
+    // button reads as released). `index` is the GLFW joystick id, which is also raylib's gamepad slot while it is below 4.
+    struct Device
+    {
+        int index = 0;
+        std::string name;
+        std::string guid;
+        bool mapped = false;
+        int buttons = 0;
+        int hats = 0;
+        int axes = 0;
+    };
+
+    // raylib reads the first four joysticks only.
+    constexpr int kSlots = 4;
+
+    enum class Choice
+    {
+        Automatic, // nothing was chosen: the game picks the pad itself
+        Found,     // the chosen device is connected in a slot the game reads
+        Absent,    // the chosen device is not connected: automatic choice
+        OutOfRange // connected, but past the four slots the game reads: automatic choice
+    };
+
+    struct Pick
+    {
+        Choice choice = Choice::Automatic;
+        int index = -1; // the joystick found: the one to read when Found, the one that is out of reach when OutOfRange
+    };
+
+    inline bool sameGuid(const std::string &a, const std::string &b)
+    {
+        if (a.size() != b.size())
+            return false;
+        for (size_t i = 0; i < a.size(); ++i)
+        {
+            const char x = a[i] >= 'A' && a[i] <= 'Z' ? static_cast<char>(a[i] + 32) : a[i];
+            const char y = b[i] >= 'A' && b[i] <= 'Z' ? static_cast<char>(b[i] + 32) : b[i];
+            if (x != y)
+                return false;
+        }
+        return true;
+    }
+
+    // Which joystick the game reads. `wanted` is the chosen GUID (empty or null: automatic). Devices with the same GUID (two
+    // identical pads) are told apart only by their order: the first one connected is used.
+    inline Pick pickDevice(const std::vector<Device> &devices, const char *wanted)
+    {
+        Pick pick;
+        if (!wanted || !*wanted)
+            return pick;
+        pick.choice = Choice::Absent;
+        for (const Device &device : devices)
+            if (sameGuid(device.guid, wanted))
+            {
+                if (device.index < kSlots)
+                {
+                    pick.choice = Choice::Found;
+                    pick.index = device.index;
+                }
+                else
+                {
+                    pick.choice = Choice::OutOfRange;
+                    pick.index = device.index;
+                }
+                return pick;
+            }
+        return pick;
+    }
+
+    inline const char *choiceName(Choice choice)
+    {
+        switch (choice)
+        {
+        case Choice::Found: return "found";
+        case Choice::Absent: return "absent";
+        case Choice::OutOfRange: return "outOfRange";
+        default: return "automatic";
+        }
+    }
+
+    inline std::string jsonString(const std::string &text)
+    {
+        std::string out = "\"";
+        for (const char c : text)
+        {
+            switch (c)
+            {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20)
+                {
+                    char buffer[8];
+                    std::snprintf(buffer, sizeof(buffer), "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(c)));
+                    out += buffer;
+                }
+                else
+                    out += c;
+            }
+        }
+        return out + "\"";
+    }
+
+    // The file the launcher reads (schema 1). `active` is the joystick the game reads now (-1: none). The timestamp is left to
+    // the caller so the text can be compared to decide whether the file changed.
+    inline std::string devicesJson(const std::vector<Device> &devices, const Pick &pick, const char *wanted, int active, const char *platform)
+    {
+        std::string out = "{\"schema\":1,\"platform\":" + jsonString(platform) + ",\"preferred\":" + jsonString(wanted ? wanted : "") +
+                          ",\"choice\":" + jsonString(choiceName(pick.choice)) + ",\"active\":" + std::to_string(active) + ",\"devices\":[";
+        for (size_t i = 0; i < devices.size(); ++i)
+        {
+            const Device &d = devices[i];
+            out += std::string(i ? "," : "") + "{\"index\":" + std::to_string(d.index) + ",\"name\":" + jsonString(d.name) +
+                   ",\"guid\":" + jsonString(d.guid) + ",\"mapped\":" + (d.mapped ? "true" : "false") +
+                   ",\"buttons\":" + std::to_string(d.buttons) + ",\"hats\":" + std::to_string(d.hats) +
+                   ",\"axes\":" + std::to_string(d.axes) + "}";
+        }
+        return out + "]}";
     }
 }

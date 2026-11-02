@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Circle, DoorOpen, Ellipsis, Gamepad2, Square, Swords, Triangle, X } from 'lucide-react';
-import { Glyphs, GroupTitle, KeyCap, Note, SecondaryButton, Select, SettingRow, Switch } from '../components/ui';
+import { Circle, DoorOpen, Ellipsis, Gamepad2, Square, Swords, Triangle, Usb, X } from 'lucide-react';
+import { Glyphs, GroupTitle, KeyCap, Note, SecondaryButton, Select, SettingRow, Switch, type Option } from '../components/ui';
 import { Modal } from '../components/Shell';
 import { upper } from '../lib/i18n';
 import { actions, assign, conflicts, fromEvent, fromMouse, groups, isReserved, keyName, readBindings, type Bindings } from '../lib/keys';
 import { assignTarget, parsePadMap, presetLayout, serializePadMap, sharedTargets, SOURCES, TARGETS, type Source, type Target } from '../lib/padmap';
 import { useApp } from '../state/app';
+import type { PadDeviceList } from '../lib/types';
 
 type Face = 'cross' | 'circle' | 'square' | 'triangle';
 
@@ -94,6 +95,65 @@ function CaptureDialog({ action, onCode, onCancel }: { action: string; onCode: (
 
 const faceIcons = [X, Circle, Square, Triangle];
 
+/**
+ * The controller picker: the joysticks the game saw the last time it ran, and the one it must read. Choosing "Automatic"
+ * leaves it to the game (the first controller that answers).
+ */
+function ControllerPicker() {
+  const { api, settings, patch, t, f, lang } = useApp();
+  const [list, setList] = useState<PadDeviceList | null>(null);
+  const reload = () => api.padDevices().then(setList, () => setList(null));
+  useEffect(() => {
+    void reload();
+    // The game rewrites the list while it runs; read it again when it closes.
+    let off: (() => void) | undefined;
+    void api.on('game-running', (running) => !running && void reload()).then((stop) => (off = stop));
+    return () => off?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api]);
+
+  const devices = list?.devices ?? [];
+  const chosen = settings.padDevice;
+  const current = devices.find((device) => device.guid.toLowerCase() === chosen.toLowerCase());
+  const options: Option[] = [
+    { text: t('padpickAuto'), value: '' },
+    ...devices.map((device) => ({ text: device.mapped ? device.name : f('padpickUnmapped', device.name), value: device.guid })),
+  ];
+  // A device that was chosen and is not in the last list stays selectable (and visible), so it can be un-chosen.
+  if (chosen && !current) options.push({ text: f('padpickNotSeen', settings.padDeviceName || chosen), value: chosen });
+  const absentLast = chosen !== '' && list !== null && (list.choice === 'absent' || list.choice === 'outOfRange');
+
+  return (
+    <>
+      <SettingRow icon={Usb} title={t('padpickTitle')} description={t('padpickDesc')} controlWidth={400}>
+        <div className="flex w-full gap-2">
+          <Select
+            label={t('padpickTitle')}
+            options={options}
+            value={chosen}
+            onChange={(guid) => {
+              const device = devices.find((candidate) => candidate.guid === guid);
+              patch({ padDevice: guid, padDeviceName: device?.name ?? '' });
+            }}
+          />
+          <SecondaryButton onClick={() => void reload()}>{t('padpickRefresh')}</SecondaryButton>
+        </div>
+      </SettingRow>
+      {list === null || devices.length === 0 ? (
+        <Note>{t('padpickNone')}</Note>
+      ) : (
+        list.seenAt > 0 && <p className="px-1 text-xs text-ink-muted">{f('padpickSeen', new Date(list.seenAt * 1000).toLocaleString(lang))}</p>
+      )}
+      {current && !current.mapped && (
+        <Note tone="warn" title={t('padpickUnmappedTitle')}>
+          {f('padpickUnmappedText', current.name)}
+        </Note>
+      )}
+      {absentLast && <Note tone="warn">{t(list?.choice === 'outOfRange' ? 'padpickOutOfRange' : 'padpickAbsent')}</Note>}
+    </>
+  );
+}
+
 export function ControlsPage() {
   const { settings, patch, t, f, lang } = useApp();
   const map = useMemo(() => readBindings(settings.keys), [settings.keys]);
@@ -134,6 +194,7 @@ export function ControlsPage() {
 
   return (
     <div className="flex flex-col gap-1">
+      <ControllerPicker />
       <SettingRow icon={Gamepad2} title={t('padScheme')} description={t('padSchemeDesc')}>
         <Select
           label={t('padScheme')}

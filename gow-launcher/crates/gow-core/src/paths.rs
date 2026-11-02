@@ -48,6 +48,11 @@ impl AppPaths {
         self.logs_dir().join("previous.log")
     }
 
+    /// Where the game lists the joysticks it sees (`GOW_PAD_LIST_FILE`), for the Controls tab.
+    pub fn pad_devices_file(&self) -> PathBuf {
+        self.data.join("pads").join("devices.json")
+    }
+
     pub fn icon(&self) -> PathBuf {
         self.data.join("icon.png")
     }

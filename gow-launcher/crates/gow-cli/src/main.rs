@@ -70,6 +70,7 @@ fn print_env(file: Option<&str>, paths: &AppPaths) -> ExitCode {
         gpu: settings.gpu.clone(),
         icon: None,
         shader_cache: paths.shader_cache(),
+        pad_devices_file: Some(paths.pad_devices_file()),
         retro_achievements_password: None,
     };
     let plan = launch::build_environment(&ctx, |name| std::env::var(name).ok());

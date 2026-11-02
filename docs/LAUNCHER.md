@@ -76,7 +76,10 @@ installation folder. **Setup wizard** reopens the installer.
 Keyboard and mouse mapping (two keys per action), gamepad layout (Classic PS2, Modern DMC5 or **Custom**), the four
 face-button swaps, **Agile combat** and **ESC closes the game**. **Custom (every button)** shows 16 rows, one per button of
 the pad, each choosing the PS2 button it presses (`PC_PAD_MAP`); the first change starts from the layout in use, two buttons
-may share a target (a warning is shown), Start cannot be taken away, and **Back to a layout** clears the map. The default layout and what each action does are in
+may share a target (a warning is shown), Start cannot be taken away, and **Back to a layout** clears the map.
+**Controller** lists the joysticks the game saw the last time it ran (name, and whether the system has a button layout for
+it) and stores which one to read (`GOW_PAD_DEVICE`); Automatic leaves it to the game. The list is a file the game writes,
+`pads/devices.json`, so it is empty until the game has run once with the controller connected. The default layout and what each action does are in
 [`PLAYING.md`](PLAYING.md#keyboard-and-mouse).
 
 Click a slot, then press the new key or click a mouse button. Right click clears it. **Esc** cancels. Keys are bound by
@@ -139,6 +142,7 @@ The data folder is `%APPDATA%\GOW_PC\Launcher` on Windows and `~/.local/share/GO
 | Installation kit shipped with the launcher | `kit/` in the data folder |
 | Kit repairs (a file that went missing and was restored) | `logs/kit.log` |
 | Last game session (how it ended) and your problem markers | `logs/last-session.json`, `logs/markers.jsonl` |
+| Joysticks the game saw last time (the Controls tab's list) | `pads/devices.json` |
 | Window icon | `icon.png` in the data folder |
 | GL shader cache | `%LOCALAPPDATA%\GOW_PC\Launcher\cache\shaders` / `~/.cache/GOW_PC/Launcher/shaders` |
 | Game data, build and saves | inside your installation folder (`game/`, `build/`, `game/Mcd001.ps2`) |
@@ -184,7 +188,7 @@ Anything else shows only the raw text and the log button, as before.
 **Other, Export report** (and the same button in the failure dialog) saves a ZIP to `reports/` in the data folder and
 opens that folder; the newest ten are kept. Attach it to a GitHub issue. It holds `report.json` (launcher version, system,
 processor, memory, graphics adapters and drivers, the settings, the installation facts with the checksum of the runner and
-the CRC of the game file, the optimizer state, the environment the game would get and what the launcher knows about the last
+the CRC of the game file, the joysticks the game saw, the optimizer state, the environment the game would get and what the launcher knows about the last
 session), the launcher's logs (`last.log`, `previous.log`, `install.log`, `optimize.log`, `update.log`, `kit.log`; long
 ones keep their first 256 KiB and their end), your markers and a `README.txt`. The contents are an allowlist of file names:
 the disc image, the game file and data, saves, recorded microcode, textures, shader caches and screenshots are never

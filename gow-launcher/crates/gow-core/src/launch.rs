@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use crate::controller;
 use crate::game;
 use crate::keys;
 use crate::padmap;
@@ -34,6 +35,8 @@ pub struct LaunchContext<'a> {
     /// `icon.png` of the data folder, if it exists.
     pub icon: Option<PathBuf>,
     pub shader_cache: PathBuf,
+    /// Where the game writes the list of joysticks it sees (`GOW_PAD_LIST_FILE`); `None` leaves the variable out.
+    pub pad_devices_file: Option<PathBuf>,
     /// Only read when RetroAchievements are requested.
     pub retro_achievements_password: Option<String>,
 }
@@ -167,6 +170,15 @@ pub fn build_environment(ctx: &LaunchContext<'_>, inherited: impl Fn(&str) -> Op
     plan.flag("PC_DMC5_CONTROLS", settings.dmc5_controls, Some("0"));
     plan.text_or_remove("PC_PAD_FACE_MAP", &settings.pad_buttons);
     // Every gamepad button (padmap.rs); the game ignores an invalid value, so an invalid one is not passed at all.
+    // The controller picker: the game lists the joysticks it sees in a file of ours and reads only the chosen device (a GUID).
+    match &ctx.pad_devices_file {
+        Some(file) => plan.insert("GOW_PAD_LIST_FILE", file.to_string_lossy().into_owned()),
+        None => plan.remove("GOW_PAD_LIST_FILE"),
+    }
+    plan.text_or_remove(
+        "GOW_PAD_DEVICE",
+        if controller::is_guid(&settings.pad_device) { &settings.pad_device } else { "" },
+    );
     plan.text_or_remove("PC_PAD_MAP", if padmap::pad_map_is_valid(&settings.pad_map) { &settings.pad_map } else { "" });
     plan.flag("PC_ESC_QUITS", settings.esc_quits, Some("0"));
     plan.flag("GOW_CANCEL", settings.cancel_animations, Some("0"));
@@ -346,6 +358,7 @@ mod tests {
             gpu: "auto".into(),
             icon: None,
             shader_cache: fixture.shader_cache.clone(),
+            pad_devices_file: None,
             retro_achievements_password: None,
         };
         build_environment(&ctx, inherited)
@@ -424,10 +437,40 @@ mod tests {
             "GOW_ISO",
             "PC_PAD_FACE_MAP",
             "PC_PAD_MAP",
+            "GOW_PAD_DEVICE",
+            "GOW_PAD_LIST_FILE",
         ] {
             assert!(plan.remove.contains(name), "{name} should be removed");
         }
         assert!(value(&plan, "PC_KEYS").unwrap().starts_with("ls_up=87;"));
+    }
+
+    #[test]
+    fn the_chosen_controller_is_passed_as_its_guid_and_the_list_goes_to_our_file() {
+        let mut fixture = fixture();
+        let guid = "0300dddd5e040000a102000000010000";
+        // Nothing chosen: no GOW_PAD_DEVICE (the game picks the pad itself).
+        assert!(plan(&fixture, 2.0).remove.contains("GOW_PAD_DEVICE"));
+        fixture.settings.pad_device = guid.into();
+        assert_eq!(value(&plan(&fixture, 2.0), "GOW_PAD_DEVICE"), Some(guid));
+        // Anything that is not a GLFW GUID is not passed (a hand-edited settings file, a name in the wrong field).
+        for invalid in ["Generic X-Box pad", "0300dddd", "0300dddd5e040000a102000000010000,a:b0", ""] {
+            fixture.settings.pad_device = invalid.into();
+            assert_eq!(value(&plan(&fixture, 2.0), "GOW_PAD_DEVICE"), None, "{invalid:?}");
+        }
+        // The list file is where the launcher reads it from.
+        let ctx = LaunchContext {
+            settings: &fixture.settings,
+            scale: 2.0,
+            vu1_capture: String::new(),
+            gpu: "auto".into(),
+            icon: None,
+            shader_cache: fixture.shader_cache.clone(),
+            pad_devices_file: Some(PathBuf::from("/data/pads/devices.json")),
+            retro_achievements_password: None,
+        };
+        let plan = build_environment(&ctx, |_| None);
+        assert_eq!(value(&plan, "GOW_PAD_LIST_FILE"), Some("/data/pads/devices.json"));
     }
 
     #[test]
@@ -576,6 +619,7 @@ mod tests {
             gpu: "auto".into(),
             icon: None,
             shader_cache: fixture.shader_cache.clone(),
+            pad_devices_file: None,
             retro_achievements_password: password.map(str::to_string),
         };
         build_environment(&ctx, |_| None)

@@ -45,6 +45,10 @@ pub struct Settings {
     pub pad_buttons: String,
     /// `source=target;...` for every gamepad button (`PC_PAD_MAP`, see `padmap.rs`); empty = the preset and the face buttons above.
     pub pad_map: String,
+    /// GUID of the joystick the game reads (`GOW_PAD_DEVICE`); empty = the game picks the pad itself.
+    pub pad_device: String,
+    /// Its name, kept only to show it while the device is not connected.
+    pub pad_device_name: String,
     pub cancel_animations: bool,
     pub esc_quits: bool,
     pub minimize_on_play: bool,
@@ -98,6 +102,8 @@ impl Default for Settings {
             dmc5_controls: false,
             pad_buttons: String::new(),
             pad_map: String::new(),
+            pad_device: String::new(),
+            pad_device_name: String::new(),
             cancel_animations: true,
             esc_quits: false,
             minimize_on_play: true,
@@ -256,6 +262,8 @@ impl Settings {
         self.dmc5_controls = false;
         self.pad_buttons.clear();
         self.pad_map.clear();
+        self.pad_device.clear();
+        self.pad_device_name.clear();
         self.cancel_animations = true;
         self.esc_quits = false;
         self.minimize_on_play = true;
@@ -378,8 +386,9 @@ mod tests {
         loaded.save(&path).unwrap();
         assert!(std::fs::read_to_string(&path).unwrap().contains("\"padMap\""));
         assert_eq!(Settings::load(&path).pad_map, "a=cross;start=start");
+        loaded.pad_device = "0300dddd5e040000a102000000010000".into();
         loaded.reset_game_options(&DisplayInfo::default());
-        assert_eq!(loaded.pad_map, "");
+        assert_eq!((loaded.pad_map.as_str(), loaded.pad_device.as_str()), ("", ""));
     }
 
     #[test]

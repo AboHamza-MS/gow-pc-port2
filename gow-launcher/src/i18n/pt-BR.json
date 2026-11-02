@@ -494,5 +494,17 @@
   "padmapTarget_down": "Direcional para baixo ↓",
   "padmapTarget_left": "Direcional para a esquerda ←",
   "padmapTarget_right": "Direcional para a direita →",
-  "padmapTarget_none": "Nada"
+  "padmapTarget_none": "Nada",
+  "padpickTitle": "Controle",
+  "padpickDesc": "Qual dispositivo o jogo lê. Automático usa o primeiro controle que responder. A lista é o que o jogo viu na última vez que rodou.",
+  "padpickAuto": "Automático",
+  "padpickUnmapped": "%1 (sem layout de botões)",
+  "padpickNotSeen": "%1 (não visto da última vez)",
+  "padpickRefresh": "Atualizar",
+  "padpickNone": "Nenhum controle foi visto ainda. Abra o jogo uma vez com o controle conectado e ele aparece aqui.",
+  "padpickSeen": "Visto em %1",
+  "padpickUnmappedTitle": "O sistema não tem um layout de botões para este dispositivo",
+  "padpickUnmappedText": "O jogo veria todos os botões de %1 como soltos. Isso é comum em receptores 2.4G genéricos. Escolha outro dispositivo da lista ou jogue com o teclado.",
+  "padpickAbsent": "O dispositivo que você escolheu não estava conectado na última vez que o jogo rodou, então o jogo escolheu um controle sozinho.",
+  "padpickOutOfRange": "O dispositivo que você escolheu estava além dos quatro primeiros que o jogo consegue ler na última vez que ele rodou, então o jogo escolheu um controle sozinho."
 }

@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use gow_core::controller::{self, PadDeviceList};
 use gow_core::credential;
 use gow_core::failure::FailureKind;
 use gow_core::game::{self, DataState, DetectedPaths, ExecutableState, GameState};
@@ -459,6 +460,12 @@ fn ra_clear_credential() -> bool {
 
 // ---------------------------------------------------------------------------------------------- gamepad
 
+/// The joysticks the game saw the last time it ran (the controller picker's list); `None` before the first run.
+#[tauri::command]
+fn pad_devices(state: State<'_, AppState>) -> Option<PadDeviceList> {
+    controller::read(&state.paths.pad_devices_file())
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct GamepadFailure {
@@ -838,6 +845,7 @@ pub fn run() {
             ra_has_credential,
             ra_save_credential,
             ra_clear_credential,
+            pad_devices,
             gamepad_begin,
             gamepad_cancel,
             wizard_info,

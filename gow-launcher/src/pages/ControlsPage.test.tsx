@@ -2,15 +2,16 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from '../App';
-import { createMockApi, setApi, type MockApi } from '../lib/backend';
+import { createMockApi, dongleDevices, setApi, type MockApi } from '../lib/backend';
+import type { PadDeviceList } from '../lib/types';
 import { serializePadMap, presetLayout } from '../lib/padmap';
 
 let api: MockApi;
 
 afterEach(cleanup);
 
-async function openControls() {
-  api = createMockApi({ ready: true });
+async function openControls(padDevices?: PadDeviceList | null) {
+  api = createMockApi({ ready: true, padDevices });
   setApi(api);
   render(<App />);
   const user = userEvent.setup();
@@ -77,5 +78,44 @@ describe('custom gamepad button map', () => {
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Gamepad buttons' })).not.toBeInTheDocument());
     await waitFor(() => expect(patch).toHaveBeenLastCalledWith({ padMap: '' }));
     expect(screen.getByRole('combobox', { name: 'Gamepad layout' })).toHaveTextContent('Classic (PS2)');
+  });
+});
+
+describe('controller picker', () => {
+  const padGuid = '0300dddd5e040000a102000000010000';
+
+  it('lists what the game saw and marks the device that has no button layout', async () => {
+    const { user } = await openControls();
+    await user.click(await screen.findByRole('combobox', { name: 'Controller' }));
+    const options = within(screen.getByRole('listbox')).getAllByRole('option').map((option) => option.textContent);
+    expect(options).toEqual(['Automatic', '2.4G Consumer Control', '2.4G Keyboard', 'Generic X-Box pad (no button layout)']);
+  });
+
+  it('saves the chosen device with its name, warns about one with no layout, and goes back to automatic', async () => {
+    const { user, patch } = await openControls();
+    expect(screen.queryByText('The system has no button layout for this device')).not.toBeInTheDocument();
+    await choose(user, 'Controller', 'Generic X-Box pad (no button layout)');
+    await waitFor(() => expect(patch).toHaveBeenCalledWith(expect.objectContaining({ padDevice: padGuid, padDeviceName: 'Generic X-Box pad' })));
+    expect(await screen.findByText('The system has no button layout for this device')).toBeInTheDocument();
+    await choose(user, 'Controller', 'Automatic');
+    await waitFor(() => expect(patch).toHaveBeenLastCalledWith(expect.objectContaining({ padDevice: '', padDeviceName: '' })));
+    await waitFor(() => expect(screen.queryByText('The system has no button layout for this device')).not.toBeInTheDocument());
+  });
+
+  it('says so when the game has not listed anything yet', async () => {
+    await openControls(null);
+    expect(await screen.findByText(/No controller has been seen yet/)).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Controller' })).toHaveTextContent('Automatic');
+  });
+
+  it('keeps a chosen device that is not in the last list, and tells when the game could not find it', async () => {
+    const { user, patch } = await openControls();
+    await choose(user, 'Controller', '2.4G Keyboard');
+    await waitFor(() => expect(patch).toHaveBeenCalled());
+    // The game ran again without it plugged in.
+    vi.spyOn(api, 'padDevices').mockResolvedValue({ ...dongleDevices, choice: 'absent', devices: dongleDevices.devices.filter((d) => d.name !== '2.4G Keyboard') });
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    expect(await screen.findByText(/did not connect|was not connected the last time/)).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Controller' })).toHaveTextContent('2.4G Keyboard (not seen last time)');
   });
 });

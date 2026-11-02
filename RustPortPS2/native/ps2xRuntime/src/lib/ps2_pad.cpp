@@ -3,12 +3,15 @@
 #include "gow_pad_map.h" // GOW-Port: the pure part of the gamepad layer (button table, device choice), tested on its own
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <set>
 #include <string>
 #include <vector>
@@ -313,12 +316,132 @@ namespace
     }
 }
 
+namespace
+{
+    // GOW-Port (issue #12): the controller picker of the launcher's Controls tab.
+    //   GOW_PAD_DEVICE=<GLFW GUID>   the one device the game reads. It is looked up among the connected joysticks; when it is not
+    //                                there, or is past the four slots raylib reads, the automatic choice stays (one log line).
+    //   GOW_PAD_LIST_FILE=<path>     a JSON file listing the joysticks GLFW sees (index, name, GUID, whether an SDL mapping exists,
+    //                                counts of buttons, hats and axes), rewritten when the list changes. The launcher shows it, so
+    //                                a player can pick the real pad among the media-key and keyboard interfaces of a dongle.
+    // GLFW's joystick calls belong to the window thread, so the lookup and the file are done there (gowPadDiagFrame, twice a
+    // second) and the game's pad read only sees these two numbers.
+    std::atomic<int> g_chosenJoystick{-1}; // the chosen device's joystick id, -1 for the automatic choice
+    std::atomic<int> g_activeJoystick{-1}; // the joystick the game reads now, -1 for none (keyboard)
+
+    std::filesystem::path envPath(const char *name)
+    {
+#ifdef _WIN32
+        // The launcher hands over UTF-16; the narrow getenv would damage a path outside the ANSI code page.
+        const std::wstring wide(name, name + std::strlen(name));
+        const wchar_t *value = _wgetenv(wide.c_str());
+        return value && *value ? std::filesystem::path(value) : std::filesystem::path();
+#else
+        const char *value = std::getenv(name);
+        return value && *value ? std::filesystem::path(value) : std::filesystem::path();
+#endif
+    }
+
+    std::vector<gowpad::Device> listJoysticks()
+    {
+        std::vector<gowpad::Device> devices;
+        for (int jid = 0; jid < 16; ++jid)
+        {
+            if (!glfwJoystickPresent(jid))
+                continue;
+            gowpad::Device device;
+            device.index = jid;
+            const char *name = glfwGetJoystickName(jid);
+            const char *guid = glfwGetJoystickGUID(jid);
+            device.name = name ? name : "";
+            device.guid = guid ? guid : "";
+            device.mapped = glfwJoystickIsGamepad(jid) != 0;
+            glfwGetJoystickButtons(jid, &device.buttons);
+            glfwGetJoystickHats(jid, &device.hats);
+            glfwGetJoystickAxes(jid, &device.axes);
+            devices.push_back(device);
+        }
+        return devices;
+    }
+
+    void updateControllerPicker()
+    {
+        static int frame = 0;
+        if (frame++ % 30 != 0) // twice a second is plenty for hot-plugging
+            return;
+        static const std::string wanted = []
+        {
+            const char *value = std::getenv("GOW_PAD_DEVICE");
+            return value ? std::string(value) : std::string();
+        }();
+        static const std::filesystem::path listFile = envPath("GOW_PAD_LIST_FILE");
+        if (wanted.empty() && listFile.empty())
+            return;
+        const std::vector<gowpad::Device> devices = listJoysticks();
+        const gowpad::Pick pick = gowpad::pickDevice(devices, wanted.c_str());
+        g_chosenJoystick.store(pick.choice == gowpad::Choice::Found ? pick.index : -1);
+
+        static int loggedChoice = -1, loggedIndex = -2;
+        if (static_cast<int>(pick.choice) != loggedChoice || pick.index != loggedIndex)
+        {
+            loggedChoice = static_cast<int>(pick.choice);
+            loggedIndex = pick.index;
+            if (pick.choice == gowpad::Choice::Found)
+                std::fprintf(stderr, "[pad] chosen device %s is joystick %d\n", wanted.c_str(), pick.index);
+            else if (pick.choice == gowpad::Choice::Absent)
+                std::fprintf(stderr, "[pad] chosen device %s is not connected: choosing the pad automatically\n", wanted.c_str());
+            else if (pick.choice == gowpad::Choice::OutOfRange)
+                std::fprintf(stderr, "[pad] chosen device %s is joystick %d, past the %d slots the game reads: choosing the pad automatically\n",
+                             wanted.c_str(), pick.index, gowpad::kSlots);
+        }
+
+        if (listFile.empty())
+            return;
+#ifdef _WIN32
+        const char *platform = "windows";
+#else
+        const char *platform = "linux";
+#endif
+        const std::string json = gowpad::devicesJson(devices, pick, wanted.c_str(), g_activeJoystick.load(), platform);
+        static std::string written;
+        if (json == written)
+            return;
+        // A temporary file renamed over the real one, so the launcher never reads half a list.
+        std::error_code error;
+        std::filesystem::create_directories(listFile.parent_path(), error);
+        std::filesystem::path temporary = listFile;
+        temporary += ".tmp";
+        bool ok = false;
+        {
+            std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+            out << json;
+            ok = static_cast<bool>(out);
+        }
+        if (ok)
+        {
+            std::filesystem::rename(temporary, listFile, error);
+            ok = !error;
+        }
+        if (ok)
+            written = json;
+        else
+        {
+            static bool warned = false;
+            if (!warned)
+                std::fprintf(stderr, "[pad] could not write the device list (GOW_PAD_LIST_FILE)\n");
+            warned = true;
+            std::filesystem::remove(temporary, error);
+        }
+    }
+}
+
 // GOW-Port: window loop (gowFrameInput), the thread that owns the raylib window: GLFW's joystick calls belong to it.
-// It also gives unmapped Xbox-class pads their mapping (always, with or without GOW_PAD_DIAG); the diagnostic below runs only
-// with the variable.
+// It also gives unmapped Xbox-class pads their mapping (always, with or without GOW_PAD_DIAG), keeps the launcher's device list
+// and the chosen device up to date; the diagnostic below runs only with GOW_PAD_DIAG.
 void gowPadDiagFrame()
 {
     mapUnmappedXpads();
+    updateControllerPicker();
     if (!padDiagEnabled())
         return;
     static JoystickDiag joysticks[kDiagJoysticks];
@@ -499,6 +622,11 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     for (int i = 0; i < 4 && kGamepad < 0; ++i)
         if (IsGamepadAvailable(i))
             kGamepad = i;
+    // GOW-Port: the device chosen in the launcher (GOW_PAD_DEVICE) is the one read, whatever else is plugged in or was pressed.
+    const int chosenGamepad = g_chosenJoystick.load();
+    if (chosenGamepad >= 0 && chosenGamepad < 4 && IsGamepadAvailable(chosenGamepad))
+        kGamepad = chosenGamepad;
+    g_activeJoystick.store(kGamepad);
     const bool useGamepad = kGamepad >= 0;
     static int s_loggedGamepad = -2;
     if (kGamepad != s_loggedGamepad)

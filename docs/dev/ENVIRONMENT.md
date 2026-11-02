@@ -23,7 +23,7 @@ GOW_PERF_DIAG=1 GOW_PERF_FRAME_PC=0x001837B8
 plus, from the settings: `PC_SCREEN`, `PC_WIDTH`, `PC_HEIGHT`, `PC_TITLE`, `PC_PANEL=0`, `PC_ICON`, `PC_ASPECT`,
 `PC_WIDESCREEN`, `PC_FILTER`, `GOW_SHARPEN`, `PC_FXAA`, `GOW_PROGRESSIVE`, `GOW_SCALER`,
 `PS2X_GS_HW_SCALE`, `PC_GAME_FPS=60`, `PC_WINDOW_FPS`, `PC_VSYNC`, `PC_SHOW_FPS`, `GOW_SKIP_FMV`,
-`GOW_FAST_BOOT`, `PC_DMC5_CONTROLS`, `PC_PAD_FACE_MAP`, `PC_PAD_MAP`, `PC_KEYS`, `PC_CHEATS`, `PC_CHEATS_SHORTCUT`,
+`GOW_FAST_BOOT`, `PC_DMC5_CONTROLS`, `PC_PAD_FACE_MAP`, `PC_PAD_MAP`, `GOW_PAD_DEVICE`, `GOW_PAD_LIST_FILE`, `PC_KEYS`, `PC_CHEATS`, `PC_CHEATS_SHORTCUT`,
 `PC_LANGUAGE`, `PC_ESC_QUITS`, `GOW_CANCEL`, `GOW_ISO`, `GOW_VU1_CAPTURE`, `PS2X_GS_SHADER_CACHE_DIR`, and the
 `PC_RA_*` group when RetroAchievements is enabled.
 
@@ -65,6 +65,7 @@ arrives as `GOW_SHARPEN` and the render scale as `PS2X_GS_HW_SCALE`.
 |---|---|
 | `PC_KEYS="action=code,code;..."` | Keyboard/mouse map (`1000+n` = mouse buttons) |
 | `PC_DMC5_CONTROLS`, `PC_PAD_FACE_MAP` | Pad preset and the A/B/X/Y swap |
+| `GOW_PAD_DEVICE=<GLFW GUID>`, `GOW_PAD_LIST_FILE=<path>` | Controller picker: the one device the game reads (a GUID of the list below; absent or past raylib's four slots: automatic choice, one `[pad]` line), and the JSON file where the game lists the joysticks GLFW sees (index, name, GUID, SDL mapping yes/no, counts of buttons, hats and axes, the choice made), rewritten when the list changes. Both are set by the launcher (`gow-core/src/controller.rs`) |
 | `PC_PAD_MAP="source=target;..."` | Full gamepad map: sources `a b x y lb rb lt rt back start ls rs up down left right`, targets `cross circle square triangle l1 r1 l2 r2 select start l3 r3 up down left right none`. A source once, a source not listed presses nothing, `start` must be a target. Valid: replaces the two rows above. Invalid: ignored with one `[pad] PC_PAD_MAP ignored: <reason>` line. Rules in `gow_pad_map.h`, copy in `gow-core/src/padmap.rs` |
 | `PC_CHEATS=god_mode,...`, `PC_CHEATS_SHORTCUT`, `PC_CHEATS_DIAG`, `PC_CHEATS_OPEN_IN` | Cheats at startup, menu shortcut, diagnostics |
 | `PC_LANGUAGE=en\|pt-BR`, `PC_MENU_FONT=<ttf>` | Cheat-menu language and font |

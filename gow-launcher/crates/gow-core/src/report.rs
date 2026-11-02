@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::controller;
 use crate::game;
 use crate::gpu::GraphicsCard;
 use crate::launch::{self, LaunchContext};
@@ -259,6 +260,7 @@ fn environment_plan(request: &ReportRequest<'_>, scrubber: &Scrubber, env: &[(St
         gpu: settings.gpu.clone(),
         icon: Some(request.paths.icon()),
         shader_cache: request.paths.shader_cache(),
+        pad_devices_file: Some(request.paths.pad_devices_file()),
         retro_achievements_password: None,
     };
     let plan =
@@ -274,6 +276,34 @@ fn inherited_environment(scrubber: &Scrubber, env: &[(String, String)]) -> BTree
         .filter(|(name, _)| ENVIRONMENT_PREFIXES.iter().any(|prefix| name.starts_with(prefix)))
         .map(|(name, value)| (name.clone(), redact_environment_value(name, value, scrubber)))
         .collect()
+}
+
+/// The joysticks the game saw the last time it ran (the controller picker's list), with the names scrubbed: a Bluetooth pad is
+/// often called after its owner. The GUIDs only name a model.
+fn controller_facts(request: &ReportRequest<'_>, scrubber: &Scrubber) -> Value {
+    let Some(list) = controller::read(&request.paths.pad_devices_file()) else { return Value::Null };
+    let devices: Vec<Value> = list
+        .devices
+        .iter()
+        .map(|device| {
+            json!({
+                "index": device.index,
+                "name": scrubber.scrub(&device.name),
+                "guid": device.guid,
+                "mapped": device.mapped,
+                "buttons": device.buttons,
+                "hats": device.hats,
+                "axes": device.axes,
+            })
+        })
+        .collect();
+    json!({
+        "seenAt": (list.seen_at > 0).then(|| iso8601(list.seen_at)),
+        "choice": list.choice,
+        "active": list.active,
+        "chosenGuid": request.settings.pad_device,
+        "devices": devices,
+    })
 }
 
 /// `lastSession` of the report. A file that says the game is running while it is not (the launcher was closed or killed
@@ -318,6 +348,7 @@ pub fn report_json(
         "optimizer": request.optimizer,
         "gameEnvironment": environment_plan(request, scrubber, env),
         "launcherEnvironment": inherited_environment(scrubber, env),
+        "controllers": controller_facts(request, scrubber),
         "lastSession": last_session_facts(request, scrubber),
     })
 }
@@ -686,6 +717,31 @@ mod tests {
         assert_eq!(stale["lastSession"]["running"], false);
         assert_eq!(stale["lastSession"]["interrupted"], true);
         assert_eq!(stale["partial"], false);
+    }
+
+    #[test]
+    fn the_controllers_the_game_saw_are_listed_with_their_names_scrubbed() {
+        let world = world();
+        let file = world.paths.pad_devices_file();
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(
+            &file,
+            r#"{"schema":1,"preferred":"","choice":"automatic","active":0,"devices":[
+                {"index":0,"name":"Quentin's Xbox Controller","guid":"0300dddd5e040000a102000000010000","mapped":false,"buttons":15,"hats":1,"axes":6}]}"#,
+        )
+        .unwrap();
+        let snapshot = optimizer();
+        let scrubber = scrubber_for(&world.paths, &world.settings, &world.host);
+        let json = report_json(&request(&world, &snapshot, false), &world.host, &[], &scrubber);
+        let device = &json["controllers"]["devices"][0];
+        assert_eq!(device["name"], "<USER>'s Xbox Controller");
+        assert_eq!(device["mapped"], false);
+        assert_eq!(device["axes"], 6);
+        assert_eq!(json["controllers"]["choice"], "automatic");
+        // No list yet: null, not an error.
+        fs::remove_file(&file).unwrap();
+        let none = report_json(&request(&world, &snapshot, false), &world.host, &[], &scrubber);
+        assert!(none["controllers"].is_null());
     }
 
     #[test]

@@ -214,6 +214,71 @@ static void customMapTest()
     CHECK(tableWord(custom, 1u << BtnLeftTrigger1) == 0xFFFF);
 }
 
+// The controller picker: which joystick the game reads, and the list the launcher is given.
+static void deviceTest()
+{
+    // The dongle of issue #12: media keys, two keyboard interfaces and the real pad, which is not the first device.
+    std::vector<Device> devices(4);
+    const char *names[4] = {"2.4G Consumer Control", "2.4G Keyboard", "2.4G Mouse", "Generic X-Box pad"};
+    const char *guids[4] = {"0300aaaa5e040000a102000000010000", "0300bbbb5e040000a102000000010000", "0300cccc5e040000a102000000010000",
+                            "0300dddd5e040000a102000000010000"};
+    for (int i = 0; i < 4; ++i)
+    {
+        devices[i].index = i;
+        devices[i].name = names[i];
+        devices[i].guid = guids[i];
+        devices[i].mapped = i != 3;
+    }
+    // Nothing chosen: automatic, whatever is connected.
+    CHECK(pickDevice(devices, nullptr).choice == Choice::Automatic);
+    CHECK(pickDevice(devices, "").choice == Choice::Automatic);
+    CHECK(pickDevice({}, "").choice == Choice::Automatic);
+    // The chosen device is read, wherever it is in the list; the GUID compares without regard to case.
+    Pick pick = pickDevice(devices, guids[3]);
+    CHECK(pick.choice == Choice::Found && pick.index == 3);
+    pick = pickDevice(devices, "0300DDDD5E040000A102000000010000");
+    CHECK(pick.choice == Choice::Found && pick.index == 3);
+    pick = pickDevice(devices, guids[0]);
+    CHECK(pick.choice == Choice::Found && pick.index == 0);
+    // Not connected: the automatic choice stays (the caller logs it), and a near miss is not a match.
+    CHECK(pickDevice(devices, "0300eeee5e040000a102000000010000").choice == Choice::Absent);
+    CHECK(pickDevice(devices, "0300dddd5e040000a1020000000100").choice == Choice::Absent);
+    CHECK(pickDevice({}, guids[3]).choice == Choice::Absent);
+    // Two identical pads: the first one connected.
+    std::vector<Device> twins(3);
+    for (int i = 0; i < 3; ++i)
+        twins[i].index = i + 1, twins[i].guid = i == 0 ? "aa" : "bb";
+    twins[2].guid = "bb";
+    pick = pickDevice(twins, "bb");
+    CHECK(pick.choice == Choice::Found && pick.index == 2);
+    // Past the four slots raylib reads: reported, not read.
+    std::vector<Device> far(1);
+    far[0].index = 4;
+    far[0].guid = "cc";
+    CHECK(pickDevice(far, "cc").choice == Choice::OutOfRange && pickDevice(far, "cc").index == 4);
+    far[0].index = 3;
+    CHECK(pickDevice(far, "cc").choice == Choice::Found);
+
+    // The list file: schema, choice, active slot and one object per device, with the text escaped.
+    devices[1].name = "Pad \"Two\" \\ with\ttab\nand a line";
+    const std::string json = devicesJson(devices, pickDevice(devices, guids[3]), guids[3], 3, "windows");
+    CHECK(json.find("\"schema\":1") != std::string::npos);
+    CHECK(json.find("\"platform\":\"windows\"") != std::string::npos);
+    CHECK(json.find("\"choice\":\"found\"") != std::string::npos);
+    CHECK(json.find("\"active\":3") != std::string::npos);
+    CHECK(json.find("\"preferred\":\"0300dddd5e040000a102000000010000\"") != std::string::npos);
+    CHECK(json.find("\"name\":\"Pad \\\"Two\\\" \\\\ with\\ttab\\nand a line\"") != std::string::npos);
+    CHECK(json.find("\"name\":\"Generic X-Box pad\",\"guid\":\"0300dddd5e040000a102000000010000\",\"mapped\":false") != std::string::npos);
+    CHECK(json.find('\n') == std::string::npos && json.find('\t') == std::string::npos);
+    int objects = 0;
+    for (size_t at = json.find("{\"index\""); at != std::string::npos; at = json.find("{\"index\"", at + 1))
+        ++objects;
+    CHECK(objects == 4);
+    CHECK(devicesJson({}, Pick{}, nullptr, -1, "linux") == "{\"schema\":1,\"platform\":\"linux\",\"preferred\":\"\",\"choice\":\"automatic\",\"active\":-1,\"devices\":[]}");
+    // A control character that has no short escape.
+    CHECK(jsonString(std::string("a") + '\x01' + "b") == "\"a\\u0001b\"");
+}
+
 // The table of cases the launcher's tests share (padmap-cases.json): one case per line, `"value": "...", "valid": true|false`.
 static void sharedCasesTest(const char *path)
 {
@@ -244,6 +309,7 @@ int main(int argc, char **argv)
 {
     oracleTest();
     customMapTest();
+    deviceTest();
     if (argc > 1)
         sharedCasesTest(argv[1]);
     if (g_failures == 0)

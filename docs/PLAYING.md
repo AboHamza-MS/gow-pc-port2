@@ -97,6 +97,10 @@ If you prefer the original timing, turn the switch off.
 - **Custom (every button)** in **Controls** gives each of A, B, X, Y, LB, RB, LT, RT, Back, Start, both stick presses and the
   four d-pad directions its own PS2 button (or Nothing). It starts from the layout you were using. Two buttons may press the
   same PS2 button; Start has to stay on some button. The sticks and the guide button are not remappable.
+- **Choosing the controller**: the game normally follows the first controller that answers. A receiver or a PC with several
+  devices (a 2.4G dongle lists a media-keys device, keyboards and the real pad) can make that the wrong one: **Controls →
+  Controller** lists what the game saw the last time it ran, marks the devices the system has no button layout for, and lets
+  you pick the one to read. The list fills in after the first run with the controller connected.
 - **Vibration works on Windows only**: the Linux build has no rumble.
 - Only port 1 is connected: the game's second controller slot does nothing.
 
