@@ -101,6 +101,7 @@ install.cmd -Destination "D:\GodOfWar"               # keep the game data and th
 | `-Seconds <n>` | Duration of the optimization run (default 240 s) |
 | `-Jobs <n>` | Parallel compiler processes. Default: the logical processors minus a reserve (2 from 8 processors, 1 from 4 to 7, none below), at most one per 2 GB of RAM. An explicit value skips the reserve |
 | `-NormalPriority` | Keep the build at normal priority. By default the installer lowers its own priority to below normal, so the PC stays usable while the game builds (the compilers inherit it; the optimization run of the game runs at normal priority) |
+| `-SkipCpuCheck` | Do not stop on a processor without SSE4.1. By default the installer checks it first, before downloading or building anything, and stops with an `[error]` line (exit code 1) explaining that the game cannot run there. Use the switch only if a virtual machine hides a feature the CPU really has |
 | `-Vu1MemoryLimitGB <4-8>` | RAM cap for the VU1 generator (default 4 GB, `0` = unlimited) |
 | `-Vu1BuildDir <folder>` | Use an existing VU1 microcode folder instead of `vu1_captures\` |
 | `-FastDev` | `RelWithDebInfo`, logs on, console visible. For iterating; **not** for measuring performance |

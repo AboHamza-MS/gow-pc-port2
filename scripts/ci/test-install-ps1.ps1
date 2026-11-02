@@ -26,5 +26,22 @@ $jobCases = @(
 )
 foreach ($c in $jobCases) { Expect "$($c[0]) cores, $($c[1]) GB" $c[2] (Get-BuildJobs $c[0] $c[1]) }
 
+Write-Host 'processor check (A16): the decision with the API result injected'
+$requirement = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$CpuRequirement' }, $true)
+if (-not $requirement) { throw 'install.ps1 does not define $CpuRequirement' }
+. ([scriptblock]::Create($requirement.Extent.Text))
+. ([scriptblock]::Create((Get-ScriptFunction 'Get-CpuProblem')))
+. ([scriptblock]::Create((Get-ScriptFunction 'Test-Sse41')))
+function Warn([string]$t) { Write-Host "  (warning) $t" }
+Expect 'SSE4.1 present: nothing to report' $null (Get-CpuProblem $true)
+Expect 'the query could not be made: fail open' $null (Get-CpuProblem $null)
+$message = Get-CpuProblem $false
+Expect 'SSE4.1 absent: the message names SSE4.1' $true ($message -like "*does not support SSE4.1, which the game needs (Intel Core 2 'Penryn' from 2008 or newer, AMD 'Bulldozer' from 2011 or newer). The game cannot run here, so the installation is blocked.")
+# The real query on this machine: only its type is asserted (a CI runner or a virtual machine may or may not report the feature);
+# $null is allowed (another architecture, or the type could not be added).
+$live = Test-Sse41
+Expect 'the live query answers true, false or nothing' $true (($null -eq $live) -or ($live -is [bool]))
+Write-Host "  info: this machine reports SSE4.1 = $(if ($null -eq $live) { 'unknown' } else { $live })"
+
 if ($failures -gt 0) { Write-Host "$failures test(s) failed"; exit 1 }
 Write-Host 'all passed'
