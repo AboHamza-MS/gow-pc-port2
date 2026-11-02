@@ -123,8 +123,26 @@ function GetPortableGit {
     return (Join-Path $dir 'cmd')
 }
 
+# GOW-Port: every Visual Studio on the PC, with or without the C++ compiler. Issue #14: someone who had installed Visual Studio
+# themselves still reached the Build Tools installer below, which ended with code 1 after 3 seconds, and the log said nothing about
+# what was already installed.
+function VsInstallations {
+    $vw = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path -LiteralPath $vw)) { return @() }
+    try { $all = @((@(& $vw -all -prerelease -products * -format json) -join "`n") | ConvertFrom-Json) } catch { return @() }
+    foreach ($i in $all) {
+        if (-not $i.installationPath) { continue }
+        $cpp = Test-Path -LiteralPath (Join-Path $i.installationPath 'VC\Tools\MSVC')
+        [pscustomobject]@{
+            Cpp  = $cpp
+            Text = "$($i.displayName) $($i.installationVersion) in $($i.installationPath): C++ compiler $(if ($cpp) { 'present' } else { 'missing' }), complete $($i.isComplete), restart pending $($i.isRebootRequired)"
+        }
+    }
+}
 function InstallVsBuildTools {
     Step 'Installing Visual Studio 2022 Build Tools (C++): asks for administrator permission; 15-30 min'
+    $existing = @(VsInstallations)
+    foreach ($e in $existing) { Write-Host "  Visual Studio found: $($e.Text)" }
     $bootstrap = Join-Path $Toolchain 'vs_BuildTools.exe'
     Download 'https://aka.ms/vs/17/release/vs_BuildTools.exe' $bootstrap
     CheckSignature $bootstrap 'Microsoft Corporation'
@@ -144,6 +162,10 @@ function InstallVsBuildTools {
         foreach ($log in $logs) {
             Write-Host "  $($log.Name):"
             Select-String -LiteralPath $log.FullName -Pattern 'error|failed|exit code' -ErrorAction SilentlyContinue | Select-Object -Last 6 | ForEach-Object { Write-Host "    $($_.Line.Trim())" }
+        }
+        $noCpp = @($existing | Where-Object { -not $_.Cpp })
+        if ($noCpp) {
+            Fail "The Visual Studio installer ended with code $($p.ExitCode). A Visual Studio is already installed without the C++ compiler ($($noCpp[0].Text)): open its Visual Studio Installer, choose Modify, tick ""Desktop development with C++"", install, and run this installation again without asking for the tools. Details: $env:TEMP\dd_*.log"
         }
         Fail "The Visual Studio installer ended with code $($p.ExitCode). Close any open Visual Studio Installer window, restart Windows if an installation is pending, and try again; if you already installed Visual Studio yourself, run this installation again without asking for the tools. Details: $env:TEMP\dd_*.log"
     }
