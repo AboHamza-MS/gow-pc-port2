@@ -67,6 +67,11 @@ if ($Destination) {
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
     $DataRoot = (Resolve-Path -LiteralPath $Destination).Path
 }
+# GOW-Port: the build writes deep paths (build\ps2xRuntime\CMakeFiles\...). A long folder, one with spaces or one with accents made steps
+# fail with path errors (issue #15: it worked after moving to a short folder). Only a warning: it does not fail for everyone.
+if ($DataRoot -match '\s' -or $DataRoot -match '[^\x20-\x7E]' -or $DataRoot.Length -gt 60) {
+    Write-Host "[warning] The folder $DataRoot has spaces, accents or a long path. If a step fails with a path error, install to a short folder without spaces, for example D:\GoW."
+}
 $Build = if ($Destination) { Join-Path $DataRoot 'build' } else { Join-Path $Native $(if ($FastDev) { 'build-dev' } else { 'build' }) }
 $Game = Join-Path $DataRoot 'game'
 $Vu1 = Join-Path $DataRoot 'vu1_captures'
@@ -268,7 +273,12 @@ function LoadVsEnvironment {
             }
             # GOW-Port: only the compiler is required here. The newest Visual Studio may lack the "C++ CMake tools" component (a Visual
             # Studio 18 Community without it, issue #9): cmake and ninja are looked up in every installation, or installed, right below.
-            if (Get-Command cl -ErrorAction SilentlyContinue) { $script:vs = $path; return }
+            # GOW-Port: and the Windows SDK's resource compiler. A Visual Studio 18 with the compiler but no Windows SDK passed this
+            # point and then stopped inside CMake's compiler test with "cmake ended with code 1" (rc and mt not found, issue #9).
+            $hasCl = [bool](Get-Command cl -ErrorAction SilentlyContinue)
+            $hasRc = [bool](Get-Command rc -ErrorAction SilentlyContinue)
+            if ($hasCl -and $hasRc) { $script:vs = $path; return }
+            if ($hasCl) { $notes += "$path : $($l.Name) put cl in PATH but not rc.exe (the Windows SDK is not installed)"; continue }
             $tail = if (Test-Path -LiteralPath $outFile) { @(Get-Content -LiteralPath $outFile -Tail 8 -ErrorAction SilentlyContinue) } else { @() }
             $notes += "$path : $($l.Name) did not put cl in PATH; its output: $($tail -join ' | ')"
         }
@@ -281,6 +291,10 @@ function LoadVsEnvironment {
     # GOW-Port: vcvars64.bat is written long before the compiler (about 14 minutes in a clean Visual Studio 2026 install), so running
     # this while the Visual Studio installer is still working finds the loader without the compiler. Issue #14 showed exactly that.
     $installing = @(Get-Process -Name 'vs_installer', 'vs_installershell', 'vs_setup_bootstrapper', 'vs_BuildTools', 'vs_community', 'setup' -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like 'vs_*' -or $_.Path -match 'Visual Studio' })
+    $noSdk = (Get-Command cl -ErrorAction SilentlyContinue) -and -not (Get-Command rc -ErrorAction SilentlyContinue)
+    if ($noSdk -and -not $installing) {
+        Fail "The C++ compiler is installed ($($instances[0])) but the Windows SDK is not (rc.exe was not found), and the build needs it. Open the Visual Studio Installer, choose Modify, and tick a Windows SDK (for example ""Windows 11 SDK"") under ""Desktop development with C++"" or ""Individual components""; then run this installation again. Finished steps are kept."
+    }
     if ($installing) {
         Fail "A Visual Studio installer is open or still working ($(($installing | ForEach-Object { $_.ProcessName } | Sort-Object -Unique) -join ', ')), and the C++ compiler is not there yet. Wait for the installation to finish (the Visual Studio Installer window shows its progress), restart Windows if it asks, and run this installation again."
     }

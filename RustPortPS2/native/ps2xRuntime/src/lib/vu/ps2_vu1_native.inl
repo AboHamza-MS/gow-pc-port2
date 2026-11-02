@@ -653,7 +653,9 @@ void VU1NativeAccess::codeChanged(VU1Interpreter::NativeState &ns, const uint8_t
 {
     using NS = VU1Interpreter::NativeState;
     constexpr uint32_t kPairs = sizeof(ns.code) / 8u;
-    static_assert(kPairs == std::size(ns.slots));
+    // GOW-Port: sizeof, not std::size(ns.slots): a reference parameter in a constant expression is rejected by MSVC 19.40
+    // (Visual Studio 2022 17.10, error C2131, issue #19), while sizeof does not evaluate its operand.
+    static_assert(kPairs == sizeof(ns.slots) / sizeof(ns.slots[0]));
     ++ns.codeChanges;
     if (!ns.codeValid)
     {
