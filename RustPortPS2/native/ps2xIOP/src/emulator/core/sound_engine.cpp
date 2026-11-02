@@ -477,8 +477,11 @@ namespace ps2x::iop::detail
         step <<= std::max(0, 11 - shiftValue);
         if (exponential && increase && v.envelope > 0x6000)
             cycles *= 4u;
+        // GOW-Port: an arithmetic shift, as on the hardware (and in PCSX2): the division truncated toward zero, so for a small
+        // |step * envelope| the step became 0 and the exponential release / decay stalled above 0 (a keyed-off voice never
+        // went silent and stayed taken). The shift rounds toward minus infinity and always moves by at least 1.
         if (exponential && !increase)
-            step = step * v.envelope / 0x8000;
+            step = (step * v.envelope) >> 15;
 
         if (++v.envelopeCounter >= cycles)
         {
@@ -663,6 +666,43 @@ namespace ps2x::iop::detail
         for (uint64_t i = 0; i < samples; ++i)
             step();
         m_lastCycle += samples * CyclesPerSample;
+        // GOW_SND_VOICE_DIAG=1: every 5 s of mixed audio, per core: voices taken (active), in release, in release with an
+        // envelope below 0x2000 (the ones a stalled release leaves behind) and the most taken at the end of any call
+        static const bool voiceDiag = std::getenv("GOW_SND_VOICE_DIAG") != nullptr;
+        if (voiceDiag && samples != 0u)
+        {
+            static uint64_t totalSamples = 0, windowSamples = 0;
+            static uint32_t peakActive[2] = {};
+            uint32_t active[2] = {}, release[2] = {}, releaseLow[2] = {};
+            for (uint32_t core = 0; core < 2u; ++core)
+            {
+                for (const Voice &v : m_cores[core].voices)
+                {
+                    if (!v.active)
+                        continue;
+                    ++active[core];
+                    if (v.phase == Voice::Phase::Release)
+                    {
+                        ++release[core];
+                        if (v.envelope < 0x2000)
+                            ++releaseLow[core];
+                    }
+                }
+                peakActive[core] = std::max(peakActive[core], active[core]);
+            }
+            totalSamples += samples;
+            windowSamples += samples;
+            if (windowSamples >= 240000u)
+            {
+                std::fprintf(stderr,
+                             "[gow-voices] t=%llu core0 active=%u/%u release=%u release_low=%u peak_active=%u | core1 active=%u/%u "
+                             "release=%u release_low=%u peak_active=%u\n",
+                             static_cast<unsigned long long>(totalSamples / 48000u), active[0], VoicesPerCore, release[0],
+                             releaseLow[0], peakActive[0], active[1], VoicesPerCore, release[1], releaseLow[1], peakActive[1]);
+                windowSamples = 0;
+                peakActive[0] = peakActive[1] = 0;
+            }
+        }
     }
 
     size_t SoundEngine::pendingFrames() const

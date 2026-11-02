@@ -62,6 +62,10 @@ The sample clock is the IOP cycles the EE granted (`IopEmulator::runCycles`), cl
   outside `runCycles`.
 - `GOW_SND_REGLOG=1`: `[snd-reg]` for core-level writes (MMIX, master/effect/aux/stream volumes). `GOW_SND_DIAG=1`
   logs the core input stream calls, and `GOW_AUDIO_RAW=<file>` writes the mix before rate adaptation.
+- `GOW_SND_VOICE_DIAG=1`: `[gow-voices]` every 5 s of mixed audio, per core: voices taken (`active`), in release, in release
+  with an envelope below 0x2000 (`release_low`, the voices a stalled release would leave taken) and the most taken at the end
+  of any engine step (`peak_active`). After a fight `active` and `release_low` should fall back to the voices that still sound.
+  `RustPortPS2/native/tools/audio/sound_engine_regression.cpp` checks the envelope and mix cases without the game.
 
 ## Video path (FMV)
 
@@ -151,6 +155,7 @@ produced and the decoder time; that line measures the residual audio-behind-pict
 | `GOW_IOP_DRIFT` | Granted vs advanced IOP cycles and the top outside calls, every ~5 s | `ps2xIOP/src/emulator/iop_emulator.cpp` |
 | `GOW_SND_REGLOG` | Core-level parameter writes (MMIX, master/effect/aux/stream volumes) | `ps2xIOP/src/emulator/core/sound_engine.cpp` |
 | `GOW_SND_DIAG` | Core input stream calls with the device position, and core volumes | `ps2xIOP/src/native/iop_native_overrides.cpp` |
+| `GOW_SND_VOICE_DIAG` | `[gow-voices]` every 5 s: voices taken, in release, stuck in release, peak per core | `ps2xIOP/src/emulator/core/sound_engine.cpp` |
 | `GOW_SKIP_FMV` | `1` replaces the movie API: movies are skipped and the game continues | `ps2xRuntime/src/game/gow_overrides.cpp` |
 | `GOW_MOVIE_OVERRIDE` | Movie names played instead of the loaded ones, one per load | `ps2xRuntime/src/game/gow_movie.cpp` |
 | `GOW_MPEG_DIAG` | Pictures, callbacks, refusals, `[MPEG:sync]`, loaded names; `=2` all reads | `ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp`, `gow_movie.cpp` |

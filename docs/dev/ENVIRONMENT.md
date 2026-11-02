@@ -94,6 +94,7 @@ arrives as `GOW_SHARPEN` and the render scale as `PS2X_GS_HW_SCALE`.
 | `GOW_IO_HIST=<s>`, `GOW_IOP_IO_HIST=<s>` | Which hardware registers the game still touches, within `<s>` seconds |
 | `GOW_VIF_DIAG=1`, `GOW_XGKICK_IMMEDIATE=1`, `GOW_VU1F_*` | VIF/GIF packet diagnostics |
 | `GOW_AUDIO_STATS=1`, `GOW_IOP_DRIFT=1`, `GOW_SND_REGLOG=1`, `GOW_SND_DIAG=1` | Sound: frame counts, IOP drift, register writes |
+| `GOW_SND_VOICE_DIAG=1` | Sound: `[gow-voices]` every 5 s with the SPU2 voices taken, in release and stuck in release |
 | `GOW_MPEG_DIAG=1`, `GOW_MPEG_PACE`, `GOW_MOVIE_OVERRIDE` | Movie playback and A/V sync |
 | `GOW_RENDER_DIAG=1`, `GOW_PATH_DIAG=1`, `GOW_ANM_DIAG=1`, `GOW_SKEL_DIAG=1`, `GOW_MODEL_DIAG=1` | Renderer, node search, animation, skeleton |
 | `GOW_GS_REPLAY_TRACE`, `GOW_GS_REPLAY_AFTER`, `GOW_GS_REPLAY_SECONDS`, `GOW_GS_REPLAY_TEXFLUSH` | Record a GS command stretch. The recording works, but the consumer (`replay_gs`) does not build in this tree; use `GOW_VIF_CAPTURE` plus `replay_vif_chain` for VIF1/VU1 work |
