@@ -1,6 +1,6 @@
 <div align="center">
 
-# God of War - port nativo para PC
+<img src="https://i.ibb.co/FLBHkcHL/god-of-war-native-pc-port-banner.png" alt="God of War: port nativo para PC" width="100%">
 
 [English](README.md) · **Português (Brasil)**
 
