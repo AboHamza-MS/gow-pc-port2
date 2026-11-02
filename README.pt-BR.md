@@ -112,7 +112,7 @@ nativas das bibliotecas que ele chama.
 
 - **Sua própria ISO de *God of War* (EUA, `SCUS-97399`)**, cerca de 8 GB.
 - **~30 GB livres** (disco extraído + build).
-- **CPU x86 de 64 bits**, 4 núcleos ou mais recomendado. AVX2 **não** é necessário.
+- **CPU x86 de 64 bits com SSE4.1** (Intel Core 2 "Penryn", 2008, ou mais nova; AMD "Bulldozer", 2011, ou mais nova; o AMD Phenom II não tem), 4 núcleos ou mais recomendado. AVX2 **não** é necessário.
 - **GPU com OpenGL 4.6** (qualquer NVIDIA/AMD recente, ou iGPU recente da Intel/AMD).
 - **8 GB de RAM** (16 GB para compilar com folga).
 - **Windows 10/11 x64** ou um Linux recente (Arch/CachyOS, Ubuntu 24.04+, Fedora 40+) - Linux é experimental.

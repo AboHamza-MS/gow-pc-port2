@@ -21,7 +21,7 @@ PS2. On Windows a launcher does all of it for you, and two installer scripts cov
 |---|---|
 | **Game** | Your own *God of War* (USA, `SCUS-97399`) disc image (`.iso`, about 8 GB). Rip it from your own disc with any DVD tool. Please don't pirate it |
 | **Disk** | About **30 GB** free (the extracted disc is about 8 GB, the build a few more) |
-| **CPU** | 64-bit x86, 4 cores or more recommended. AVX2 is **not** required by the shipped build |
+| **CPU** | 64-bit x86 with **SSE4.1** (Intel Core 2 "Penryn", 2008, or newer; AMD "Bulldozer", 2011, or newer; the AMD Phenom II does not have it), 4 cores or more recommended. AVX2 is **not** required by the shipped build |
 | **RAM** | 8 GB (16 GB recommended while building) |
 | **GPU** | OpenGL 4.3 or newer (the renderer asks for 4.6 first and falls back down to 4.3; 4.6 is the tested path): any recent NVIDIA/AMD card, or the integrated graphics of a recent Intel/AMD CPU |
 | **OS** | Windows 10/11 x64, or Linux: Arch/CachyOS, Ubuntu 24.04+, Fedora 40+ or similar (**experimental**, see above) |
@@ -55,6 +55,12 @@ The launcher's own documentation (tabs, options, paths, logs) is in [`LAUNCHER.m
 the button downloads and installs it and restarts the launcher (it waits while the game, an installation or an
 optimization is running). **Other, Automatic updates** does the same by itself at start-up; it is off by default. Your
 settings and the game are kept. Details: [`LAUNCHER.md`](LAUNCHER.md#updating-the-launcher).
+
+**Game fixes after a launcher update.** The game itself is not replaced by a launcher update: it is a build made on your
+PC. When the new launcher carries game fixes your build lacks, **Performance** shows a **Rebuild now** note. The rebuild
+reuses what is already built, so it is much shorter than the first installation, but it can still take over an hour when a
+fix changes a header the whole game includes. Until it finishes you keep playing the current build. Details:
+[`LAUNCHER.md`](LAUNCHER.md#performance).
 
 ## Windows: the portable zip
 

@@ -36,6 +36,9 @@ describe('translations', () => {
       // The reasons an update waits (`UpdateBlocker`), and the two notes of a copy that cannot update itself.
       ...['game', 'installation', 'optimizer', 'texturePack'].map((blocker) => `updateBlocked_${blocker}`),
       'updatePortableNote', 'updateManualNote',
+      // The failures the launcher explains (`FailureKind::key` in gow-core).
+      ...['game', 'installation', 'optimizer', 'texturePack'].map((blocker) => `rebuildBlocked_${blocker}`),
+      'failureKitFile', 'failureCmakeUnusable', 'failureDownload', 'failureOpenGl', 'failureMissingDll', 'failureBadImage',
     ];
     expect(keys.filter((key) => !(key in en))).toEqual([]);
   });

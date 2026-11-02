@@ -3,13 +3,15 @@ import { getApi, noUpdate, type Api } from '../lib/backend';
 import { asLanguage, format, formatDuration, systemLocale, translate } from '../lib/i18n';
 import { gigabytes, nextOverall } from '../lib/texturePack';
 import type {
-  Bootstrap, GameFinished, GameStatus, Language, LaunchError, OptimizerSnapshot, Settings, TexturePackOutcome,
+  Bootstrap, GameFinished, GameStatus, Language, LaunchError, OptimizerSnapshot, RebuildState, Settings, TexturePackOutcome,
   TexturePackProgress, TexturePackStatus, UpdateBlocker, UpdateState,
 } from '../lib/types';
 
 export interface ErrorNotice {
   text: string;
   detail: string;
+  /** A short explanation of a recognized cause, shown above the raw detail. */
+  hint: string;
 }
 
 /**
@@ -48,7 +50,7 @@ export interface AppContextValue {
   toast: string;
   notify: (text: string) => void;
   error: ErrorNotice | null;
-  showError: (text: string, detail?: string) => void;
+  showError: (text: string, detail?: string, hint?: string) => void;
   dismissError: () => void;
   wizardOpen: boolean;
   openWizard: () => void;
@@ -68,6 +70,11 @@ export interface AppContextValue {
   installUpdate: () => Promise<void>;
   /** The notice's button in a portable copy or a package install: opens the release page. */
   openUpdatePage: () => Promise<void>;
+  /** The game build is older than the runtime sources of this launcher: the Performance tab offers a rebuild. */
+  rebuild: RebuildState;
+  /** What a rebuild must not interrupt (the same reasons as an update), `null` when it can start. */
+  rebuildBlocker: UpdateBlocker | null;
+  startRebuild: () => Promise<void>;
 }
 
 const Context = createContext<AppContextValue | null>(null);
@@ -77,6 +84,8 @@ export function useApp(): AppContextValue {
   if (!value) throw new Error('useApp outside of AppProvider');
   return value;
 }
+
+const noRebuild: RebuildState = { needed: false, kit: '', built: '', announce: false };
 
 const idleOptimizer: OptimizerSnapshot = {
   configured: false, compiling: false, captured: 0, compiled: 0, completionRatio: 1, buildProgress: -1, status: 'disabled',
@@ -101,6 +110,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [closeBlocked, setCloseBlocked] = useState(false);
   const [update, setUpdate] = useState<UpdateState>(noUpdate);
   const [installing, setInstalling] = useState(false);
+  const [rebuild, setRebuild] = useState<RebuildState>(noRebuild);
+  const wasCompiling = useRef(false);
   const textureActive = useRef(false);
   textureActive.current = textureInstall.active;
   const pending = useRef<Partial<Settings>>({});
@@ -119,7 +130,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(''), TOAST_MS);
   }, []);
-  const showError = useCallback((text: string, detail = '') => setError({ text, detail }), []);
+  const showError = useCallback((text: string, detail = '', hint = '') => setError({ text, detail, hint }), []);
 
   const adoptSettings = useCallback((next: Settings) => setSettings({ ...next, ...pending.current }), []);
 
@@ -162,13 +173,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Whether the game build is older than the runtime sources of this launcher. `first` is the check at start-up, the one
+  // that announces it with a toast (once per kit digest; the backend decides).
+  const refreshRebuild = useCallback(
+    async (first = false) => {
+      if (!api) return;
+      const state = await api.rebuildState().catch(() => noRebuild);
+      setRebuild((before) => {
+        if (before.needed && !state.needed && !first) {
+          notify(translate(asLanguage(settingsRef.current?.language ?? 'en'), 'rebuildDone'));
+        }
+        return state;
+      });
+      if (state.announce) notify(translate(asLanguage(settingsRef.current?.language ?? 'en'), 'rebuildToast'));
+    },
+    [api, notify],
+  );
+
   // Events from the Rust side.
   useEffect(() => {
     if (!api) return;
     const stops: Array<Promise<() => void>> = [
       api.on('settings-changed', adoptSettings),
       api.on('game-running', setGameRunning),
-      api.on('optimizer', setOptimizer),
+      api.on('optimizer', (snapshot: OptimizerSnapshot) => {
+        setOptimizer(snapshot);
+        // A rebuild that just ended may have cleared the need (or not, if it failed): ask again.
+        if (wasCompiling.current && !snapshot.compiling) void refreshRebuild();
+        wasCompiling.current = snapshot.compiling;
+      }),
       api.on('texture-pack-progress', (event: TexturePackProgress) => {
         textureActive.current = true;
         setTextureInstall((current) => ({
@@ -195,10 +228,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       api.on('close-blocked', () => setCloseBlocked(true)),
       api.on('update-state', setUpdate),
       api.on('install-progress', () => setInstalling(true)),
-      api.on('install-done', () => setInstalling(false)),
+      api.on('install-done', () => {
+        setInstalling(false);
+        void refreshRebuild();
+      }),
       api.on('game-finished', (finished: GameFinished) => {
         if (finished.failed) {
-          showError(format(asLanguage(settingsRef.current?.language ?? 'en'), 'finishedFailure', finished.code ?? '?'), finished.summary);
+          const language = asLanguage(settingsRef.current?.language ?? 'en');
+          showError(
+            format(language, 'finishedFailure', finished.code ?? '?'),
+            finished.summary,
+            finished.failureKind ? translate(language, finished.failureKind) : '',
+          );
         } else {
           const language = asLanguage(settingsRef.current?.language ?? 'en');
           notify(format(language, 'finishedOk', formatDuration(language, finished.seconds)));
@@ -208,11 +249,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void api.isGameRunning().then(setGameRunning);
     void api.optimizerSnapshot().then(setOptimizer);
     void api.updateState().then(setUpdate);
+    void refreshRebuild(true);
     void refreshStatus();
     return () => {
       stops.forEach((stop) => void stop.then((off) => off()));
     };
-  }, [api, adoptSettings, notify, showError, refreshStatus]);
+  }, [api, adoptSettings, notify, showError, refreshStatus, refreshRebuild]);
 
   useEffect(() => {
     void refreshStatus();
@@ -282,6 +324,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await api?.updateOpenRelease();
   }, [api]);
 
+  const rebuildBlocker = updateBlocker;
+  const startRebuild = useCallback(async () => {
+    if (!api) return;
+    const language = asLanguage(settingsRef.current?.language ?? 'en');
+    try {
+      await api.rebuildStart();
+      notify(translate(language, 'rebuildStarted'));
+    } catch (failure) {
+      const code = String(failure);
+      notify(translate(language, code.startsWith('busy:') ? `rebuildBlocked_${code.slice(5)}` : 'rebuildUnavailable'));
+    }
+  }, [api, notify]);
+
   const keepInstalling = useCallback(() => setCloseBlocked(false), []);
   const closeAnyway = useCallback(() => {
     setCloseBlocked(false);
@@ -321,13 +376,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       dismissError: () => setError(null), wizardOpen, openWizard: () => setWizardOpen(true),
       closeWizard: () => setWizardOpen(false), adoptSettings,
       textureInstall, installTexturePack, closeBlocked, keepInstalling, closeAnyway,
-      update, updateBlocker, installUpdate, openUpdatePage,
+      update, updateBlocker, installUpdate, openUpdatePage, rebuild, rebuildBlocker, startRebuild,
     };
   }, [
     api, boot, settings, patch, flush, reset, lang, t, f, duration, status, refreshStatus, detectPaths, gameRunning,
     optimizer, play, stop, toast, notify, error, showError, wizardOpen, adoptSettings,
     textureInstall, installTexturePack, closeBlocked, keepInstalling, closeAnyway,
-    update, updateBlocker, installUpdate, openUpdatePage,
+    update, updateBlocker, installUpdate, openUpdatePage, rebuild, rebuildBlocker, startRebuild,
   ]);
 
   if (!value) return null;

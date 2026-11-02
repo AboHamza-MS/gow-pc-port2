@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gow_core::credential;
+use gow_core::failure::FailureKind;
 use gow_core::game::{self, DataState, DetectedPaths, ExecutableState, GameState};
 use gow_core::gamepad::{self, Capture, CaptureResult};
 use gow_core::gpu::{self, GraphicsCard};
@@ -16,7 +17,8 @@ use gow_core::optimizer::{self, Optimizer, OptimizerSnapshot};
 use gow_core::paths::AppPaths;
 use gow_core::process::{self, GameSession, StartOptions};
 use gow_core::settings::{DisplayInfo, Settings};
-use gow_core::{display, kit, legacy, shortcut, textures};
+use gow_core::update::Activity;
+use gow_core::{display, kit, legacy, rebuild, shortcut, textures};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
@@ -453,8 +455,10 @@ struct WizardInfo {
 #[tauri::command]
 fn wizard_info(state: State<'_, AppState>) -> WizardInfo {
     let script = install_script(&state);
+    let mut environment = installer::check_environment(script.as_deref());
+    environment.kit_missing = kit::missing_for_script(script.as_deref(), &state.paths.kit_dir());
     WizardInfo {
-        environment: installer::check_environment(script.as_deref()),
+        environment,
         has_manifest: script.as_deref().is_some_and(installer::has_manifest),
         default_destination: installer::default_destination(),
     }
@@ -502,6 +506,8 @@ fn install_start(app: AppHandle, state: State<'_, AppState>, arguments: InstallA
         return Err("an installation is already running".into());
     }
     let script = install_script(&state).ok_or("install.ps1 was not found next to the launcher.")?;
+    let script_used = script.clone();
+    let destination_used = arguments.destination.clone();
     let request = InstallRequest {
         script,
         iso: arguments.iso,
@@ -516,8 +522,20 @@ fn install_start(app: AppHandle, state: State<'_, AppState>, arguments: InstallA
         move |progress| {
             let _ = progress_app.emit("install-progress", progress);
         },
-        move |outcome| {
-            *done_app.state::<AppState>().installation.lock().unwrap() = None;
+        move |mut outcome| {
+            let state = done_app.state::<AppState>();
+            *state.installation.lock().unwrap() = None;
+            // A kit file that is gone explains any failure better than the script's own message.
+            if !outcome.ok
+                && !outcome.cancelled
+                && !kit::missing_for_script(Some(&script_used), &state.paths.kit_dir()).is_empty()
+            {
+                outcome.failure_kind = Some(FailureKind::KitFile.key().to_string());
+            }
+            // The build was made from the kit's sources: record it, so no rebuild is offered for what was just installed.
+            if outcome.ok && script_used.starts_with(state.paths.kit_dir()) {
+                rebuild::record_build(&state.paths.kit_dir(), Path::new(&destination_used));
+            }
             let _ = done_app.emit("install-done", outcome);
         },
     )
@@ -571,6 +589,40 @@ fn optimize_now(state: State<'_, AppState>) {
     state.optimizer.optimize_now();
 }
 
+// ---------------------------------------------------------------------------------------------- rebuild after an update
+
+/// Whether the game build in the installation folder is older than the runtime sources of the kit (see `gow_core::rebuild`).
+#[tauri::command]
+fn rebuild_state(state: State<'_, AppState>) -> rebuild::RebuildState {
+    let destination = state.snapshot().optimization_destination;
+    if destination.trim().is_empty() {
+        return rebuild::RebuildState::default();
+    }
+    let current = rebuild::state(&state.paths.kit_dir(), Path::new(destination.trim()));
+    rebuild::announce(state.paths.data_dir(), current)
+}
+
+/// Starts the rebuild the player asked for. Fails at once, with a code, when it must not start (`busy:game`,
+/// `busy:installation`, `busy:optimizer`, `busy:texturePack`: the same reasons as a launcher update, since a rebuild takes the
+/// CPU and replaces the files the game runs from; `notAvailable`).
+#[tauri::command]
+fn rebuild_start(state: State<'_, AppState>) -> Result<(), String> {
+    let activity = Activity {
+        game: state.game.lock().unwrap().is_some(),
+        installation: state.installation.lock().unwrap().is_some(),
+        optimizer: state.optimizer.snapshot().compiling,
+        texture_pack: state.textures_running.load(Ordering::SeqCst),
+    };
+    if let Some(blocker) = activity.blocker() {
+        return Err(format!("busy:{}", blocker.code()));
+    }
+    if state.optimizer.rebuild_now() {
+        Ok(())
+    } else {
+        Err("notAvailable".into())
+    }
+}
+
 // ---------------------------------------------------------------------------------------------- self-update
 
 #[tauri::command]
@@ -605,7 +657,23 @@ fn extract_kit(app: &tauri::App, paths: &AppPaths) {
     let Ok(resources) = app.path().resource_dir() else { return };
     let bundled = resources.join("kit");
     if bundled.is_dir() {
-        let _ = kit::sync(&bundled, &paths.kit_dir(), env!("CARGO_PKG_VERSION"));
+        let (kit_dir, had_marker) = (paths.kit_dir(), paths.kit_dir().join(kit::MARKER).is_file());
+        let missing_before = kit::missing_essentials(&kit_dir);
+        let _ = kit::sync(&bundled, &kit_dir, env!("CARGO_PKG_VERSION"));
+        // A first extraction or an update also finds files "missing"; only a kit that had been extracted before and lost
+        // files is a repair worth a line.
+        let restored = missing_before.len().saturating_sub(kit::missing_essentials(&kit_dir).len());
+        if had_marker && restored > 0 {
+            log_kit(paths, &format!("[kit] restored {restored} missing files: {}", missing_before.join(", ")));
+        }
+    }
+}
+
+/// Appends a line to `logs/kit.log`, so a player's report shows that the kit repaired itself.
+fn log_kit(paths: &AppPaths, line: &str) {
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(paths.logs_dir().join("kit.log")) {
+        let _ = writeln!(file, "{line}");
     }
 }
 
@@ -719,6 +787,8 @@ pub fn run() {
             install_complete,
             optimizer_snapshot,
             optimize_now,
+            rebuild_state,
+            rebuild_start,
             update_state,
             update_install,
             update_open_release,

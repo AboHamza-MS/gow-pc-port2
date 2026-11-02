@@ -4,6 +4,7 @@
 pub mod credential;
 pub mod display;
 pub mod elf_check;
+pub mod failure;
 pub mod game;
 pub mod gamepad;
 pub mod gpu;
@@ -16,6 +17,7 @@ pub mod legacy;
 pub mod optimizer;
 pub mod paths;
 pub mod process;
+pub mod rebuild;
 pub mod script;
 pub mod settings;
 pub mod shortcut;

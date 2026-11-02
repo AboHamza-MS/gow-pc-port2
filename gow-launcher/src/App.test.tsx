@@ -62,6 +62,68 @@ describe('main window', () => {
   });
 });
 
+describe('game failures', () => {
+  it('shows the cause of a recognized failure above the log excerpt, and nothing extra for an unknown one', async () => {
+    boot(true);
+    const user = userEvent.setup();
+    await screen.findByRole('button', { name: 'PLAY' });
+    act(() => api.emit('game-finished', {
+      code: 1, failed: true, seconds: 3, summary: '[gs-hw] GL unavailable: OpenGL 4.6 core context unavailable',
+      failureKind: 'failureOpenGl',
+    }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/Update the graphics driver/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/core context unavailable/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'OK' }));
+    act(() => api.emit('game-finished', { code: 3, failed: true, seconds: 3, summary: 'boom', failureKind: null }));
+    const next = await screen.findByRole('dialog');
+    expect(within(next).getByText('boom')).toBeInTheDocument();
+    expect(within(next).queryByText(/Update the graphics driver/)).not.toBeInTheDocument();
+  });
+});
+
+describe('rebuild after an update', () => {
+  const bootWithRebuild = (rebuildNeeded: boolean) => {
+    api = createMockApi({ ready: true, rebuildNeeded });
+    setApi(api);
+    return render(<App />);
+  };
+
+  it('shows nothing when the build is up to date', async () => {
+    bootWithRebuild(false);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Performance' }));
+    expect(await screen.findByRole('switch', { name: 'Background optimization' })).toBeInTheDocument();
+    expect(screen.queryByText('Rebuild the game to get the latest fixes')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Rebuild now' })).not.toBeInTheDocument();
+  });
+
+  it('announces it once, offers the rebuild in the Performance tab and clears the note when the rebuild succeeds', async () => {
+    bootWithRebuild(true);
+    const user = userEvent.setup();
+    const start = vi.spyOn(api, 'rebuildStart');
+    expect(await screen.findByText(/Open Performance to rebuild the game/)).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Performance' }));
+    expect(await screen.findByText('Rebuild the game to get the latest fixes')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Rebuild now' }));
+    expect(start).toHaveBeenCalledTimes(1);
+    // The optimizer reports the rebuild running and then finished: the need is asked again and is gone.
+    const snapshot = { configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.5, status: 'compiling' as const };
+    act(() => api.emit('optimizer', snapshot));
+    act(() => api.emit('optimizer', { ...snapshot, compiling: false, buildProgress: -1, status: 'idle' }));
+    await waitFor(() => expect(screen.queryByText('Rebuild the game to get the latest fixes')).not.toBeInTheDocument());
+  });
+
+  it('disables the button with the reason while the game runs', async () => {
+    bootWithRebuild(true);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Performance' }));
+    expect(await screen.findByRole('button', { name: 'Rebuild now' })).toBeEnabled();
+    act(() => api.emit('game-running', true));
+    expect(screen.getByRole('button', { name: 'Rebuild now' })).toBeDisabled();
+    expect(screen.getByText('Close the game to rebuild.')).toBeInTheDocument();
+  });
+});
+
 describe('graphics', () => {
   it('turns the widescreen (PCSX2) patch on and off', async () => {
     boot(true);
@@ -132,7 +194,7 @@ describe('installation wizard', () => {
     const user = userEvent.setup();
     const install = vi.spyOn(api, 'installStart').mockImplementation(async () => {
       api.emit('install-progress', { stage: 5, stageProgress: 0.5, recentLines: ['[1/2] x'] });
-      api.emit('install-done', { ok: true, cancelled: false, error: '', elf: 'C:\\g\\game\\SCUS_973.99', executable: 'C:\\g\\build\\ps2xRuntime\\gow-2005.exe' });
+      api.emit('install-done', { ok: true, cancelled: false, error: '', elf: 'C:\\g\\game\\SCUS_973.99', executable: 'C:\\g\\build\\ps2xRuntime\\gow-2005.exe', failureKind: null });
     });
     const complete = vi.spyOn(api, 'installComplete');
 
@@ -165,10 +227,29 @@ describe('installation wizard', () => {
     await waitFor(() => expect(screen.queryByText('All set!')).not.toBeInTheDocument());
   });
 
+  it('blocks the first step when the processor lacks SSE4.1, even with the ISO verified', async () => {
+    boot(false);
+    vi.spyOn(api, 'wizardInfo').mockResolvedValue({
+      environment: { vs: true, cmakeUnusable: false, git: true, installer: true, missing: [], missingPackages: [], installCommand: '', cpuMissing: ['SSE4.1'], kitMissing: [] },
+      hasManifest: true, defaultDestination: 'C:\\GodOfWar-PC',
+    });
+    expect(await screen.findByRole('alert')).toHaveTextContent(/does not support SSE4\.1/);
+    // The ISO is found and verified, so only the processor keeps NEXT disabled.
+    expect(await screen.findByText(/original ISO verified/, {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'NEXT' })).toBeDisabled();
+  });
+
+  it('shows no processor warning when nothing is missing', async () => {
+    boot(false);
+    const next = () => screen.getByRole('button', { name: 'NEXT' });
+    await waitFor(() => expect(next()).toBeEnabled(), { timeout: 4000 });
+    expect(screen.queryByText(/does not support SSE4\.1/)).not.toBeInTheDocument();
+  });
+
   it('shows no components when Visual Studio has a usable CMake, and installs nothing', async () => {
     boot(false);
     vi.spyOn(api, 'wizardInfo').mockResolvedValue({
-      environment: { vs: true, cmakeUnusable: false, git: true, installer: true, missing: [], missingPackages: [], installCommand: '' },
+      environment: { vs: true, cmakeUnusable: false, git: true, installer: true, missing: [], missingPackages: [], installCommand: '', cpuMissing: [], kitMissing: [] },
       hasManifest: true, defaultDestination: 'C:\\GodOfWar-PC',
     });
     const user = userEvent.setup();
@@ -188,7 +269,7 @@ describe('installation wizard', () => {
   it('offers nothing for a Visual Studio without a usable CMake: the installer downloads a portable one', async () => {
     boot(false);
     vi.spyOn(api, 'wizardInfo').mockResolvedValue({
-      environment: { vs: true, cmakeUnusable: true, git: true, installer: true, missing: [], missingPackages: [], installCommand: '' },
+      environment: { vs: true, cmakeUnusable: true, git: true, installer: true, missing: [], missingPackages: [], installCommand: '', cpuMissing: [], kitMissing: [] },
       hasManifest: true, defaultDestination: 'C:\\GodOfWar-PC',
     });
     const user = userEvent.setup();
@@ -210,12 +291,12 @@ describe('installation wizard', () => {
     setApi(api);
     const environment = {
       vs: false, cmakeUnusable: false, git: true, installer: true, missing: ['ninja', 'alsa'], missingPackages: ['ninja-build', 'libasound2-dev'],
-      installCommand: 'sudo apt install ninja-build libasound2-dev',
+      installCommand: 'sudo apt install ninja-build libasound2-dev', cpuMissing: [], kitMissing: [],
     };
     vi.spyOn(api, 'wizardInfo')
       .mockResolvedValueOnce({ environment, hasManifest: true, defaultDestination: '/home/me/gow' })
       .mockResolvedValue({
-        environment: { ...environment, vs: true, missing: [], missingPackages: [], installCommand: '' },
+        environment: { ...environment, vs: true, missing: [], missingPackages: [], installCommand: '', cpuMissing: [], kitMissing: [] },
         hasManifest: true, defaultDestination: '/home/me/gow',
       });
     const user = userEvent.setup();
@@ -242,16 +323,52 @@ describe('installation wizard', () => {
     vi.spyOn(api, 'installStart').mockImplementation(async () => {
       attempt++;
       api.emit('install-done', attempt === 1
-        ? { ok: false, cancelled: false, error: 'cmake not found', elf: '', executable: '' }
-        : { ok: true, cancelled: false, error: '', elf: 'e', executable: 'x' });
+        ? { ok: false, cancelled: false, error: 'cmake not found', elf: '', executable: '', failureKind: null }
+        : { ok: true, cancelled: false, error: '', elf: 'e', executable: 'x', failureKind: null });
     });
     await waitFor(() => expect(screen.getByRole('button', { name: 'NEXT' })).toBeEnabled(), { timeout: 4000 });
     for (const label of ['NEXT', 'NEXT', 'NEXT']) await user.click(await screen.findByRole('button', { name: label }));
     await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'INSTALL' }));
     expect(await screen.findByText('Could not finish')).toBeInTheDocument();
     expect(screen.getByText('cmake not found')).toBeInTheDocument();
+    // An unrecognized failure gets no explanation, only the raw text.
+    expect(screen.queryByText(/A download failed/)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'TRY AGAIN' }));
     expect(await screen.findByText('All set!')).toBeInTheDocument();
+  });
+
+  it('explains a recognized failure above the raw text', async () => {
+    boot(false);
+    const user = userEvent.setup();
+    vi.spyOn(api, 'installStart').mockImplementation(async () => {
+      api.emit('install-done', {
+        ok: false, cancelled: false, elf: '', executable: '', failureKind: 'failureDownload',
+        error: 'Could not download https://example.org/x.zip (timed out).',
+      });
+    });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'NEXT' })).toBeEnabled(), { timeout: 4000 });
+    for (const label of ['NEXT', 'NEXT', 'NEXT']) await user.click(await screen.findByRole('button', { name: label }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'INSTALL' }));
+    expect(await screen.findByText(/A download failed/)).toBeInTheDocument();
+    expect(screen.getByText('Could not download https://example.org/x.zip (timed out).')).toBeInTheDocument();
+  });
+
+  it('lists the missing kit files and stops at the location step', async () => {
+    boot(false);
+    vi.spyOn(api, 'wizardInfo').mockResolvedValue({
+      environment: {
+        vs: true, cmakeUnusable: false, git: true, installer: false, missing: [], missingPackages: [], installCommand: '',
+        cpuMissing: [], kitMissing: ['install.ps1', 'bin/ps2-tools.exe'],
+      },
+      hasManifest: true, defaultDestination: 'C:\GodOfWar-PC',
+    });
+    const user = userEvent.setup();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'NEXT' })).toBeEnabled(), { timeout: 4000 });
+    await user.click(screen.getByRole('button', { name: 'NEXT' }));
+    expect(await screen.findByText(/Installation kit files are missing: install\.ps1, bin\/ps2-tools\.exe/)).toBeInTheDocument();
+    expect(screen.queryByText(/installer script \(install\.ps1/)).not.toBeInTheDocument();
+    await screen.findByText(/Free space/);
+    expect(screen.getByRole('button', { name: 'NEXT' })).toBeDisabled();
   });
 
   it('rejects a destination with accents', async () => {
@@ -456,7 +573,7 @@ describe('launcher update notice', () => {
     act(() => api.emit('install-progress', { stage: 2, stageProgress: 0.1, recentLines: [] }));
     expect(screen.getByRole('button', { name: 'Update' })).toBeDisabled();
     expect(screen.getByText('Finish the installation first.')).toBeInTheDocument();
-    act(() => api.emit('install-done', { ok: true, cancelled: false, error: '', elf: '', executable: '' }));
+    act(() => api.emit('install-done', { ok: true, cancelled: false, error: '', elf: '', executable: '', failureKind: null }));
     expect(screen.getByRole('button', { name: 'Update' })).toBeEnabled();
 
     act(() => api.emit('optimizer', { configured: true, compiling: true, captured: 1, compiled: 1, completionRatio: 0.5, buildProgress: 0.2, status: 'compiling' }));

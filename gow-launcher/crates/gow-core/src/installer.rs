@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use crate::failure;
 use crate::game::EXECUTABLE_NAME;
 use crate::paths;
 use crate::script::{self, quote_for_powershell, ScriptOptions, ScriptRun};
@@ -61,6 +62,12 @@ pub struct Environment {
     pub missing_packages: Vec<String>,
     /// Linux: the command that installs those packages, to run in a terminal.
     pub install_command: String,
+    /// Windows x86-64: the CPU features the game needs that this processor lacks (see [`REQUIRED_CPU_FEATURE`]); empty when
+    /// all are there, on Linux (the build uses `-march=native` there) and on other architectures.
+    pub cpu_missing: Vec<String>,
+    /// The installation kit files (relative to the kit folder) that are gone and could not be restored from the bundled
+    /// copy; empty when all are there. Filled by the application, which knows the kit folder.
+    pub kit_missing: Vec<String>,
 }
 
 /// What `install.sh --check-deps` printed: the missing checks, their packages and the command that installs them.
@@ -117,6 +124,33 @@ fn cmake_is_usable(cmake: &Path) -> bool {
     system::output_with_timeout(command, Duration::from_secs(8)).is_some_and(|out| cmake_version_is_enough(&out))
 }
 
+/// The one CPU requirement of the Windows build, named as the interface shows it. The generated code and the runtime use
+/// SSE4.1 intrinsics (`_mm_extract_epi*`, `_mm_blendv_*`, `_mm_round_*`, `_mm_testz_*`...) and nothing newer: no POPCNT,
+/// SSE4.2, AVX or BMI. If AVX2 ever becomes a requirement (`PS2X_VU1_AVX2`, `PS2X_FAST_MATH_AVX2`), add it here and in the
+/// script's check; `install.ps1` repeats this requirement with `IsProcessorFeaturePresent`.
+pub const REQUIRED_CPU_FEATURE: &str = "SSE4.1";
+
+/// What the CPU is missing, given whether it has the feature: `None` means detection could not run, and then nothing is
+/// reported (fail open: a wrong block is worse than a game that does not start).
+pub fn missing_cpu_features(has_required: Option<bool>) -> Vec<String> {
+    match has_required {
+        Some(false) => vec![REQUIRED_CPU_FEATURE.to_string()],
+        _ => Vec::new(),
+    }
+}
+
+/// Windows x86-64 only: the runtime detection of the standard library; anywhere else there is nothing to check.
+fn detect_required_cpu_feature() -> Option<bool> {
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    {
+        Some(std::arch::is_x86_feature_detected!("sse4.1"))
+    }
+    #[cfg(not(all(windows, target_arch = "x86_64")))]
+    {
+        None
+    }
+}
+
 pub fn check_environment(script: Option<&Path>) -> Environment {
     let mut environment = Environment {
         vs: false,
@@ -126,6 +160,8 @@ pub fn check_environment(script: Option<&Path>) -> Environment {
         missing: Vec::new(),
         missing_packages: Vec::new(),
         install_command: String::new(),
+        cpu_missing: missing_cpu_features(detect_required_cpu_feature()),
+        kit_missing: Vec::new(),
     };
     if !cfg!(windows) {
         let report = script.map(linux_dependencies).unwrap_or_default();
@@ -317,6 +353,8 @@ pub struct InstallOutcome {
     pub error: String,
     pub elf: String,
     pub executable: String,
+    /// The interface string that explains a recognized failure (see [`failure::FailureKind`]), shown above the raw text.
+    pub failure_kind: Option<String>,
 }
 
 /// Paths the installer leaves behind inside `destination`.
@@ -332,6 +370,7 @@ fn outcome_for(destination: &str, code: Option<i32>, cancelled: bool, tracker: &
         error,
         elf: String::new(),
         executable: String::new(),
+        failure_kind: None,
     };
     if cancelled {
         return InstallOutcome { cancelled: true, ..failure(String::new()) };
@@ -345,6 +384,7 @@ fn outcome_for(destination: &str, code: Option<i32>, cancelled: bool, tracker: &
                 error: String::new(),
                 elf: elf.to_string_lossy().into_owned(),
                 executable: executable.to_string_lossy().into_owned(),
+                failure_kind: None,
             };
         }
         return failure(format!(
@@ -353,7 +393,11 @@ fn outcome_for(destination: &str, code: Option<i32>, cancelled: bool, tracker: &
             executable.display()
         ));
     }
-    failure(tracker.failure_detail(code))
+    InstallOutcome {
+        failure_kind: failure::classify_install_failure(&tracker.last_error, &tracker.progress.recent_lines)
+            .map(|kind| kind.key().to_string()),
+        ..failure(tracker.failure_detail(code))
+    }
 }
 
 /// A running installation.
@@ -445,6 +489,14 @@ pub fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cpu_without_the_required_feature_is_reported_and_detection_failing_reports_nothing() {
+        assert_eq!(missing_cpu_features(Some(false)), ["SSE4.1"]);
+        assert!(missing_cpu_features(Some(true)).is_empty());
+        // Fail open: no answer means no block.
+        assert!(missing_cpu_features(None).is_empty());
+    }
 
     #[test]
     fn the_dependency_report_of_install_sh_is_read() {
@@ -583,6 +635,21 @@ mod tests {
         let done = outcome_for(&destination, Some(0), false, &tracker);
         assert!(done.ok && done.elf.ends_with("SCUS_973.99"));
         assert!(!outcome_for(&destination, Some(1), false, &tracker).ok);
+    }
+
+    #[test]
+    fn a_recognized_failure_carries_its_hint_and_an_unknown_one_does_not() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().to_string_lossy().into_owned();
+        let mut tracker = ProgressTracker::default();
+        tracker.feed("[error] ninja ended with code 1");
+        assert_eq!(outcome_for(&destination, Some(1), false, &tracker).failure_kind, None);
+        tracker
+            .feed("[error] Could not download https://example.org/x.zip (timed out). Check the Internet connection.");
+        let outcome = outcome_for(&destination, Some(1), false, &tracker);
+        assert_eq!(outcome.failure_kind.as_deref(), Some("failureDownload"));
+        // The raw text stays.
+        assert!(outcome.error.starts_with("Could not download"));
     }
 
     #[test]

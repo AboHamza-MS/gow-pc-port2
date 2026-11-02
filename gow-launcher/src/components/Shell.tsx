@@ -265,6 +265,7 @@ export function ErrorDialog() {
     <Modal>
       <div className="flex flex-col gap-3.5">
         <p className="text-[15px] font-medium text-ink">{error.text}</p>
+        {error.hint && <p className="text-[13px] text-ink-soft">{error.hint}</p>}
         {error.detail && (
           <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-line bg-field/80 p-2.5 font-mono text-xs text-ink-soft">
             {error.detail}

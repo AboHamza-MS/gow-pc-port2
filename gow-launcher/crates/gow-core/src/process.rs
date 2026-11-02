@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use crate::credential;
+use crate::failure;
 use crate::gpu;
 use crate::launch::{self, LaunchContext, LaunchError};
 use crate::paths::AppPaths;
@@ -21,6 +22,8 @@ pub struct GameFinished {
     pub failed: bool,
     pub seconds: u64,
     pub summary: String,
+    /// The interface string that explains a recognized failure (see [`crate::failure::FailureKind`]).
+    pub failure_kind: Option<String>,
 }
 
 /// A running game. Dropping it does not stop the game: it stays open if the launcher is closed.
@@ -137,8 +140,15 @@ pub fn start(
             Err(_) => (None, true),
         };
         let failed = crashed || code != Some(0);
-        let summary = if failed { failure_summary(&log_path) } else { String::new() };
-        on_finished(GameFinished { code, failed, seconds, summary });
+        let (summary, failure_kind) = if failed {
+            let text =
+                fs::read(&log_path).map(|bytes| String::from_utf8_lossy(&bytes).into_owned()).unwrap_or_default();
+            let kind = failure::classify_game_failure(&text, code).map(|kind| kind.key().to_string());
+            (summarize(&text), kind)
+        } else {
+            (String::new(), None)
+        };
+        on_finished(GameFinished { code, failed, seconds, summary, failure_kind });
     });
     Ok(session)
 }

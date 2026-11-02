@@ -45,6 +45,18 @@ A pack applies the next time the game starts. [`TEXTURES.md`](TEXTURES.md) expla
 | Background optimization | On | Recompiles the parts of the game you have reached, in the background, after you close the game |
 | Also while playing | **Off** | Rebuilds with the game open. It competes for the CPU and freezes the picture for tens of seconds, so leave it off unless you are debugging |
 | Optimize now | - | Runs one optimization pass immediately |
+| Rebuild now | - | Only shown, as a note at the top of the tab, when this launcher carries game fixes your build does not have yet (see below) |
+
+**Rebuilding after a launcher update.** A launcher update brings new game code (the runtime sources in its kit), but the
+game you play is a build made on your PC, so the fixes do not reach it by themselves. The launcher remembers which kit each
+build was made from (`build/.built-from-kit` in your installation folder, written when an installation or a rebuild
+succeeds). When the kit it now carries has different runtime files or tools, it shows a note at the top of **Performance**
+and one notice, once per kit version. **Rebuild now** runs the build in the background; it takes from a few minutes to over
+an hour, and you keep playing the current build until it finishes (the new one opens the next time you start the game).
+The button waits while the game, an installation, an optimization or a texture pack is running. An update that does not
+change the runtime files shows nothing, and the launcher never starts a rebuild by itself because of an update. A build
+made before the launcher kept this record is assumed up to date, except when the update that introduced the record changed
+the runtime files: then it asks once.
 
 ### Files
 
@@ -122,6 +134,7 @@ The data folder is `%APPDATA%\GOW_PC\Launcher` on Windows and `~/.local/share/GO
 | Installer and optimizer logs | `logs/install.log`, `logs/optimize.log` |
 | Launcher update checks and installs | `logs/update.log` |
 | Installation kit shipped with the launcher | `kit/` in the data folder |
+| Kit repairs (a file that went missing and was restored) | `logs/kit.log` |
 | Window icon | `icon.png` in the data folder |
 | GL shader cache | `%LOCALAPPDATA%\GOW_PC\Launcher\cache\shaders` / `~/.cache/GOW_PC/Launcher/shaders` |
 | Game data, build and saves | inside your installation folder (`game/`, `build/`, `game/Mcd001.ps2`) |
@@ -149,6 +162,18 @@ The launcher also pauses a background rebuild while the game is running, and res
 - **Linux (experimental)**: `.deb` or AppImage from the same Releases page. The wizard drives `install.sh` there
   (unverified on a real Linux machine); `./install.sh` from a checkout also works, and the launcher finds its files.
   Vibration is not implemented on Linux.
+
+## When something fails
+
+The launcher checks the kit's essential files (`install.ps1` or `install.sh`, `bin/ps2_recomp`, `bin/ps2-tools`, the
+CMake and game data files the build reads) every time it opens, and restores any that is gone from the copy bundled with
+it (an antivirus is the usual cause); a repair is noted in `logs/kit.log`. If the bundled copy is missing too (a portable
+zip extracted without its `kit` folder), the wizard lists the missing files at the location step and does not go on.
+
+When an installation or the game fails for a cause the launcher recognizes, a short explanation appears above the raw
+error text, which stays: a download that failed, no usable CMake, a kit file that is gone, a graphics driver that could
+not give the OpenGL context, and the Windows exit codes for a missing DLL (`0xC0000135`) and a bad image (`0xC000007B`).
+Anything else shows only the raw text and the log button, as before.
 
 ## Updating the launcher
 
