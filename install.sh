@@ -2,10 +2,13 @@
 # PC Port - installer for Linux.
 #
 #   ./install.sh [path/to/God of War.iso] [--destination DIR] [--no-optimize] [--optimize [seconds]] [--jobs N]
-#                [--install-deps] [--check-deps] [--recomp-exe FILE] [--tools-exe FILE]
+#                [--normal-priority] [--install-deps] [--check-deps] [--recomp-exe FILE] [--tools-exe FILE]
 #
 #   --destination    where game/, build/, build-gen/ and vu1_captures/ go (default: next to this script). The launcher's
 #                    wizard uses it; the generated C++ still lands inside RustPortPS2/native.
+#   --jobs N         build processes (default: cores minus a reserve of 2, 1 or 0, at most one per 2 GB of RAM).
+#   --normal-priority  do not lower the CPU and I/O priority of the long steps (nice, ionice); by default they run lowered so the
+#                    PC stays usable while the game builds.
 #   --install-deps   install the missing system packages (cmake, ninja, g++, git and the GL/X11/ALSA development files)
 #                    with the distribution's package manager, through sudo. Without it the script asks, when it runs
 #                    in a terminal, and otherwise prints the command.
@@ -31,11 +34,20 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 NATIVE="$ROOT/RustPortPS2/native"
 PROFILE="$ROOT/RustPortPS2/games/scus-97399" # the game's recompiler configuration, function map and VU1 data
-# Build processes: one per core, but at most one per 2 GB of memory (each unit of ~8 generated
-# files with -O3 uses 1-2 GB); the LTO link, one per 3 GB and at most 4. --jobs N sets it.
+# GOW-Port: build processes: the cores minus a reserve that keeps the PC responsive (2 from 8 cores, 1 from 4, none below that),
+# but at most one per 2 GB of memory (each unit of ~8 generated files with -O3 uses 1-2 GB, an estimate that has not been
+# re-measured); the LTO link, one per 3 GB and at most 4. At least one. --jobs N sets it and skips the reserve.
+build_jobs() {   # build_jobs CORES MEM_GB -> the number of processes
+    local cores="$1" mem_gb="$2" reserve=0 by_memory
+    if [ "$cores" -ge 8 ]; then reserve=2; elif [ "$cores" -ge 4 ]; then reserve=1; fi
+    by_memory=$(( mem_gb / 2 > 0 ? mem_gb / 2 : 1 ))
+    local jobs=$(( cores - reserve ))
+    [ "$jobs" -gt "$by_memory" ] && jobs=$by_memory
+    [ "$jobs" -lt 1 ] && jobs=1
+    echo "$jobs"
+}
 MEM_GB="$(awk '/MemTotal/ {print int($2 / 1048576)}' /proc/meminfo 2>/dev/null || echo 8)"
-JOBS="$(nproc 2>/dev/null || echo 4)"
-[ "$JOBS" -gt $(( MEM_GB / 2 > 0 ? MEM_GB / 2 : 1 )) ] && JOBS=$(( MEM_GB / 2 > 0 ? MEM_GB / 2 : 1 ))
+JOBS="$(build_jobs "$(nproc 2>/dev/null || echo 4)" "$MEM_GB")"
 MIN_FREE_GB=30
 MIN_MEM_GB=4
 RECOMMENDED_MEM_GB=8
@@ -186,6 +198,19 @@ check_resources() {   # check_resources DIRECTORY [already extracted: 1]
     fi
 }
 
+# GOW-Port: the long steps (cargo, the recompiler, the disc extraction, the build) run at a low CPU and I/O priority so the PC stays
+# usable while the game builds. The game's own optimization run does not use it. --normal-priority turns it off. ionice is used
+# only if it works here (it fails in some containers), tried once.
+LOW_PRIORITY=1
+low_priority() {   # low_priority COMMAND [ARGS...]
+    if [ "$LOW_PRIORITY" != 1 ] || ! command -v nice >/dev/null 2>&1; then "$@"; return; fi
+    if [ -z "${IONICE_OK:-}" ]; then
+        IONICE_OK=0
+        command -v ionice >/dev/null 2>&1 && ionice -c 3 true >/dev/null 2>&1 && IONICE_OK=1
+    fi
+    if [ "$IONICE_OK" = 1 ]; then ionice -c 3 nice -n 10 "$@"; else nice -n 10 "$@"; fi
+}
+
 # The functions above can be tested without running an installation: GOW_INSTALL_SOURCE_ONLY=1 . install.sh
 if [ -n "${GOW_INSTALL_SOURCE_ONLY:-}" ]; then return 0 2>/dev/null || exit 0; fi
 
@@ -203,6 +228,7 @@ while [ $# -gt 0 ]; do
         --no-optimize) OPTIMIZE="no" ;;
         --optimize) OPTIMIZE="yes"; if [[ "${2:-}" =~ ^[0-9]+$ ]]; then SECONDS_TO_RUN="$2"; shift; fi ;;
         --jobs) JOBS="${2:?--jobs needs a number}"; shift ;;
+        --normal-priority) LOW_PRIORITY=0 ;;
         --destination) DEST="${2:?--destination needs a folder}"; shift ;;
         --install-deps) DEPENDENCIES="yes" ;;
         --check-deps) CHECK_ONLY=1 ;;
@@ -255,7 +281,7 @@ if [ -z "$RECOMPILER" ] || [ -z "$TOOLS" ]; then
     step "Building the Rust tools (ps2_recomp, ps2-tools)"
     [ -f "$ROOT/RustPortPS2/third_party/rabbitizer/Cargo.toml" ] || error 'RustPortPS2/third_party/rabbitizer is missing: the repository checkout is incomplete'
     command -v cargo >/dev/null 2>&1 || error "cargo was not found: install Rust (https://rustup.rs), or pass --recomp-exe and --tools-exe"
-    cargo build --release --locked -p ps2-recomp-cli -p ps2-tools --manifest-path "$ROOT/RustPortPS2/Cargo.toml" --target-dir "$ROOT/build-rust"
+    low_priority cargo build --release --locked -p ps2-recomp-cli -p ps2-tools --manifest-path "$ROOT/RustPortPS2/Cargo.toml" --target-dir "$ROOT/build-rust"
     [ -n "$RECOMPILER" ] || RECOMPILER="$ROOT/build-rust/release/ps2_recomp"
     [ -n "$TOOLS" ] || TOOLS="$ROOT/build-rust/release/ps2-tools"
 fi
@@ -273,7 +299,7 @@ if [ ! -f "$GAME/SCUS_973.99" ] || [ ! -f "$GAME/.disc_layout" ]; then
     fi
     [ -n "$ISO" ] && [ -f "$ISO" ] || error "God of War ISO (USA, SCUS-97399) not found. Pass it as an argument: ./install.sh \"/path/God of War.iso\""
     echo "Extracting $ISO (about 8 GB; the game does not need the ISO afterwards)..."
-    "$TOOLS" iso-extract "$ISO" "$GAME" --layout
+    low_priority "$TOOLS" iso-extract "$ISO" "$GAME" --layout
 fi
 grep -q "SCUS_973.99" "$GAME/SYSTEM.CNF" 2>/dev/null || error "game/ is not God of War USA (SCUS-97399): SYSTEM.CNF does not boot SCUS_973.99."
 # GOW-Port: a correct file name does not identify the executable's revision.
@@ -335,7 +361,7 @@ cp "$GAME/SCUS_973.99" "$GEN/SCUS_973.99"
 cp "$PROFILE/funcmap.csv" "$GEN/funcmap.csv"
 sed -e "s|@ELF@|$GEN/SCUS_973.99|" -e "s|@MAP@|$GEN/funcmap.csv|" -e "s|@OUT@|$GEN/out/|" \
     "$PROFILE/gow-port.toml" > "$GEN/recomp.toml"
-"$RECOMPILER" "$GEN/recomp.toml" > "$GEN/recomp.log" 2>&1 || { tail -20 "$GEN/recomp.log"; error "ps2_recomp failed (see build-gen/recomp.log)"; }
+low_priority "$RECOMPILER" "$GEN/recomp.toml" > "$GEN/recomp.log" 2>&1 || { tail -20 "$GEN/recomp.log"; error "ps2_recomp failed (see build-gen/recomp.log)"; }
 RUNNER="$NATIVE/ps2xRuntime/src/runner"
 mkdir -p "$RUNNER"
 copy_if_changed() { cmp -s "$1" "$2" || cp "$1" "$2"; }   # only what changed: recompilation stays incremental
@@ -348,7 +374,7 @@ echo "$(ls "$GEN"/out/*.cpp | wc -l) C++ files in RustPortPS2/native/ps2xRuntime
 # --- 3. Game ------------------------------------------------------------------------------------------
 build_game() {
     step "Building the game (the first time takes a while: ~6,400 files and an LTO link)"
-    ninja -C "$BUILD" -j"$JOBS" ps2EntryRunner
+    low_priority ninja -C "$BUILD" -j"$JOBS" ps2EntryRunner
 }
 configure
 build_game
@@ -363,7 +389,7 @@ if [ "$OPTIMIZE" = "yes" ] || { [ "$OPTIMIZE" = "auto" ] && ! compgen -G "$VU1/*
         timeout "$SECONDS_TO_RUN" "$BUILD/ps2xRuntime/gow-2005" "$GAME/SCUS_973.99" > "$GEN/optimize.log" 2>&1) || true
     echo "VU1: $(ls "$VU1"/*.bin 2>/dev/null | wc -l) micro-memories; IOP: $(ls "$GEN"/iop_mods/*.bin 2>/dev/null | wc -l) modules."
     if compgen -G "$GEN/iop_mods/*.bin" >/dev/null; then
-        "$TOOLS" iop-gen "$GEN/iop_mods" "$NATIVE/ps2xIOP/src/native"
+        low_priority "$TOOLS" iop-gen "$GEN/iop_mods" "$NATIVE/ps2xIOP/src/native"
     fi
     configure
     build_game

@@ -4,6 +4,9 @@
 #
 #   -Destination   folder for the extracted disc, the generated code and the build (by default, the repository).
 #
+#   -Jobs N        build processes (default: logical processors minus a reserve of 2, 1 or 0, at most one per 2 GB of RAM).
+#   -NormalPriority  keep the build at normal priority (by default the installer lowers it so the PC stays usable).
+#
 #   -RecompExe     a built ps2_recomp.exe (the Rust recompiler, RustPortPS2/crates/ps2-recomp-cli). Without it the script uses
 #                  bin\ps2_recomp.exe next to itself (the launcher's kit carries it) and otherwise builds it with cargo (needs
 #                  Rust, a C compiler and the MSVC environment this script already loads).
@@ -30,6 +33,8 @@ param(
     [switch]$Optimize,
     [int]$Seconds = 240,
     [int]$Jobs = 0,
+    # GOW-Port: the installer lowers its own priority so the PC stays usable while the game builds; this keeps it normal.
+    [switch]$NormalPriority,
     # GOW-Port: protects normal PCs from the VU1 AOT generator retaining every capture in a long session.
     # Zero preserves an explicit developer override; the installer and launcher default to 4 GB.
     [ValidateRange(0, 64)]
@@ -69,12 +74,27 @@ if ($Vu1BuildDir -and -not (Test-Path -LiteralPath $Vu1BuildDir -PathType Contai
     throw "The VU1 directory does not exist: $Vu1BuildDir"
 }
 if ($Vu1BuildDir) { $Vu1ForBuild = (Resolve-Path -LiteralPath $Vu1BuildDir).Path }
-# Build processes: one per core, but at most one per 2 GB of memory. The memory bound is an estimate for a unit of ~8 generated
-# files; it was first written for /GL builds and has not been re-measured with the current flags (/O2, no whole-program
-# optimization). -Jobs N sets it.
+# GOW-Port: build processes: the logical processors minus a reserve that keeps the PC responsive (2 from 8 processors, 1 from 4,
+# none below that), but at most one per 2 GB of memory. The memory bound is an estimate for a unit of ~8 generated files; it was
+# first written for /GL builds and has not been re-measured with the current flags (/O2, no whole-program optimization).
+# Always at least one. -Jobs N sets it and skips the reserve. A function of its two inputs so that it can be tested without WMI
+# (scripts/ci/test-install-ps1.ps1).
+function Get-BuildJobs([int]$Cores, [int]$MemGb) {
+    $reserve = if ($Cores -ge 8) { 2 } elseif ($Cores -ge 4) { 1 } else { 0 }
+    return [int][math]::Max(1, [math]::Min($Cores - $reserve, [math]::Floor($MemGb / 2)))
+}
 if ($Jobs -le 0) {
     $memGb = [math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
-    $Jobs = [math]::Max(1, [math]::Min([Environment]::ProcessorCount, [math]::Floor($memGb / 2)))
+    $Jobs = Get-BuildJobs ([Environment]::ProcessorCount) $memGb
+}
+# GOW-Port: below-normal priority from the start: cargo, cmake, ninja, cl, link and ps2-tools inherit it, so a long build does not
+# freeze the player's PC. -NormalPriority keeps it normal. The optimization run of the game resets its own (stage 4).
+if (-not $NormalPriority) {
+    try {
+        [Diagnostics.Process]::GetCurrentProcess().PriorityClass = [Diagnostics.ProcessPriorityClass]::BelowNormal
+        Write-Host 'Build priority: below normal (use -NormalPriority to keep it normal)'
+    }
+    catch { Write-Host "Build priority: could not be lowered ($($_.Exception.Message))" }
 }
 function Step([string]$t) { Write-Host ''; Write-Host "==> $t" -ForegroundColor Red }
 function Warn([string]$t) { Write-Host "[warning] $t" -ForegroundColor Yellow }
@@ -544,6 +564,8 @@ if ($Optimize -or (-not $NoOptimize -and -not $hasVu1)) {
     }
     foreach ($k in $vars.Keys) { Set-Item -Path "env:$k" -Value $vars[$k] }
     $p = Start-Process -FilePath $GameExe -ArgumentList "`"$(Join-Path $Game 'SCUS_973.99')`"" -WorkingDirectory $Native -PassThru
+    # GOW-Port: the game inherited the lowered priority; this run feeds the VU1 and IOP capture, so it must run at normal speed.
+    try { $p.PriorityClass = [Diagnostics.ProcessPriorityClass]::Normal } catch { Warn "Could not restore the game's priority: $($_.Exception.Message)" }
     if (-not $p.WaitForExit($Seconds * 1000)) { Stop-Process -Id $p.Id -Force }
     foreach ($k in $vars.Keys) { Remove-Item -Path "env:$k" -ErrorAction SilentlyContinue }
     $vu1Count = (Get-ChildItem -Path $Vu1 -Filter *.bin -ErrorAction SilentlyContinue).Count

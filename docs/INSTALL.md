@@ -99,7 +99,8 @@ install.cmd -Destination "D:\GodOfWar"               # keep the game data and th
 | `-InstallTools` | Downloads Microsoft's Build Tools installer (signature checked) and installs the C++ workload, when Visual Studio is missing. A missing or unusable CMake or Ninja is not a reason: portable ones are downloaded first |
 | `-NoOptimize` / `-Optimize` | Skip / force the optimization pass (see below) |
 | `-Seconds <n>` | Duration of the optimization run (default 240 s) |
-| `-Jobs <n>` | Parallel compiler processes (default: cores, at most one per 2 GB of RAM) |
+| `-Jobs <n>` | Parallel compiler processes. Default: the logical processors minus a reserve (2 from 8 processors, 1 from 4 to 7, none below), at most one per 2 GB of RAM. An explicit value skips the reserve |
+| `-NormalPriority` | Keep the build at normal priority. By default the installer lowers its own priority to below normal, so the PC stays usable while the game builds (the compilers inherit it; the optimization run of the game runs at normal priority) |
 | `-Vu1MemoryLimitGB <4-8>` | RAM cap for the VU1 generator (default 4 GB, `0` = unlimited) |
 | `-Vu1BuildDir <folder>` | Use an existing VU1 microcode folder instead of `vu1_captures\` |
 | `-FastDev` | `RelWithDebInfo`, logs on, console visible. For iterating; **not** for measuring performance |
@@ -149,7 +150,8 @@ install.cmd -Destination "D:\GodOfWar"               # keep the game data and th
 | `--check-deps` | Only report what is missing (`[missing]`, `[packages]` and `[install-command]` lines, exit code 2 if anything is) |
 | `--no-optimize` | Skip the optimization pass |
 | `--optimize [seconds]` | Force it, optionally for a different duration (default 240 s) |
-| `--jobs N` | Parallel compiler processes |
+| `--jobs N` | Parallel compiler processes. Default: the cores minus a reserve (2 from 8 cores, 1 from 4 to 7, none below), at most one per 2 GB of RAM. An explicit value skips the reserve |
+| `--normal-priority` | Do not lower the CPU and I/O priority of the long steps (by default they run under `nice -n 10`, and `ionice -c 3` when it works) |
 | `--recomp-exe FILE` | Use a prebuilt `ps2_recomp` |
 | `--tools-exe FILE` | Use a prebuilt `ps2-tools` |
 

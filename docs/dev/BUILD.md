@@ -147,7 +147,8 @@ npx tauri dev                 # the real app
 | `.github/workflows/gow-launcher.yml` | Type-check, Vitest, kit and Windows-installer checks, `cargo test` for the launcher; tags `launcher-v*` build NSIS/deb/AppImage drafts | the C++ runtime, the game |
 
 `pwsh -NoProfile -File scripts/ci/analyze_ps1.ps1` parses every `.ps1` with the PowerShell parser; run it after editing
-an installer.
+an installer. `scripts/ci/test-install-ps1.ps1` tests the pure decisions of `install.ps1` (the job count), and
+`bash scripts/ci/test-install-sh.sh` those of `install.sh`.
 
 **Nothing in CI compiles the runtime, runs an installer or plays the game.** The byte-identical parity gate runs in CI
 on a synthetic fixture; against the retail ELF it only runs locally, because the game cannot be uploaded.
