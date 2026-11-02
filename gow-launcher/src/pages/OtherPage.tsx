@@ -1,9 +1,11 @@
-import { Download, FileText, Info, Languages, Link, Minimize2, RotateCcw, SkipForward, Zap } from 'lucide-react';
+import { Archive, Download, FileText, Flag, Info, Languages, Link, Minimize2, RotateCcw, SkipForward, Zap } from 'lucide-react';
+import { MarkField, useReportExport } from '../components/ReportTools';
 import { SecondaryButton, Select, SettingRow, Switch } from '../components/ui';
 import { useApp } from '../state/app';
 
 export function OtherPage() {
   const { settings, patch, reset, api, info, notify, t } = useApp();
+  const report = useReportExport();
   const shortcut = async (desktop: boolean) => {
     if (await api.createShortcut(desktop)) notify(t('shortcutDone'));
   };
@@ -38,6 +40,12 @@ export function OtherPage() {
       </SettingRow>
       <SettingRow icon={FileText} title={t('log')} description={t('logDesc')}>
         <SecondaryButton onClick={() => void api.openLog()}>{t('open')}</SecondaryButton>
+      </SettingRow>
+      <SettingRow icon={Archive} title={t('reportExportTitle')} description={t('reportExportDesc')}>
+        <SecondaryButton disabled={report.busy} onClick={() => void report.run()}>{t('reportExportButton')}</SecondaryButton>
+      </SettingRow>
+      <SettingRow icon={Flag} title={t('reportMarkTitle')} description={t('reportMarkDesc')} controlWidth={380}>
+        <MarkField />
       </SettingRow>
       <SettingRow icon={RotateCcw} title={t('reset')} description={t('resetDesc')}>
         <SecondaryButton danger onClick={() => void reset()}>{t('reset')}</SecondaryButton>

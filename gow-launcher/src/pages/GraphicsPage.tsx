@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
-import { Expand, Grid2x2, Image, Maximize, Monitor, RectangleHorizontal, SquareDashed, Film, StretchHorizontal, TriangleAlert } from 'lucide-react';
+import { Expand, Grid2x2, Image, Maximize, Monitor, RectangleHorizontal, SlidersHorizontal, SquareDashed, Film, StretchHorizontal, TriangleAlert } from 'lucide-react';
 import { GroupTitle, Note, Select, SettingRow, Slider, Switch, type Option } from '../components/ui';
 import { useApp } from '../state/app';
+import { activePreset, presetChange, type PresetId } from '../lib/presets';
 import type { DisplayInfo } from '../lib/types';
 
 const SCALES = [1, 1.5, 2, 2.5, 3, 4, 5, 6];
@@ -109,6 +110,14 @@ export function GraphicsPage() {
     detail: n === 2 ? t('internalRecommended') : n >= 4 ? t('internalHeavy') : undefined,
   }));
 
+  const preset = activePreset(settings);
+  const presetOptions: Array<Option<PresetId | 'custom'>> = [
+    { text: t('presetPerformance'), value: 'performance' },
+    { text: t('presetBalanced'), value: 'balanced' },
+    { text: t('presetQuality'), value: 'quality' },
+    { text: t('presetCustom'), value: 'custom', disabled: true },
+  ];
+
   return (
     <div className="flex flex-col gap-1">
       <GroupTitle>{t('groupDisplay')}</GroupTitle>
@@ -158,6 +167,14 @@ export function GraphicsPage() {
         <Switch label={t('stretch')} checked={settings.aspectMode.length === 0 && settings.stretch} onChange={(stretch) => patch({ stretch })} />
       </SettingRow>
       <GroupTitle>{t('groupImage')}</GroupTitle>
+      <SettingRow icon={SlidersHorizontal} title={t('presetTitle')} description={t('presetDesc')}>
+        <Select
+          label={t('presetTitle')}
+          options={presetOptions}
+          value={preset ?? 'custom'}
+          onChange={(id) => id !== 'custom' && patch(presetChange(id))}
+        />
+      </SettingRow>
       <SettingRow icon={Grid2x2} title={t('internal')} description={t('internalDesc')}>
         <Select
           label={t('internal')}

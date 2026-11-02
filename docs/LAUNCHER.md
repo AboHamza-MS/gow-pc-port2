@@ -17,6 +17,7 @@ If you just want to play, set **Graphics → render resolution 2×** and **Perfo
 | Widescreen (Hor+) | On | PCSX2's widescreen patch: widens the camera to the sides at the chosen aspect. Off gives you the game's original 4:3 picture, with side bars in a wide window |
 | Aspect ratio | Your display's | 4:3, 16:9, 16:10 or 21:9 (ultrawide, experimental) |
 | Resolution | Native | Fullscreen always uses the display's native mode; this is the initial window size |
+| Graphics preset | Balanced | **Performance** (1×, Bilinear, no FXAA), **Balanced** (2×, Bilinear, FXAA) or **Quality** (3×, Bicubic at 0.8, FXAA). It sets only render resolution, upscaling, sharpness and FXAA, and shows **Custom** as soon as you change one of them by hand. It changes how heavy the picture is for your graphics card, not the speed of the game itself |
 | Render resolution | 2× | Internal render scale, 1× to 6×. 2× is recommended: **from 3× up the game gets heavy**, and 4×–6× are experimental |
 | Upscaling | Bilinear (soft) | How the image is fitted to the screen: **Bicubic (sharp)** (bicubic + contrast-adaptive sharpening), **Bilinear (soft)** or **Pixel**. The "Pixel" option currently resolves to a bilinear stretch, not nearest-neighbour. If the render is larger than the screen it is downsampled by area averaging |
 | Sharpness | 0.8 | Only for Bicubic: how much contrast-adaptive sharpening is applied |
@@ -72,8 +73,16 @@ installation folder. **Setup wizard** reopens the installer.
 
 ### Controls
 
-Keyboard and mouse mapping (two keys per action), gamepad layout (Classic PS2 or Modern DMC5), the four face-button
-swaps, **Agile combat** and **ESC closes the game**. The default layout and what each action does are in
+Keyboard and mouse mapping (two keys per action), gamepad layout (Classic PS2, Modern DMC5 or **Custom**), the four
+face-button swaps, **Agile combat** and **ESC closes the game**. **Custom (every button)** shows 16 rows, one per button of
+the pad, each choosing the PS2 button it presses (`PC_PAD_MAP`); the first change starts from the layout in use, two buttons
+may share a target (a warning is shown), Start cannot be taken away, and **Back to a layout** clears the map.
+**Controller** lists the joysticks the game saw the last time it ran (name, and whether the system has a button layout for
+it) and stores which one to read (`GOW_PAD_DEVICE`); Automatic leaves it to the game. The list is a file the game writes,
+`pads/devices.json`, so it is empty until the game has run once with the controller connected. For a device with no button layout, **Map its
+buttons** opens a dialog that learns each button from the running game: while it is open the launcher keeps `pads/probe`
+fresh and the game writes the raw buttons, hats and axes that moved to `pads/live.json`. The result is stored as SDL mapping
+fields (`padSdlMap`, for the chosen device only) and handed to the game as `GOW_PAD_SDL_MAPPING`. The default layout and what each action does are in
 [`PLAYING.md`](PLAYING.md#keyboard-and-mouse).
 
 Click a slot, then press the new key or click a mouse button. Right click clears it. **Esc** cancels. Keys are bound by
@@ -94,7 +103,7 @@ be saved. Hardcore disables all cheats. See [`PLAYING.md`](PLAYING.md#achievemen
 
 Language (English / Brazilian Portuguese), **Skip FMV videos**, **Fast boot** (cuts the intro animation and may cut the
 opening lines; not recommended), **Minimize the launcher while playing**, **Automatic updates** (off by default, see
-[Updating the launcher](#updating-the-launcher)), shortcuts, **Last game log**, **Restore defaults** (resets graphics,
+[Updating the launcher](#updating-the-launcher)), shortcuts, **Last game log**, **Session report** and **Mark a problem** (see [Reports](#reports)), **Restore defaults** (resets graphics,
 performance, controls and cheats; your file paths are kept) and the About box.
 
 ## The setup wizard
@@ -135,6 +144,8 @@ The data folder is `%APPDATA%\GOW_PC\Launcher` on Windows and `~/.local/share/GO
 | Launcher update checks and installs | `logs/update.log` |
 | Installation kit shipped with the launcher | `kit/` in the data folder |
 | Kit repairs (a file that went missing and was restored) | `logs/kit.log` |
+| Last game session (how it ended) and your problem markers | `logs/last-session.json`, `logs/markers.jsonl` |
+| Joysticks the game saw last time (the Controls tab's list), and the live feed of the mapping dialog | `pads/devices.json`, `pads/probe`, `pads/live.json` |
 | Window icon | `icon.png` in the data folder |
 | GL shader cache | `%LOCALAPPDATA%\GOW_PC\Launcher\cache\shaders` / `~/.cache/GOW_PC/Launcher/shaders` |
 | Game data, build and saves | inside your installation folder (`game/`, `build/`, `game/Mcd001.ps2`) |
@@ -174,6 +185,28 @@ When an installation or the game fails for a cause the launcher recognizes, a sh
 error text, which stays: a download that failed, no usable CMake, a kit file that is gone, a graphics driver that could
 not give the OpenGL context, and the Windows exit codes for a missing DLL (`0xC0000135`) and a bad image (`0xC000007B`).
 Anything else shows only the raw text and the log button, as before.
+
+## Reports
+
+**Other, Export report** (and the same button in the failure dialog) saves a ZIP to `reports/` in the data folder and
+opens that folder; the newest ten are kept. Attach it to a GitHub issue. It holds `report.json` (launcher version, system,
+processor, memory, graphics adapters and drivers, the settings, the installation facts with the checksum of the runner and
+the CRC of the game file, the joysticks the game saw, the optimizer state, the environment the game would get and what the launcher knows about the last
+session), the launcher's logs (`last.log`, `previous.log`, `install.log`, `optimize.log`, `update.log`, `kit.log`; long
+ones keep their first 256 KiB and their end), your markers and a `README.txt`. The contents are an allowlist of file names:
+the disc image, the game file and data, saves, recorded microcode, textures, shader caches and screenshots are never
+read.
+
+Before anything is written, the installation, data, temporary, home, disc image and game folders become `<INSTALL>`,
+`<DATA>`, `<TEMP>`, `<HOME>`, `<ISO_DIR>`, `<GAME>`, the user name `<USER>` and the computer name `<PC>`; the
+RetroAchievements user is shown only as set or not and its password is never read. The files on disk are not changed. The
+removal is by text match: it does not catch 8.3 short names or URL-encoded paths, and a word equal to your user name is
+replaced too, so look through the ZIP before attaching it.
+
+**Mark a problem** (Other tab, and the failure dialog) stores a note of up to 200 characters in `logs/markers.jsonl`, with the
+time and, while the game runs, how many seconds into the session; the last 50 are kept. Do not write personal information
+in them. A report can be made with the game closed, running (it is then marked partial) or after a crash: the launcher
+writes `logs/last-session.json` when the game starts and when it ends.
 
 ## Updating the launcher
 

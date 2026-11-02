@@ -3,7 +3,7 @@
 
 import type {
   Bootstrap, DestinationValidation, GameFinished, GameStatus, GamepadCaptured, InstallOutcome,
-  InstallProgress, IsoValidation, OptimizerSnapshot, RebuildState, Settings, TexturePackInfo, TexturePackOutcome, TexturePackProgress,
+  InstallProgress, IsoValidation, LiveState, OptimizerSnapshot, PadDeviceList, RebuildState, Settings, TexturePackInfo, TexturePackOutcome, TexturePackProgress,
   UpdateMode, UpdateState, WizardInfo,
 } from './types';
 
@@ -46,6 +46,10 @@ export interface Api {
   openLog(): Promise<void>;
   openInstallLog(): Promise<void>;
   openOptimizerLog(): Promise<void>;
+  /** Writes the session report ZIP, opens its folder and returns the file name. */
+  reportExport(): Promise<string>;
+  /** Stores a note about a problem for the next report; false when the text was empty. */
+  reportMark(text: string): Promise<boolean>;
   openDirectory(path: string): Promise<void>;
   openTexturesFolder(): Promise<boolean>;
   texturePackInfo(): Promise<TexturePackInfo>;
@@ -54,6 +58,12 @@ export interface Api {
   raHasCredential(user: string): Promise<boolean>;
   raSaveCredential(user: string, password: string): Promise<boolean>;
   raClearCredential(): Promise<boolean>;
+  /** The joysticks the game saw the last time it ran; null before the first run. */
+  padDevices(): Promise<PadDeviceList | null>;
+  /** The raw input of the joysticks right now, from the game; null when it has not written it (the game is not running). */
+  padLive(): Promise<LiveState | null>;
+  /** The mapping dialog asks the game for the live feed (true, repeated every few seconds) or stops asking (false). */
+  padProbe(active: boolean): Promise<void>;
   gamepadBegin(): Promise<boolean>;
   gamepadCancel(): Promise<void>;
   wizardInfo(): Promise<WizardInfo>;
@@ -106,6 +116,8 @@ async function createTauriApi(): Promise<Api> {
     openLog: () => call('open_log'),
     openInstallLog: () => call('open_install_log'),
     openOptimizerLog: () => call('open_optimizer_log'),
+    reportExport: () => call('report_export'),
+    reportMark: (text) => call('report_mark', { text }),
     openDirectory: (path) => call('open_directory', { path }),
     openTexturesFolder: () => call('open_textures_folder'),
     texturePackInfo: () => call('texture_pack_info'),
@@ -114,6 +126,9 @@ async function createTauriApi(): Promise<Api> {
     raHasCredential: (user) => call('ra_has_credential', { user }),
     raSaveCredential: (user, password) => call('ra_save_credential', { user, password }),
     raClearCredential: () => call('ra_clear_credential'),
+    padDevices: () => call('pad_devices'),
+    padLive: () => call('pad_live'),
+    padProbe: (active) => call('pad_probe', { active }),
     gamepadBegin: () => call('gamepad_begin'),
     gamepadCancel: () => call('gamepad_cancel'),
     wizardInfo: () => call('wizard_info'),
@@ -155,7 +170,7 @@ export const defaultSettings: Settings = {
   language: '', gpu: 'auto', displayMode: 'fullscreen', widthPx: 1280, heightPx: 800, aspectMode: '', widescreen: true, stretch: false,
   filter: 'bilinear', sharpness: 0.8, fxaa: true, progressive480p: true, internalResolution: '2', fpsLimit: 60,
   vsync: false, showFps: false, elf: '', iso: '', executable: '', skipVideos: true, fastBoot: false, customTextures: false, asyncTextures: true,
-  settingsVersion: 0, dmc5Controls: false, padButtons: '', cancelAnimations: true, escQuits: false,
+  settingsVersion: 0, dmc5Controls: false, padButtons: '', padMap: '', padDevice: '', padDeviceName: '', padSdlMap: '', cancelAnimations: true, escQuits: false,
   minimizeOnPlay: true, secondsPlayed: 0, lastSession: 0, keys: '', cheats: '', cheatsShortcut: '',
   retroAchievementsEnabled: false, retroAchievementsUser: '',
   retroAchievementsHardcore: false, retroAchievementsNotifications: true, optimizationDestination: '',
@@ -174,7 +189,21 @@ type Handler = (payload: never) => void;
 
 export type MockApi = Api & { emit: <K extends keyof EventMap>(event: K, payload: EventMap[K]) => void };
 
-export function createMockApi(options: { ready?: boolean; update?: UpdateState; rebuildNeeded?: boolean } = {}): MockApi {
+/** What the mock backend lists as the last session's joysticks: the 2.4G dongle of issue #12, whose real pad has no SDL mapping. */
+export const dongleDevices: PadDeviceList = {
+  choice: 'automatic',
+  active: 0,
+  seenAt: 1_790_000_000,
+  devices: [
+    { index: 0, name: '2.4G Consumer Control', guid: '0300aaaa5e040000a102000000010000', mapped: true, buttons: 1, hats: 0, axes: 0 },
+    { index: 1, name: '2.4G Keyboard', guid: '0300bbbb5e040000a102000000010000', mapped: true, buttons: 1, hats: 0, axes: 0 },
+    { index: 3, name: 'Generic X-Box pad', guid: '0300dddd5e040000a102000000010000', mapped: false, buttons: 15, hats: 1, axes: 6 },
+  ],
+};
+
+export function createMockApi(
+  options: { ready?: boolean; update?: UpdateState; rebuildNeeded?: boolean; padDevices?: PadDeviceList | null } = {},
+): MockApi {
   const ready = options.ready ?? true;
   let update = options.update ?? noUpdate;
   let rebuild: RebuildState = {
@@ -242,6 +271,8 @@ export function createMockApi(options: { ready?: boolean; update?: UpdateState; 
     openLog: async () => undefined,
     openInstallLog: async () => undefined,
     openOptimizerLog: async () => undefined,
+    reportExport: async () => 'gow-report-20260101-120000.zip',
+    reportMark: async (text) => text.trim().length > 0,
     openDirectory: async () => undefined,
     openTexturesFolder: async () => true,
     texturePackInfo: async () => ({
@@ -270,6 +301,9 @@ export function createMockApi(options: { ready?: boolean; update?: UpdateState; 
     raHasCredential: async (user) => user === 'player',
     raSaveCredential: async () => true,
     raClearCredential: async () => true,
+    padDevices: async () => (options.padDevices === undefined ? dongleDevices : options.padDevices),
+    padLive: async () => null,
+    padProbe: async () => undefined,
     gamepadBegin: async () => {
       setTimeout(() => emit('gamepad-captured', { binding: '9+11', label: 'LB / L1 + RB / R1' }), 1500);
       return true;

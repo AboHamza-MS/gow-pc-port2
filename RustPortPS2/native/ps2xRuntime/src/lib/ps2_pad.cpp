@@ -1,13 +1,18 @@
 #include "runtime/ps2_pad.h"
 #include "ps2_host_backend.h"
+#include "gow_pad_map.h" // GOW-Port: the pure part of the gamepad layer (button table, device choice), tested on its own
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <set>
 #include <string>
 #include <vector>
@@ -312,12 +317,254 @@ namespace
     }
 }
 
+namespace
+{
+    // GOW-Port (issue #12): the controller picker of the launcher's Controls tab.
+    //   GOW_PAD_DEVICE=<GLFW GUID>   the one device the game reads. It is looked up among the connected joysticks; when it is not
+    //                                there, or is past the four slots raylib reads, the automatic choice stays (one log line).
+    //   GOW_PAD_LIST_FILE=<path>     a JSON file listing the joysticks GLFW sees (index, name, GUID, whether an SDL mapping exists,
+    //                                counts of buttons, hats and axes), rewritten when the list changes. The launcher shows it, so
+    //                                a player can pick the real pad among the media-key and keyboard interfaces of a dongle.
+    // GLFW's joystick calls belong to the window thread, so the lookup and the file are done there (gowPadDiagFrame, twice a
+    // second) and the game's pad read only sees these two numbers.
+    std::atomic<int> g_chosenJoystick{-1}; // the chosen device's joystick id, -1 for the automatic choice
+    std::atomic<int> g_activeJoystick{-1}; // the joystick the game reads now, -1 for none (keyboard)
+
+    std::filesystem::path envPath(const char *name)
+    {
+#ifdef _WIN32
+        // The launcher hands over UTF-16; the narrow getenv would damage a path outside the ANSI code page.
+        const std::wstring wide(name, name + std::strlen(name));
+        const wchar_t *value = _wgetenv(wide.c_str());
+        return value && *value ? std::filesystem::path(value) : std::filesystem::path();
+#else
+        const char *value = std::getenv(name);
+        return value && *value ? std::filesystem::path(value) : std::filesystem::path();
+#endif
+    }
+
+    std::vector<gowpad::Device> listJoysticks()
+    {
+        std::vector<gowpad::Device> devices;
+        for (int jid = 0; jid < 16; ++jid)
+        {
+            if (!glfwJoystickPresent(jid))
+                continue;
+            gowpad::Device device;
+            device.index = jid;
+            const char *name = glfwGetJoystickName(jid);
+            const char *guid = glfwGetJoystickGUID(jid);
+            device.name = name ? name : "";
+            device.guid = guid ? guid : "";
+            device.mapped = glfwJoystickIsGamepad(jid) != 0;
+            glfwGetJoystickButtons(jid, &device.buttons);
+            glfwGetJoystickHats(jid, &device.hats);
+            glfwGetJoystickAxes(jid, &device.axes);
+            devices.push_back(device);
+        }
+        return devices;
+    }
+
+    // GOW_PAD_SDL_MAPPING: the launcher's hand-made mapping for the chosen device when GLFW has none (a button layout the player set
+    // in Controls, from the raw buttons, hats and axes this very file lists). GLFW attaches it to the joystick with that GUID,
+    // present now or plugged in later. Applied once, before the first list is written, so `mapped` already reflects it.
+    void applyUserMapping()
+    {
+        static bool done = false;
+        if (done)
+            return;
+        done = true;
+#ifdef _WIN32
+        const char *platform = "Windows";
+#else
+        const char *platform = "Linux";
+#endif
+        const char *text = std::getenv("GOW_PAD_SDL_MAPPING");
+        if (!text || !*text)
+            return;
+        const std::string line = gowpad::glfwMappingLine(text, platform);
+        if (line.empty())
+        {
+            std::fprintf(stderr, "[pad] GOW_PAD_SDL_MAPPING ignored: not one SDL mapping line\n");
+            return;
+        }
+        const bool ok = glfwUpdateGamepadMappings(line.c_str()) != 0;
+        std::fprintf(stderr, "[pad] SDL mapping from the launcher for %.32s: %s\n", line.c_str(), ok ? "accepted" : "rejected by GLFW");
+    }
+
+    void updateControllerPicker()
+    {
+        applyUserMapping();
+        static int frame = 0;
+        if (frame++ % 30 != 0) // twice a second is plenty for hot-plugging
+            return;
+        static const std::string wanted = []
+        {
+            const char *value = std::getenv("GOW_PAD_DEVICE");
+            return value ? std::string(value) : std::string();
+        }();
+        static const std::filesystem::path listFile = envPath("GOW_PAD_LIST_FILE");
+        if (wanted.empty() && listFile.empty())
+            return;
+        const std::vector<gowpad::Device> devices = listJoysticks();
+        const gowpad::Pick pick = gowpad::pickDevice(devices, wanted.c_str());
+        g_chosenJoystick.store(pick.choice == gowpad::Choice::Found ? pick.index : -1);
+
+        static int loggedChoice = -1, loggedIndex = -2;
+        if (static_cast<int>(pick.choice) != loggedChoice || pick.index != loggedIndex)
+        {
+            loggedChoice = static_cast<int>(pick.choice);
+            loggedIndex = pick.index;
+            if (pick.choice == gowpad::Choice::Found)
+                std::fprintf(stderr, "[pad] chosen device %s is joystick %d\n", wanted.c_str(), pick.index);
+            else if (pick.choice == gowpad::Choice::Absent)
+                std::fprintf(stderr, "[pad] chosen device %s is not connected: choosing the pad automatically\n", wanted.c_str());
+            else if (pick.choice == gowpad::Choice::OutOfRange)
+                std::fprintf(stderr, "[pad] chosen device %s is joystick %d, past the %d slots the game reads: choosing the pad automatically\n",
+                             wanted.c_str(), pick.index, gowpad::kSlots);
+        }
+
+        if (listFile.empty())
+            return;
+#ifdef _WIN32
+        const char *platform = "windows";
+#else
+        const char *platform = "linux";
+#endif
+        const std::string json = gowpad::devicesJson(devices, pick, wanted.c_str(), g_activeJoystick.load(), platform);
+        static std::string written;
+        if (json == written)
+            return;
+        // A temporary file renamed over the real one, so the launcher never reads half a list.
+        std::error_code error;
+        std::filesystem::create_directories(listFile.parent_path(), error);
+        std::filesystem::path temporary = listFile;
+        temporary += ".tmp";
+        bool ok = false;
+        {
+            std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+            out << json;
+            ok = static_cast<bool>(out);
+        }
+        if (ok)
+        {
+            std::filesystem::rename(temporary, listFile, error);
+            ok = !error;
+        }
+        if (ok)
+            written = json;
+        else
+        {
+            static bool warned = false;
+            if (!warned)
+                std::fprintf(stderr, "[pad] could not write the device list (GOW_PAD_LIST_FILE)\n");
+            warned = true;
+            std::filesystem::remove(temporary, error);
+        }
+    }
+}
+
+namespace
+{
+    // GOW-Port (issue #12): what the joysticks do right now, for the launcher's "map this device" dialog. A player whose pad has no
+    // SDL mapping cannot say which raw button, hat or axis is which (and a web page's gamepad API orders them differently from GLFW,
+    // whose numbering a mapping is written in), so the game itself reports them: while the launcher keeps a `probe` file next to the
+    // device list fresh, the game writes `live.json` there (schema 1, `gow_pad_map.h`): per joystick the raw buttons held, the hats
+    // off rest and the axes moved away from where they first were. Nothing is written without the probe file.
+    bool probeFresh(const std::filesystem::path &probe)
+    {
+        std::error_code error;
+        const auto written = std::filesystem::last_write_time(probe, error);
+        if (error)
+            return false;
+        return std::filesystem::file_time_type::clock::now() - written < std::chrono::seconds(10);
+    }
+
+    void updateLiveFeed()
+    {
+        static const std::filesystem::path listFile = envPath("GOW_PAD_LIST_FILE");
+        if (listFile.empty())
+            return;
+        static int frame = 0;
+        static bool active = false;
+        ++frame;
+        static const std::filesystem::path probe = listFile.parent_path() / "probe";
+        static const std::filesystem::path liveFile = listFile.parent_path() / "live.json";
+        if (!active && frame % 30 != 0) // looking for the probe file: twice a second
+            return;
+        if (active && frame % 3 != 0) // while it is there: twenty times a second
+            return;
+        static std::array<gowpad::RawSample, 16> rest;
+        static std::array<bool, 16> haveRest{};
+        if (!probeFresh(probe))
+        {
+            active = false;
+            haveRest.fill(false); // the next probe starts from how the pads rest then
+            return;
+        }
+        active = true;
+        std::vector<gowpad::LiveDevice> devices;
+        for (int jid = 0; jid < 16; ++jid)
+        {
+            if (!glfwJoystickPresent(jid))
+            {
+                haveRest[jid] = false;
+                continue;
+            }
+            int buttonCount = 0, hatCount = 0, axisCount = 0;
+            const unsigned char *buttons = glfwGetJoystickButtons(jid, &buttonCount);
+            const unsigned char *hats = glfwGetJoystickHats(jid, &hatCount);
+            const float *axes = glfwGetJoystickAxes(jid, &axisCount);
+            gowpad::RawSample now;
+            if (buttons)
+                now.buttons.assign(buttons, buttons + buttonCount);
+            if (hats)
+                now.hats.assign(hats, hats + hatCount);
+            if (axes)
+                now.axes.assign(axes, axes + axisCount);
+            if (!haveRest[jid])
+            {
+                rest[jid] = now;
+                rest[jid].buttons.assign(now.buttons.size(), 0); // a button held while the probe starts is a press, not rest
+                haveRest[jid] = true;
+            }
+            const char *guid = glfwGetJoystickGUID(jid);
+            devices.push_back(gowpad::liveDevice(jid, guid ? guid : "", now, rest[jid]));
+        }
+        static std::string written;
+        static int sinceWrite = 0;
+        static unsigned beat = 0;
+        const std::string body = gowpad::liveJson(devices, 0);
+        // Rewritten when something changed, and about once a second otherwise (twenty checks a second: the beat shows the game is alive).
+        if (body == written && ++sinceWrite < 20)
+            return;
+        sinceWrite = 0;
+        written = body;
+        const std::string json = gowpad::liveJson(devices, ++beat);
+        std::error_code error;
+        std::filesystem::create_directories(liveFile.parent_path(), error);
+        std::filesystem::path temporary = liveFile;
+        temporary += ".tmp";
+        {
+            std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+            out << json;
+            if (!out)
+                return;
+        }
+        std::filesystem::rename(temporary, liveFile, error);
+        if (error)
+            std::filesystem::remove(temporary, error);
+    }
+}
+
 // GOW-Port: window loop (gowFrameInput), the thread that owns the raylib window: GLFW's joystick calls belong to it.
-// It also gives unmapped Xbox-class pads their mapping (always, with or without GOW_PAD_DIAG); the diagnostic below runs only
-// with the variable.
+// It also gives unmapped Xbox-class pads their mapping (always, with or without GOW_PAD_DIAG), keeps the launcher's device list
+// and the chosen device up to date, and feeds the launcher's mapping dialog; the diagnostic below runs only with GOW_PAD_DIAG.
 void gowPadDiagFrame()
 {
     mapUnmappedXpads();
+    updateControllerPicker();
+    updateLiveFeed();
     if (!padDiagEnabled())
         return;
     static JoystickDiag joysticks[kDiagJoysticks];
@@ -498,6 +745,11 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
     for (int i = 0; i < 4 && kGamepad < 0; ++i)
         if (IsGamepadAvailable(i))
             kGamepad = i;
+    // GOW-Port: the device chosen in the launcher (GOW_PAD_DEVICE) is the one read, whatever else is plugged in or was pressed.
+    const int chosenGamepad = g_chosenJoystick.load();
+    if (chosenGamepad >= 0 && chosenGamepad < 4 && IsGamepadAvailable(chosenGamepad))
+        kGamepad = chosenGamepad;
+    g_activeJoystick.store(kGamepad);
     const bool useGamepad = kGamepad >= 0;
     static int s_loggedGamepad = -2;
     if (kGamepad != s_loggedGamepad)
@@ -523,93 +775,25 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
         const char *val = std::getenv("PC_DMC5_CONTROLS");
         return val != nullptr && std::strcmp(val, "1") == 0;
     }();
-    // A, B, X, Y by physical position. An explicit launcher map takes priority over the preset.
-    // It is validated as a permutation so a corrupt preference does not accidentally cancel a button.
-    static const std::array<uint16_t, 4> faceButtons = [] {
-        constexpr std::array<uint16_t, 4> classic{PAD_CROSS, PAD_CIRCLE, PAD_SQUARE, PAD_TRIANGLE};
-        constexpr std::array<uint16_t, 4> modern{PAD_CROSS, PAD_TRIANGLE, PAD_CIRCLE, PAD_SQUARE};
-        const auto fallback = dmc5Controls ? modern : classic;
-        const char *value = std::getenv("PC_PAD_FACE_MAP");
-        if (!value || !*value)
-            return fallback;
-        const std::string names(value);
-        std::array<uint16_t, 4> mapped{};
-        std::array<bool, 4> seen{};
-        size_t offset = 0;
-        for (size_t i = 0; i < mapped.size(); ++i)
-        {
-            const size_t comma = names.find(',', offset);
-            if ((i < 3 && comma == std::string::npos) || (i == 3 && comma != std::string::npos))
-                return fallback;
-            const std::string name = names.substr(offset, comma == std::string::npos ? comma : comma - offset);
-            constexpr const char *labels[] = {"cross", "circle", "square", "triangle"};
-            bool valid = false;
-            for (size_t j = 0; j < 4; ++j)
-                if (name == labels[j] && !seen[j])
-                {
-                    mapped[i] = classic[j];
-                    seen[j] = valid = true;
-                    break;
-                }
-            if (!valid)
-                return fallback;
-            offset = comma == std::string::npos ? names.size() : comma + 1;
-        }
-        return mapped;
+    // GOW-Port: what each gamepad button presses, built once (gow_pad_map.h). Without PC_PAD_MAP it is the layout the launcher's presets
+    // describe: the classic or DMC5 shoulders and, by physical position A, B, X, Y, the PC_PAD_FACE_MAP permutation (validated there, a
+    // corrupt value falls back to the preset). A valid PC_PAD_MAP replaces both; an invalid one is ignored and logged once.
+    static const gowpad::Table padTable = []
+    {
+        std::string note;
+        const char *custom = std::getenv("PC_PAD_MAP");
+        const gowpad::Table table = gowpad::buildTable(custom, std::getenv("PC_PAD_FACE_MAP"), dmc5Controls, &note);
+        if (!note.empty())
+            std::fprintf(stderr, "[pad] %s\n", note.c_str());
+        else if (custom && *custom)
+            std::fprintf(stderr, "[pad] custom button map (PC_PAD_MAP) in use\n");
+        return table;
     }();
 
     if (useGamepad)
     {
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_UP))
-            clearBit(PAD_UP);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN))
-            clearBit(PAD_DOWN);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT))
-            clearBit(PAD_LEFT);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT))
-            clearBit(PAD_RIGHT);
-
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN))
-            clearBit(faceButtons[0]);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT))
-            clearBit(faceButtons[1]);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_LEFT))
-            clearBit(faceButtons[2]);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_UP))
-            clearBit(faceButtons[3]);
-
-        if (dmc5Controls)
-        {
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_1)) // LB -> Block / Parry
-                clearBit(PAD_L1);
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_1)) // RB -> Stance / Charge
-                clearBit(PAD_R1);
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_2)) // LT -> Magic
-                clearBit(PAD_R2);
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_2)) // RT -> Magic Toggle / Secondary
-                clearBit(PAD_L2);
-        }
-        else
-        {
-            // Classic PS2 GoW shoulder layout.
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_1))
-                clearBit(PAD_L1);
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_1))
-                clearBit(PAD_R1);
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_2))
-                clearBit(PAD_L2);
-            if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_2))
-                clearBit(PAD_R2);
-        }
-
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT))
-            clearBit(PAD_START);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_MIDDLE_LEFT))
-            clearBit(PAD_SELECT);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_THUMB))
-            clearBit(PAD_L3);
-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_THUMB))
-            clearBit(PAD_R3);
+        // Active low: every pressed button clears the bits it stands for (the sticks below are not buttons).
+        btns &= static_cast<uint16_t>(~gowpad::pressedBits(padTable, [kGamepad](int button) { return IsGamepadButtonDown(kGamepad, button); }));
 
         float lx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_X);
         float ly = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_Y);

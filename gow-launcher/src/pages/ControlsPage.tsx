@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Circle, DoorOpen, Ellipsis, Gamepad2, Square, Swords, Triangle, X } from 'lucide-react';
-import { Glyphs, GroupTitle, KeyCap, SecondaryButton, Select, SettingRow, Switch } from '../components/ui';
+import { Circle, DoorOpen, Ellipsis, Gamepad2, Square, Swords, Triangle, Usb, X } from 'lucide-react';
+import { PadMappingDialog } from '../components/PadMappingDialog';
+import { Glyphs, GroupTitle, KeyCap, Note, SecondaryButton, Select, SettingRow, Switch, type Option } from '../components/ui';
 import { Modal } from '../components/Shell';
 import { upper } from '../lib/i18n';
 import { actions, assign, conflicts, fromEvent, fromMouse, groups, isReserved, keyName, readBindings, type Bindings } from '../lib/keys';
+import { assignTarget, parsePadMap, presetLayout, serializePadMap, sharedTargets, SOURCES, TARGETS, type Source, type Target } from '../lib/padmap';
 import { useApp } from '../state/app';
+import type { PadDeviceList } from '../lib/types';
 
 type Face = 'cross' | 'circle' | 'square' | 'triangle';
 
@@ -93,11 +96,113 @@ function CaptureDialog({ action, onCode, onCancel }: { action: string; onCode: (
 
 const faceIcons = [X, Circle, Square, Triangle];
 
+/**
+ * The controller picker: the joysticks the game saw the last time it ran, and the one it must read. Choosing "Automatic"
+ * leaves it to the game (the first controller that answers).
+ */
+function ControllerPicker() {
+  const { api, settings, patch, t, f, lang } = useApp();
+  const [list, setList] = useState<PadDeviceList | null>(null);
+  const [mapping, setMapping] = useState(false);
+  const reload = () => api.padDevices().then(setList, () => setList(null));
+  useEffect(() => {
+    void reload();
+    // The game rewrites the list while it runs; read it again when it closes.
+    let off: (() => void) | undefined;
+    void api.on('game-running', (running) => !running && void reload()).then((stop) => (off = stop));
+    return () => off?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api]);
+
+  const devices = list?.devices ?? [];
+  const chosen = settings.padDevice;
+  const current = devices.find((device) => device.guid.toLowerCase() === chosen.toLowerCase());
+  const options: Option[] = [
+    { text: t('padpickAuto'), value: '' },
+    ...devices.map((device) => ({ text: device.mapped ? device.name : f('padpickUnmapped', device.name), value: device.guid })),
+  ];
+  // A device that was chosen and is not in the last list stays selectable (and visible), so it can be un-chosen.
+  if (chosen && !current) options.push({ text: f('padpickNotSeen', settings.padDeviceName || chosen), value: chosen });
+  const absentLast = chosen !== '' && list !== null && (list.choice === 'absent' || list.choice === 'outOfRange');
+
+  return (
+    <>
+      <SettingRow icon={Usb} title={t('padpickTitle')} description={t('padpickDesc')} controlWidth={400}>
+        <div className="flex w-full gap-2">
+          <Select
+            label={t('padpickTitle')}
+            options={options}
+            value={chosen}
+            onChange={(guid) => {
+              const device = devices.find((candidate) => candidate.guid === guid);
+              // A mapping belongs to the device it was made for.
+              patch({ padDevice: guid, padDeviceName: device?.name ?? '', ...(guid === chosen ? {} : { padSdlMap: '' }) });
+            }}
+          />
+          <SecondaryButton onClick={() => void reload()}>{t('padpickRefresh')}</SecondaryButton>
+        </div>
+      </SettingRow>
+      {list === null || devices.length === 0 ? (
+        <Note>{t('padpickNone')}</Note>
+      ) : (
+        list.seenAt > 0 && <p className="px-1 text-xs text-ink-muted">{f('padpickSeen', new Date(list.seenAt * 1000).toLocaleString(lang))}</p>
+      )}
+      {current && !current.mapped && (
+        <Note tone="warn" title={t('padpickUnmappedTitle')}>
+          {f('padpickUnmappedText', current.name)}
+          <div className="mt-2">
+            <SecondaryButton onClick={() => setMapping(true)}>{t(settings.padSdlMap ? 'padsdlEdit' : 'padsdlOpen')}</SecondaryButton>
+          </div>
+        </Note>
+      )}
+      {current && current.mapped && settings.padSdlMap !== '' && (
+        <Note>
+          {t('padsdlInUse')}
+          <div className="mt-2">
+            <SecondaryButton onClick={() => setMapping(true)}>{t('padsdlEdit')}</SecondaryButton>
+          </div>
+        </Note>
+      )}
+      {current && !current.mapped && settings.padSdlMap !== '' && <Note>{t('padsdlInUse')}</Note>}
+      {mapping && current && (
+        <PadMappingDialog
+          device={current}
+          initial={settings.padSdlMap}
+          onClose={() => setMapping(false)}
+          onSave={(padSdlMap) => {
+            patch({ padSdlMap });
+            setMapping(false);
+          }}
+        />
+      )}
+      {absentLast && <Note tone="warn">{t(list?.choice === 'outOfRange' ? 'padpickOutOfRange' : 'padpickAbsent')}</Note>}
+    </>
+  );
+}
+
 export function ControlsPage() {
   const { settings, patch, t, f, lang } = useApp();
   const map = useMemo(() => readBindings(settings.keys), [settings.keys]);
   const [capture, setCapture] = useState<{ action: string; index: number } | null>(null);
   const faces = faceButtons(settings.padButtons, settings.dmc5Controls);
+  // A custom button map the game accepts; an invalid text is ignored by the game too, so it counts as no map.
+  const parsedMap = useMemo(() => parsePadMap(settings.padMap), [settings.padMap]);
+  const custom = parsedMap.ok ? parsedMap.layout : null;
+  const [noStart, setNoStart] = useState(false);
+  const scheme = custom ? 'custom' : settings.dmc5Controls ? 'modern' : 'classic';
+
+  const changeScheme = (value: string) => {
+    setNoStart(false);
+    if (value === 'custom') patch({ padMap: serializePadMap(presetLayout(settings.dmc5Controls, faces)) });
+    else patch({ dmc5Controls: value === 'modern', padButtons: '', padMap: '' });
+  };
+  const changeTarget = (source: Source, target: Target) => {
+    if (!custom) return;
+    const next = assignTarget(custom, source, target);
+    setNoStart(next === null);
+    if (next) patch({ padMap: serializePadMap(next) });
+  };
+  const sharedLabels = custom ? sharedTargets(custom).map((target) => t(`padmapTarget_${target}`)) : [];
 
   const save = (bindings: Bindings) => patch({ keys: JSON.stringify(bindings) });
   const warning = (action: string, code: number) => {
@@ -115,24 +220,68 @@ export function ControlsPage() {
 
   return (
     <div className="flex flex-col gap-1">
+      <ControllerPicker />
       <SettingRow icon={Gamepad2} title={t('padScheme')} description={t('padSchemeDesc')}>
         <Select
           label={t('padScheme')}
-          options={[{ text: t('modernPad'), value: true }, { text: t('classicPad'), value: false }]}
-          value={settings.dmc5Controls}
-          onChange={(dmc5Controls) => patch({ dmc5Controls, padButtons: '' })}
+          options={[
+            { text: t('modernPad'), value: 'modern' },
+            { text: t('classicPad'), value: 'classic' },
+            { text: t('padmapCustom'), value: 'custom' },
+          ]}
+          value={scheme}
+          onChange={changeScheme}
         />
       </SettingRow>
       {['A / ✕', 'B / ○', 'X / □', 'Y / △'].map((title, index) => (
-        <SettingRow key={title} icon={faceIcons[index]} title={title} description={t('padButtonDesc')}>
+        <SettingRow
+          key={title}
+          icon={faceIcons[index]}
+          title={title}
+          description={custom ? t('padmapLocked') : t('padButtonDesc')}
+          disabled={custom !== null}
+        >
           <Select
             label={title}
+            disabled={custom !== null}
             options={faceOptions}
             value={faces[index]}
             onChange={(value) => patch({ padButtons: setFaceButton(faces, index, value).join(',') })}
           />
         </SettingRow>
       ))}
+      {custom && (
+        <>
+          <GroupTitle>{t('padmapTitle')}</GroupTitle>
+          <p className="px-1 text-[13px] text-ink-muted">{t('padmapDesc')}</p>
+          {SOURCES.map((source) => (
+            <SettingRow key={source} title={t(`padmapSrc_${source}`)}>
+              <Select
+                label={f('padmapPresses', t(`padmapSrc_${source}`))}
+                options={TARGETS.map((target) => ({ text: t(`padmapTarget_${target}`), value: target }))}
+                value={custom[source]}
+                onChange={(target) => changeTarget(source, target)}
+              />
+            </SettingRow>
+          ))}
+          {sharedLabels.length > 0 && (
+            <Note tone="warn" title={t('padmapSharedTitle')}>
+              {f('padmapShared', sharedLabels.join(', '))}
+            </Note>
+          )}
+          {noStart && <Note tone="warn">{t('padmapNoStart')}</Note>}
+          <div className="flex justify-end py-1">
+            <SecondaryButton
+              onClick={() => {
+                setNoStart(false);
+                patch({ padMap: '' });
+              }}
+            >
+              {t('padmapReset')}
+            </SecondaryButton>
+          </div>
+        </>
+      )}
       <SettingRow icon={Swords} title={t('cancelAnimations')} description={t('cancelAnimationsDesc')}>
         <Switch label={t('cancelAnimations')} checked={settings.cancelAnimations} onChange={(cancelAnimations) => patch({ cancelAnimations })} />
       </SettingRow>

@@ -27,7 +27,7 @@ Notes:
   counts the key as a button while no movement key is held.
 - Keys are bound by **physical position**, so the layout works on any keyboard layout (including ABNT2 and Turkish).
 - Gamepad buttons can be swapped one by one (✕ ○ □ △); the presets are **Classic (PS2)**, the default, and **Modern
-  (DMC5 style)**.
+  (DMC5 style)**. **Custom (every button)** lets you choose what each of the 16 buttons presses (see [Gamepad](#gamepad)).
 
 ## In-game shortcuts
 
@@ -94,6 +94,17 @@ If you prefer the original timing, turn the switch off.
 
 - Any XInput (Windows) or evdev (Linux) pad works; DualShock 4, DualSense, Xbox and 8BitDo controllers were tested.
 - The PS2 layout is the default; the modern layout and the four face-button swaps are in **Controls**.
+- **Custom (every button)** in **Controls** gives each of A, B, X, Y, LB, RB, LT, RT, Back, Start, both stick presses and the
+  four d-pad directions its own PS2 button (or Nothing). It starts from the layout you were using. Two buttons may press the
+  same PS2 button; Start has to stay on some button. The sticks and the guide button are not remappable.
+- **Choosing the controller**: the game normally follows the first controller that answers. A receiver or a PC with several
+  devices (a 2.4G dongle lists a media-keys device, keyboards and the real pad) can make that the wrong one: **Controls →
+  Controller** lists what the game saw the last time it ran, marks the devices the system has no button layout for, and lets
+  you pick the one to read. The list fills in after the first run with the controller connected.
+- **A controller with no button layout** (many generic 2.4G receivers: the game sees it but every button reads as released)
+  can be mapped by hand: choose it, press **Map its buttons**, start the game with it connected (the keyboard works in the
+  menus), and in the dialog press **Listen** next to each button and press it on the controller. The game reports which
+  input moved, so no numbers have to be typed. **Start** is required. The mapping applies the next time the game starts.
 - **Vibration works on Windows only**: the Linux build has no rumble.
 - Only port 1 is connected: the game's second controller slot does nothing.
 

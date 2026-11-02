@@ -98,6 +98,7 @@ pub fn start(
         gpu: wanted.clone(),
         icon: Some(paths.icon()),
         shader_cache: paths.shader_cache(),
+        pad_devices_file: Some(paths.pad_devices_file()),
         retro_achievements_password: settings
             .retro_achievements_enabled
             .then(|| credential::retro_achievements_password(&settings.retro_achievements_user))

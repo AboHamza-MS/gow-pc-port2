@@ -104,6 +104,15 @@ The game log is plain text. Lines starting with `[gow-`, `[gs`, `[vu1` and `[iop
 
 ## What to include in a bug report
 
+**The easy way:** in the launcher open **Other**, press **Export report** and attach the ZIP it saves to the issue. It
+holds the logs, your settings, the environment the game was started with and details of your PC (system, processor,
+memory, graphics driver, installation facts), with your user name, computer name and folders replaced by placeholders. It
+never contains game files, saves, captures or textures. The failure dialog has the same button. **Mark a problem**
+(Other tab or the failure dialog) adds a short note to the next report, with how far into the game it was. Open the ZIP
+and look through it before attaching: the removal is by text match, and `README.txt` inside lists what it cannot catch.
+
+If you cannot use the launcher, or for a build problem, give:
+
 1. **Platform and version**: OS, GPU and driver, launcher version (About) or commit hash.
 2. **How it was built**: the launcher wizard, `install.cmd`/`install.sh`, and whether `-FastDev` was used.
 3. **What you did**: the area, whether it was a save, a movie, a menu; if it is performance, the scene and the settings.

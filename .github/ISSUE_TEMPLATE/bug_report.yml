@@ -1,0 +1,40 @@
+name: Bug report
+description: Something does not work in the game or the launcher
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting it. The fastest way for us to help is the **session report**: in the launcher open
+        **Other, Export report**, then drag the ZIP into the box below. It holds the logs, your settings and details of
+        your PC, with your user name and folders removed. Look inside before you attach it. It never contains game files,
+        saves or captures. Please do not attach the ISO, the game file, RAM dumps or recorded microcode.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what you saw. If it is about speed, say which scene and which settings.
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Session report
+      description: Drag the ZIP here (Other, Export report). Use "Mark a problem" in the launcher right after it happens to add a note to it.
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Launcher version and system
+      description: The version is in Other, About. Say Windows or Linux and which one.
+      placeholder: "0.2.5, Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: If you could not export a report, paste the end of `logs/last.log` instead.
+    validations:
+      required: false
