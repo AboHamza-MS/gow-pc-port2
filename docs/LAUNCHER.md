@@ -122,6 +122,7 @@ The data folder is `%APPDATA%\GOW_PC\Launcher` on Windows and `~/.local/share/GO
 | Installer and optimizer logs | `logs/install.log`, `logs/optimize.log` |
 | Launcher update checks and installs | `logs/update.log` |
 | Installation kit shipped with the launcher | `kit/` in the data folder |
+| Kit repairs (a file that went missing and was restored) | `logs/kit.log` |
 | Window icon | `icon.png` in the data folder |
 | GL shader cache | `%LOCALAPPDATA%\GOW_PC\Launcher\cache\shaders` / `~/.cache/GOW_PC/Launcher/shaders` |
 | Game data, build and saves | inside your installation folder (`game/`, `build/`, `game/Mcd001.ps2`) |
@@ -149,6 +150,18 @@ The launcher also pauses a background rebuild while the game is running, and res
 - **Linux (experimental)**: `.deb` or AppImage from the same Releases page. The wizard drives `install.sh` there
   (unverified on a real Linux machine); `./install.sh` from a checkout also works, and the launcher finds its files.
   Vibration is not implemented on Linux.
+
+## When something fails
+
+The launcher checks the kit's essential files (`install.ps1` or `install.sh`, `bin/ps2_recomp`, `bin/ps2-tools`, the
+CMake and game data files the build reads) every time it opens, and restores any that is gone from the copy bundled with
+it (an antivirus is the usual cause); a repair is noted in `logs/kit.log`. If the bundled copy is missing too (a portable
+zip extracted without its `kit` folder), the wizard lists the missing files at the location step and does not go on.
+
+When an installation or the game fails for a cause the launcher recognizes, a short explanation appears above the raw
+error text, which stays: a download that failed, no usable CMake, a kit file that is gone, a graphics driver that could
+not give the OpenGL context, and the Windows exit codes for a missing DLL (`0xC0000135`) and a bad image (`0xC000007B`).
+Anything else shows only the raw text and the log button, as before.
 
 ## Updating the launcher
 

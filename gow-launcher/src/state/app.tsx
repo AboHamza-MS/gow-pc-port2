@@ -10,6 +10,8 @@ import type {
 export interface ErrorNotice {
   text: string;
   detail: string;
+  /** A short explanation of a recognized cause, shown above the raw detail. */
+  hint: string;
 }
 
 /**
@@ -48,7 +50,7 @@ export interface AppContextValue {
   toast: string;
   notify: (text: string) => void;
   error: ErrorNotice | null;
-  showError: (text: string, detail?: string) => void;
+  showError: (text: string, detail?: string, hint?: string) => void;
   dismissError: () => void;
   wizardOpen: boolean;
   openWizard: () => void;
@@ -119,7 +121,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToast(''), TOAST_MS);
   }, []);
-  const showError = useCallback((text: string, detail = '') => setError({ text, detail }), []);
+  const showError = useCallback((text: string, detail = '', hint = '') => setError({ text, detail, hint }), []);
 
   const adoptSettings = useCallback((next: Settings) => setSettings({ ...next, ...pending.current }), []);
 
@@ -198,7 +200,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       api.on('install-done', () => setInstalling(false)),
       api.on('game-finished', (finished: GameFinished) => {
         if (finished.failed) {
-          showError(format(asLanguage(settingsRef.current?.language ?? 'en'), 'finishedFailure', finished.code ?? '?'), finished.summary);
+          const language = asLanguage(settingsRef.current?.language ?? 'en');
+          showError(
+            format(language, 'finishedFailure', finished.code ?? '?'),
+            finished.summary,
+            finished.failureKind ? translate(language, finished.failureKind) : '',
+          );
         } else {
           const language = asLanguage(settingsRef.current?.language ?? 'en');
           notify(format(language, 'finishedOk', formatDuration(language, finished.seconds)));

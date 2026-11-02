@@ -225,7 +225,7 @@ export function createMockApi(options: { ready?: boolean; update?: UpdateState }
       setTimeout(() => {
         running = false;
         emit('game-running', false);
-        emit('game-finished', { code: 0, failed: false, seconds: 125, summary: '' });
+        emit('game-finished', { code: 0, failed: false, seconds: 125, summary: '', failureKind: null });
       }, 2500);
     },
     stopGame: async () => undefined,
@@ -267,7 +267,7 @@ export function createMockApi(options: { ready?: boolean; update?: UpdateState }
     },
     gamepadCancel: async () => undefined,
     wizardInfo: async () => ({
-      environment: { vs: false, cmakeUnusable: false, git: false, installer: true, missing: [], missingPackages: [], installCommand: '', cpuMissing: [] },
+      environment: { vs: false, cmakeUnusable: false, git: false, installer: true, missing: [], missingPackages: [], installCommand: '', cpuMissing: [], kitMissing: [] },
       hasManifest: true,
       defaultDestination: 'C:\\GodOfWar-PC',
     }),
@@ -294,7 +294,7 @@ export function createMockApi(options: { ready?: boolean; update?: UpdateState }
         emit('install-progress', { stage, stageProgress: 0.5, recentLines: [`==> stage ${stage}`, '[12/340] Building CXX object'] });
         if (++stage > 7) {
           clearInterval(timer);
-          emit('install-done', { ok: true, cancelled: false, error: '', elf: 'C:\\GodOfWar-PC\\game\\SCUS_973.99', executable: 'C:\\GodOfWar-PC\\build\\ps2xRuntime\\gow-2005.exe' });
+          emit('install-done', { ok: true, cancelled: false, error: '', elf: 'C:\\GodOfWar-PC\\game\\SCUS_973.99', executable: 'C:\\GodOfWar-PC\\build\\ps2xRuntime\\gow-2005.exe', failureKind: null });
         }
       }, 600);
     },

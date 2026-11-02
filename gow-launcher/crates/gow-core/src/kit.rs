@@ -10,11 +10,42 @@ use std::path::Path;
 
 pub const MARKER: &str = ".kit-version";
 
-/// Copies `source` over `target` when `version` differs from the one recorded there. Files that are already up to date
-/// (same size and modification time) are left alone; files that exist only in `target` are kept. Returns `true` if
-/// anything was extracted.
+/// The files the installers cannot run without, relative to the kit folder: the script, the two prebuilt executables and
+/// the game data the recompiler and the build read. An antivirus that removes one of them leaves the version marker
+/// behind, so [`sync`] checks them on every start.
+pub fn essential_files() -> Vec<String> {
+    let (script, exe) = if cfg!(windows) { ("install.ps1", ".exe") } else { ("install.sh", "") };
+    vec![
+        script.to_string(),
+        format!("bin/ps2_recomp{exe}"),
+        format!("bin/ps2-tools{exe}"),
+        "RustPortPS2/native/CMakeLists.txt".to_string(),
+        "RustPortPS2/games/scus-97399/gow-port.toml".to_string(),
+        "RustPortPS2/games/scus-97399/funcmap.csv".to_string(),
+        "RustPortPS2/games/scus-97399/vu1.manifest".to_string(),
+    ]
+}
+
+/// The [`essential_files`] that `root` does not have, as relative paths.
+pub fn missing_essentials(root: &Path) -> Vec<String> {
+    essential_files().into_iter().filter(|file| !root.join(file).is_file()).collect()
+}
+
+/// The kit files missing for the installer the launcher is going to run: `script` is the `install.ps1` / `install.sh` it
+/// found. When it came from a repository checkout above the launcher (development) there is no kit to check.
+pub fn missing_for_script(script: Option<&Path>, kit_dir: &Path) -> Vec<String> {
+    match script {
+        Some(script) if !script.starts_with(kit_dir) => Vec::new(),
+        _ => missing_essentials(kit_dir),
+    }
+}
+
+/// Copies `source` over `target` when `version` differs from the one recorded there, or when an essential file is gone
+/// even though the version matches. Files that are already up to date (same size and modification time) are left alone;
+/// files that exist only in `target` are kept. Returns `true` if anything was extracted.
 pub fn sync(source: &Path, target: &Path, version: &str) -> io::Result<bool> {
-    if fs::read_to_string(target.join(MARKER)).is_ok_and(|current| current.trim() == version) {
+    let current = fs::read_to_string(target.join(MARKER)).is_ok_and(|current| current.trim() == version);
+    if current && missing_essentials(target).is_empty() {
         return Ok(false);
     }
     fs::create_dir_all(target)?;
@@ -78,15 +109,69 @@ mod tests {
         assert_eq!(fs::read_to_string(target.join(MARKER)).unwrap(), "1.0.0");
     }
 
+    fn write_essentials(root: &Path) {
+        for file in essential_files() {
+            write(&root.join(file), "x");
+        }
+    }
+
+    #[test]
+    fn missing_essentials_lists_relative_paths() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(missing_essentials(root.path()), essential_files());
+        write_essentials(root.path());
+        assert!(missing_essentials(root.path()).is_empty());
+        fs::remove_file(root.path().join("RustPortPS2/games/scus-97399/funcmap.csv")).unwrap();
+        assert_eq!(missing_essentials(root.path()), ["RustPortPS2/games/scus-97399/funcmap.csv"]);
+    }
+
+    #[test]
+    fn a_repository_checkout_has_no_kit_to_check() {
+        let root = tempfile::tempdir().unwrap();
+        let kit = root.path().join("kit");
+        write_essentials(&kit);
+        let script = kit.join(essential_files().remove(0));
+        assert!(missing_for_script(Some(&script), &kit).is_empty());
+        fs::remove_file(&script).unwrap();
+        // No script found at all: the kit is what is missing.
+        assert_eq!(missing_for_script(None, &kit), [essential_files().remove(0)]);
+        // A script found elsewhere (a checkout): nothing to report about the kit folder.
+        assert!(missing_for_script(Some(&root.path().join("repo/install.ps1")), &kit).is_empty());
+    }
+
+    #[test]
+    fn a_missing_essential_file_is_restored_even_if_the_version_matches() {
+        let root = tempfile::tempdir().unwrap();
+        let (source, target) = (root.path().join("kit"), root.path().join("data"));
+        write_essentials(&source);
+        assert!(sync(&source, &target, "1.0.0").unwrap());
+        // Something else the player edited, and a generated file, stay as they are.
+        write(&target.join("install.cmd"), "edited by hand");
+        write(&target.join("RustPortPS2/native/ps2xRuntime/src/runner/gen_0001.cpp"), "generated");
+        let script = target.join(essential_files().remove(0));
+        fs::remove_file(&script).unwrap();
+        assert!(sync(&source, &target, "1.0.0").unwrap());
+        assert!(script.is_file());
+        assert!(missing_essentials(&target).is_empty());
+        assert_eq!(fs::read_to_string(target.join("install.cmd")).unwrap(), "edited by hand");
+        assert_eq!(
+            fs::read_to_string(target.join("RustPortPS2/native/ps2xRuntime/src/runner/gen_0001.cpp")).unwrap(),
+            "generated"
+        );
+        // Nothing is missing any more: the next start does nothing.
+        assert!(!sync(&source, &target, "1.0.0").unwrap());
+    }
+
     #[test]
     fn the_same_version_is_not_extracted_again() {
         let root = tempfile::tempdir().unwrap();
         let (source, target) = (root.path().join("kit"), root.path().join("data"));
-        write(&source.join("install.ps1"), "script");
+        write_essentials(&source);
         assert!(sync(&source, &target, "1.0.0").unwrap());
-        write(&target.join("install.ps1"), "edited by hand");
+        let script = target.join(essential_files().remove(0));
+        write(&script, "edited by hand");
         assert!(!sync(&source, &target, "1.0.0").unwrap());
-        assert_eq!(fs::read_to_string(target.join("install.ps1")).unwrap(), "edited by hand");
+        assert_eq!(fs::read_to_string(script).unwrap(), "edited by hand");
     }
 
     #[test]

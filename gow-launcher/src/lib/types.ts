@@ -103,6 +103,8 @@ export interface GameFinished {
   failed: boolean;
   seconds: number;
   summary: string;
+  /** The i18n key that explains a recognized failure (`failureOpenGl`...), shown above the raw summary; null if unknown. */
+  failureKind: string | null;
 }
 
 export interface LaunchError {
@@ -137,6 +139,8 @@ export interface WizardInfo {
     installCommand: string;
     /** Windows x86-64: CPU features the game needs that this processor lacks (`['SSE4.1']`); empty when all are there. */
     cpuMissing: string[];
+    /** Installation kit files (relative to the kit folder) that are gone and could not be restored; empty when all are there. */
+    kitMissing: string[];
   };
   hasManifest: boolean;
   defaultDestination: string;
@@ -167,6 +171,8 @@ export interface InstallOutcome {
   error: string;
   elf: string;
   executable: string;
+  /** The i18n key that explains a recognized failure (`failureDownload`...), shown above the raw error; null if unknown. */
+  failureKind: string | null;
 }
 
 export interface GamepadCaptured {

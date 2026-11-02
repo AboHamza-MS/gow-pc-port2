@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use crate::failure;
 use crate::game::EXECUTABLE_NAME;
 use crate::paths;
 use crate::script::{self, quote_for_powershell, ScriptOptions, ScriptRun};
@@ -64,6 +65,9 @@ pub struct Environment {
     /// Windows x86-64: the CPU features the game needs that this processor lacks (see [`REQUIRED_CPU_FEATURE`]); empty when
     /// all are there, on Linux (the build uses `-march=native` there) and on other architectures.
     pub cpu_missing: Vec<String>,
+    /// The installation kit files (relative to the kit folder) that are gone and could not be restored from the bundled
+    /// copy; empty when all are there. Filled by the application, which knows the kit folder.
+    pub kit_missing: Vec<String>,
 }
 
 /// What `install.sh --check-deps` printed: the missing checks, their packages and the command that installs them.
@@ -157,6 +161,7 @@ pub fn check_environment(script: Option<&Path>) -> Environment {
         missing_packages: Vec::new(),
         install_command: String::new(),
         cpu_missing: missing_cpu_features(detect_required_cpu_feature()),
+        kit_missing: Vec::new(),
     };
     if !cfg!(windows) {
         let report = script.map(linux_dependencies).unwrap_or_default();
@@ -348,6 +353,8 @@ pub struct InstallOutcome {
     pub error: String,
     pub elf: String,
     pub executable: String,
+    /// The interface string that explains a recognized failure (see [`failure::FailureKind`]), shown above the raw text.
+    pub failure_kind: Option<String>,
 }
 
 /// Paths the installer leaves behind inside `destination`.
@@ -363,6 +370,7 @@ fn outcome_for(destination: &str, code: Option<i32>, cancelled: bool, tracker: &
         error,
         elf: String::new(),
         executable: String::new(),
+        failure_kind: None,
     };
     if cancelled {
         return InstallOutcome { cancelled: true, ..failure(String::new()) };
@@ -376,6 +384,7 @@ fn outcome_for(destination: &str, code: Option<i32>, cancelled: bool, tracker: &
                 error: String::new(),
                 elf: elf.to_string_lossy().into_owned(),
                 executable: executable.to_string_lossy().into_owned(),
+                failure_kind: None,
             };
         }
         return failure(format!(
@@ -384,7 +393,11 @@ fn outcome_for(destination: &str, code: Option<i32>, cancelled: bool, tracker: &
             executable.display()
         ));
     }
-    failure(tracker.failure_detail(code))
+    InstallOutcome {
+        failure_kind: failure::classify_install_failure(&tracker.last_error, &tracker.progress.recent_lines)
+            .map(|kind| kind.key().to_string()),
+        ..failure(tracker.failure_detail(code))
+    }
 }
 
 /// A running installation.
@@ -622,6 +635,21 @@ mod tests {
         let done = outcome_for(&destination, Some(0), false, &tracker);
         assert!(done.ok && done.elf.ends_with("SCUS_973.99"));
         assert!(!outcome_for(&destination, Some(1), false, &tracker).ok);
+    }
+
+    #[test]
+    fn a_recognized_failure_carries_its_hint_and_an_unknown_one_does_not() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().to_string_lossy().into_owned();
+        let mut tracker = ProgressTracker::default();
+        tracker.feed("[error] ninja ended with code 1");
+        assert_eq!(outcome_for(&destination, Some(1), false, &tracker).failure_kind, None);
+        tracker
+            .feed("[error] Could not download https://example.org/x.zip (timed out). Check the Internet connection.");
+        let outcome = outcome_for(&destination, Some(1), false, &tracker);
+        assert_eq!(outcome.failure_kind.as_deref(), Some("failureDownload"));
+        // The raw text stays.
+        assert!(outcome.error.starts_with("Could not download"));
     }
 
     #[test]

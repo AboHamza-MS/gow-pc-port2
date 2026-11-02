@@ -418,5 +418,12 @@
   "updateBlocked_texturePack": "Espere o pacote de texturas terminar de instalar.",
   "autoUpdate": "Atualizações automáticas",
   "autoUpdateDesc": "Procura uma versão nova do launcher ao abrir e a instala sozinho quando o jogo, o instalador e a otimização estão parados, e depois reinicia o launcher. Desligado: você só vê um aviso e aperta Atualizar. Uma cópia portátil só mostra o aviso.",
-  "wizCpuUnsupported": "O processador deste PC não tem SSE4.1, que o jogo exige (Intel Core 2 Penryn de 2008 em diante, AMD Bulldozer de 2011 em diante). O jogo não roda aqui, então a instalação está bloqueada."
+  "wizCpuUnsupported": "O processador deste PC não tem SSE4.1, que o jogo exige (Intel Core 2 Penryn de 2008 em diante, AMD Bulldozer de 2011 em diante). O jogo não roda aqui, então a instalação está bloqueada.",
+  "failureKitFile": "Falta um arquivo do kit de instalação, provavelmente removido por um antivírus. Feche o launcher e abra de novo para restaurá-lo. Se continuar acontecendo, adicione a pasta de dados do launcher às exclusões do antivírus.",
+  "failureKitMissing": "Faltam arquivos do kit de instalação: %1. Feche o launcher e abra de novo para restaurá-los. Se continuarem faltando, extraia o zip do launcher outra vez (cópia portátil) ou adicione a pasta de dados do launcher às exclusões do antivírus.",
+  "failureCmakeUnusable": "O instalador não encontrou um CMake que consiga compilar o jogo (versão 3.21 ou mais nova, com cmcldeps.exe). Tente de novo com acesso à Internet, para que ele baixe um CMake portátil, ou instale o Visual Studio 2022 Build Tools.",
+  "failureDownload": "Um download falhou. Confira a conexão com a Internet e se nenhum firewall ou antivírus está bloqueando o launcher, e tente de novo.",
+  "failureOpenGl": "O driver de vídeo não conseguiu fornecer o contexto OpenGL que o jogo precisa. Atualize o driver de vídeo. Uma sessão de área de trabalho remota ou o Adaptador de Vídeo Básico da Microsoft não consegue rodar o jogo.",
+  "failureMissingDll": "O Windows não encontrou uma biblioteca de que o jogo precisa (código de erro 0xC0000135). Rode a instalação de novo e confira se nenhum antivírus removeu arquivos da pasta do jogo.",
+  "failureBadImage": "O Windows não conseguiu carregar o jogo ou uma das bibliotecas dele, porque o arquivo está danificado ou foi feito para outro tipo de PC (código de erro 0xC000007B). Rode a instalação de novo neste PC."
 }

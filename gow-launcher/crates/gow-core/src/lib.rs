@@ -4,6 +4,7 @@
 pub mod credential;
 pub mod display;
 pub mod elf_check;
+pub mod failure;
 pub mod game;
 pub mod gamepad;
 pub mod gpu;

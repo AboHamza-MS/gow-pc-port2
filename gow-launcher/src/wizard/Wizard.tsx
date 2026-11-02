@@ -12,7 +12,7 @@ type Step = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 const emptyIso: IsoValidation = { ok: false, reason: 'empty', hash: '' };
 const emptyDestination: DestinationValidation = { ok: false, reason: 'empty', freeGb: 0 };
 const noInfo: WizardInfo = {
-  environment: { vs: true, cmakeUnusable: false, git: true, installer: true, missing: [], missingPackages: [], installCommand: '', cpuMissing: [] },
+  environment: { vs: true, cmakeUnusable: false, git: true, installer: true, missing: [], missingPackages: [], installCommand: '', cpuMissing: [], kitMissing: [] },
   hasManifest: false, defaultDestination: '',
 };
 
@@ -58,6 +58,7 @@ export function Wizard() {
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancellation, setCancellation] = useState('');
   const [errorText, setErrorText] = useState('');
+  const [errorHint, setErrorHint] = useState('');
   const [hovering, setHovering] = useState(false);
   const [rechecking, setRechecking] = useState(false);
   const outcome = useRef<InstallOutcome | null>(null);
@@ -138,6 +139,7 @@ export function Wizard() {
           setStep(5);
         } else {
           setErrorText(event.error);
+          setErrorHint(event.failureKind ? t(event.failureKind) : '');
           setStep(6);
         }
       }),
@@ -175,7 +177,7 @@ export function Wizard() {
   const canAdvance = (() => {
     switch (step) {
       case 0: return isoCheck.ok && cpuSupported;
-      case 1: return destinationCheck.ok && environment.installer;
+      case 1: return destinationCheck.ok && environment.installer && environment.kitMissing.length === 0;
       case 2: return componentsReady;
       case 3: case 5: case 6: return true;
       default: return false;
@@ -184,6 +186,7 @@ export function Wizard() {
 
   const compile = async () => {
     setErrorText('');
+    setErrorHint('');
     setCancellation('');
     setConfirmingCancel(false);
     setProgress(0);
@@ -345,7 +348,11 @@ export function Wizard() {
               <Component title={t('wizRamLimit4')} description={t('wizRamLimit4Desc')} size="4 GB" checked={vu1MemoryLimitGb === 4} onChange={(checked) => checked && setVu1MemoryLimitGb(4)} />
               <Component title={t('wizRamLimit8')} description={t('wizRamLimit8Desc')} size="8 GB" checked={vu1MemoryLimitGb === 8} onChange={(checked) => checked && setVu1MemoryLimitGb(8)} />
             </div>
-            {!environment.installer && <p className="text-[13px] text-bad">{t('wizNoInstaller')}</p>}
+            {environment.kitMissing.length > 0 ? (
+              <p role="alert" className="text-[13px] text-bad">{f('failureKitMissing', environment.kitMissing.join(', '))}</p>
+            ) : (
+              !environment.installer && <p className="text-[13px] text-bad">{t('wizNoInstaller')}</p>
+            )}
           </Body>
         )}
 
@@ -444,6 +451,7 @@ export function Wizard() {
         {step === 6 && (
           <Body>
             <Lead>{t('wizErrorText')}</Lead>
+            {errorHint && <p className="text-[13px] font-semibold text-ink">{errorHint}</p>}
             <pre className="max-h-[190px] overflow-auto whitespace-pre-wrap break-all rounded border border-bad bg-field p-2.5 font-mono text-xs text-ink">{errorText}</pre>
             <p className="text-[13px] text-ink-muted">{t('wizErrorHint')}</p>
           </Body>
