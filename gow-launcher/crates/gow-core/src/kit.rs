@@ -5,7 +5,7 @@
 //! A new version therefore updates the files in place and never deletes what the build generated.
 
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 
 use crate::rebuild;
@@ -43,15 +43,21 @@ pub fn missing_for_script(script: Option<&Path>, kit_dir: &Path) -> Vec<String> 
 }
 
 /// Copies `source` over `target` when `version` differs from the one recorded there, or when an essential file is gone
-/// even though the version matches. Files that are already up to date (same size and modification time) are left alone;
+/// even though the version matches. Files that already hold the same content are left alone, modification time included;
 /// files that exist only in `target` are kept. Returns `true` if anything was extracted.
 pub fn sync(source: &Path, target: &Path, version: &str) -> io::Result<bool> {
     let current = fs::read_to_string(target.join(MARKER)).is_ok_and(|current| current.trim() == version);
-    if current && missing_essentials(target).is_empty() {
+    // A kit whose digest could not be recorded (a file locked by an antivirus) is tried again at the next start: without
+    // the digest the launcher can never tell that a build is out of date.
+    if current && missing_essentials(target).is_empty() && rebuild::read_kit_digest(target).is_some() {
         return Ok(false);
     }
-    // The first extraction that records a digest also needs the digest of the kit it replaces (see `rebuild`).
-    let before = if rebuild::read_kit_digest(target).is_none() { rebuild::kit_digest(target).ok() } else { None };
+    // The first extraction that records a digest also needs the digest of the kit it replaces (see `rebuild`). A folder that
+    // holds no kit yet (a first installation) replaces nothing: hashing it would give the digest of nothing, which every
+    // build without a marker would then be compared with.
+    let has_old_kit = target.join(MARKER).is_file() || missing_essentials(target).len() < essential_files().len();
+    let before =
+        if has_old_kit && rebuild::read_kit_digest(target).is_none() { rebuild::kit_digest(target).ok() } else { None };
     fs::create_dir_all(target)?;
     copy_tree(source, target)?;
     rebuild::record_kit(target, before);
@@ -73,22 +79,49 @@ fn copy_tree(source: &Path, target: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Whether two files hold the same bytes.
+fn same_content(a: &Path, b: &Path) -> io::Result<bool> {
+    let (mut a, mut b) = (File::open(a)?, File::open(b)?);
+    let (mut left, mut right) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
+    loop {
+        let read = a.read(&mut left)?;
+        let mut filled = 0;
+        while filled < read {
+            let more = b.read(&mut right[filled..read])?;
+            if more == 0 {
+                return Ok(false);
+            }
+            filled += more;
+        }
+        if read == 0 {
+            // `a` is at its end: `b` must be too.
+            return Ok(b.read(&mut right[..1])? == 0);
+        }
+        if left[..read] != right[..read] {
+            return Ok(false);
+        }
+    }
+}
+
+/// Copies one kit file. A file whose content is already there is left alone, including its modification time: the build
+/// folder's objects are older or newer than their sources by those times, and a release stamps every file it carries with the
+/// time it was staged, so copying an unchanged file would make the build recompile everything that includes it. A file that
+/// changed is copied and gets the time of the copy (not the source's: a source older than the objects would be ignored).
 fn copy_file(source: &Path, destination: &Path) -> io::Result<()> {
-    let (from, to) = (fs::metadata(source)?, fs::metadata(destination));
-    if let Ok(to) = &to {
-        if to.len() == from.len() && to.modified().ok() == from.modified().ok() {
+    let from = fs::metadata(source)?;
+    let existing = fs::metadata(destination);
+    if let Ok(to) = &existing {
+        if to.len() == from.len() && same_content(source, destination).unwrap_or(false) {
             return Ok(());
         }
     }
     // A read-only copy left by an earlier extraction must not block the update.
-    if to.is_ok() {
+    if existing.is_ok() {
         let _ = fs::remove_file(destination);
     }
     fs::copy(source, destination)?;
-    if let Ok(modified) = from.modified() {
-        if let Ok(file) = File::options().write(true).open(destination) {
-            let _ = file.set_modified(modified);
-        }
+    if let Ok(file) = File::options().write(true).open(destination) {
+        let _ = file.set_modified(std::time::SystemTime::now());
     }
     Ok(())
 }
@@ -247,6 +280,84 @@ mod tests {
         write(&source.join("a.txt"), "newer content");
         assert!(sync(&source, &target, "2").unwrap());
         assert_eq!(fs::read_to_string(target.join("a.txt")).unwrap(), "newer content");
+    }
+
+    fn modified(path: &Path) -> std::time::SystemTime {
+        fs::metadata(path).unwrap().modified().unwrap()
+    }
+
+    #[test]
+    fn an_unchanged_file_keeps_its_modification_time_across_versions() {
+        let root = tempfile::tempdir().unwrap();
+        let (source, target) = (root.path().join("kit"), root.path().join("data"));
+        write_essentials(&source);
+        write(&source.join("RustPortPS2/native/ps2xRuntime/include/ps2_runtime.h"), "header");
+        sync(&source, &target, "1.0.0").unwrap();
+        let header = target.join("RustPortPS2/native/ps2xRuntime/include/ps2_runtime.h");
+        let installed = modified(&header);
+        // A new release stages every file again with a new time, and changes one other file.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        write(&source.join("RustPortPS2/native/ps2xRuntime/include/ps2_runtime.h"), "header");
+        write(&source.join("RustPortPS2/native/ps2xRuntime/src/a.cpp"), "int fixed;");
+        assert!(sync(&source, &target, "1.0.1").unwrap());
+        assert_eq!(modified(&header), installed, "the build would recompile everything that includes the header");
+        assert_eq!(fs::read_to_string(target.join("RustPortPS2/native/ps2xRuntime/src/a.cpp")).unwrap(), "int fixed;");
+    }
+
+    #[test]
+    fn a_changed_file_gets_the_time_of_the_copy_not_the_one_of_its_source() {
+        let root = tempfile::tempdir().unwrap();
+        let (source, target) = (root.path().join("kit"), root.path().join("data"));
+        write_essentials(&source);
+        write(&source.join("a.cpp"), "old");
+        sync(&source, &target, "1.0.0").unwrap();
+        write(&source.join("a.cpp"), "new and longer");
+        // The source is much older than the build's objects: ninja would ignore the new content if the copy kept this time.
+        let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 24 * 3600);
+        File::options().write(true).open(source.join("a.cpp")).unwrap().set_modified(long_ago).unwrap();
+        let before = std::time::SystemTime::now() - std::time::Duration::from_secs(5);
+        assert!(sync(&source, &target, "1.0.1").unwrap());
+        assert_eq!(fs::read_to_string(target.join("a.cpp")).unwrap(), "new and longer");
+        assert!(modified(&target.join("a.cpp")) > before);
+    }
+
+    #[test]
+    fn same_content_compares_whole_files() {
+        let root = tempfile::tempdir().unwrap();
+        let (a, b, c) = (root.path().join("a"), root.path().join("b"), root.path().join("c"));
+        let big: Vec<u8> = (0..200_000u32).map(|n| (n % 251) as u8).collect();
+        fs::write(&a, &big).unwrap();
+        fs::write(&b, &big).unwrap();
+        let mut other = big.clone();
+        *other.last_mut().unwrap() ^= 1; // only the last byte differs
+        fs::write(&c, &other).unwrap();
+        assert!(same_content(&a, &b).unwrap());
+        assert!(!same_content(&a, &c).unwrap());
+        fs::write(&c, &big[..big.len() - 1]).unwrap();
+        assert!(!same_content(&a, &c).unwrap());
+        assert!(!same_content(&c, &a).unwrap());
+    }
+
+    #[test]
+    fn a_first_installation_remembers_no_prior_digest() {
+        let root = tempfile::tempdir().unwrap();
+        let (source, target) = (root.path().join("kit"), root.path().join("data"));
+        write_essentials(&source);
+        write(&source.join("RustPortPS2/native/ps2xRuntime/src/a.cpp"), "int a;");
+        assert!(sync(&source, &target, "1.0.0").unwrap());
+        assert!(!target.join(rebuild::PRIOR_MARKER).exists(), "an empty folder replaces no kit");
+    }
+
+    #[test]
+    fn a_kit_without_a_digest_records_it_at_the_next_start() {
+        let root = tempfile::tempdir().unwrap();
+        let (source, target) = (root.path().join("kit"), root.path().join("data"));
+        write_essentials(&source);
+        sync(&source, &target, "1.0.0").unwrap();
+        fs::remove_file(target.join(rebuild::DIGEST_MARKER)).unwrap(); // the recording failed once (a locked file)
+        assert!(sync(&source, &target, "1.0.0").unwrap());
+        assert!(rebuild::read_kit_digest(&target).is_some());
+        assert!(!sync(&source, &target, "1.0.0").unwrap());
     }
 
     #[test]

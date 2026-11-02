@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -94,6 +94,22 @@ describe('the staged kit', { timeout: 60_000 }, () => {
     const { errors, checked } = checkKit({ kitDir: target });
     expect(errors).toEqual([]);
     expect(checked).toBeGreaterThan(20);
+  });
+
+  it('stamps the kit with the sources of the Rust tools, not with the bytes of the executables', () => {
+    const files = stage({ target, buildTools: fakeTools });
+    expect(files).toContain('kit-tools.stamp');
+    const first = readFileSync(join(target, 'kit-tools.stamp'), 'utf8').trim();
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    // Two builds of the same sources give different executables, and the same stamp.
+    const other = (() => {
+      const result = fakeTools();
+      writeFileSync(result.recomp, 'a second build of the same sources');
+      writeFileSync(result.tools, 'a second build of the same sources');
+      return result;
+    })();
+    stage({ target, buildTools: () => other });
+    expect(readFileSync(join(target, 'kit-tools.stamp'), 'utf8').trim()).toBe(first);
   });
 
   it('builds the Rust tools when no prebuilt ones are given', () => {

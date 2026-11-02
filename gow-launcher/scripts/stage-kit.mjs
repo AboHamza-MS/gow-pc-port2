@@ -7,7 +7,8 @@
 //   node scripts/stage-kit.mjs
 
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -77,6 +78,30 @@ export function buildRustTools({ repository = repositoryRoot, cargo = process.en
   return { recomp: join(dir, `ps2_recomp${exe}`), tools: join(dir, `ps2-tools${exe}`) };
 }
 
+/** In the kit: the stamp of the Rust tools' sources. See `TOOLS_STAMP` in crates/gow-core/src/rebuild.rs. */
+export const TOOLS_STAMP = 'kit-tools.stamp';
+
+/**
+ * A hash of what the two prebuilt Rust tools are made of: the content of every tracked file under `RustPortPS2/crates/`
+ * plus the workspace manifest and lock. The launcher compares kits by this instead of by the executables' bytes: compiling the
+ * same sources twice gives different bytes (timestamps, debug identifiers), which would make every release ask every player
+ * to rebuild their game. The stamp changes only when the recompiler or the tools really changed.
+ */
+export function toolsStamp(repository = repositoryRoot, tracked = trackedFiles(repository)) {
+  const inputs = tracked
+    .filter((file) => file.startsWith('RustPortPS2/crates/') || file === 'RustPortPS2/Cargo.toml' || file === 'RustPortPS2/Cargo.lock')
+    .sort();
+  const outer = createHash('sha256');
+  for (const file of inputs) {
+    const path = join(repository, file);
+    if (!existsSync(path)) continue; // tracked but deleted in the working tree
+    // Line endings are normalized: a Windows checkout with autocrlf and a Linux one hold the same sources.
+    const text = readFileSync(path).toString('latin1').replace(/\r\n/g, '\n');
+    outer.update(`${file}\0${createHash('sha256').update(text, 'latin1').digest('hex')}\n`);
+  }
+  return outer.digest('hex');
+}
+
 /** Copies the kit into `target` (replacing it). Returns the staged files. */
 export function stage({
   repository = repositoryRoot,
@@ -117,6 +142,8 @@ export function stage({
     cpSync(binary, join(target, RECOMP_BINARY_DIR, name));
     files.push(`${RECOMP_BINARY_DIR}/${name}`);
   }
+  writeFileSync(join(target, TOOLS_STAMP), `${toolsStamp(repository)}\n`);
+  files.push(TOOLS_STAMP);
   return files;
 }
 

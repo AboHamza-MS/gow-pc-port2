@@ -40,7 +40,14 @@ fn is_generated(relative: &str) -> bool {
         .iter()
         .any(|part| matches!(*part, "runner" | "vu1_generated" | "vu1n_generated") || part.starts_with("build"))
         || (file.starts_with("iopn_") && relative.contains("ps2xIOP/src/native/"))
+        // `install.ps1` copies the two generated declaration headers into the runtime's include folder.
+        || (file.starts_with("ps2_recompiled_") && file.ends_with(".h") && relative.contains("ps2xRuntime/include/"))
 }
+
+/// In the kit folder: a stamp of the Rust tools' sources, written when the kit is staged (see `scripts/stage-kit.mjs`). The
+/// digest counts it instead of the prebuilt executables: the same sources compiled twice give different bytes (timestamps and
+/// debug identifiers), which would make every release ask every player for a rebuild.
+pub const TOOLS_STAMP: &str = "kit-tools.stamp";
 
 fn hash_file(path: &Path) -> io::Result<[u8; 32]> {
     let mut file = File::open(path)?;
@@ -75,19 +82,15 @@ fn collect(root: &Path, folder: &Path, files: &mut Vec<(String, PathBuf)>) -> io
 }
 
 /// The digest of the kit at `kit`: the relative path and the content hash of every file under the source folders (without
-/// generated output), in sorted order, plus the two prebuilt tools. Touching a file without changing it, or the order the
-/// files are visited in, does not change it.
+/// generated output), in sorted order, plus the stamp of the Rust tools' sources ([`TOOLS_STAMP`]). Touching a file without
+/// changing it, or the order the files are visited in, does not change it.
 pub fn kit_digest(kit: &Path) -> io::Result<String> {
     let mut files = Vec::new();
     for folder in SOURCE_FOLDERS {
         collect(kit, &kit.join(folder), &mut files)?;
     }
-    let exe = if cfg!(windows) { ".exe" } else { "" };
-    for tool in ["ps2_recomp", "ps2-tools"] {
-        let relative = format!("bin/{tool}{exe}");
-        if kit.join(&relative).is_file() {
-            files.push((relative.clone(), kit.join(relative)));
-        }
+    if kit.join(TOOLS_STAMP).is_file() {
+        files.push((TOOLS_STAMP.to_string(), kit.join(TOOLS_STAMP)));
     }
     files.sort_by(|a, b| a.0.cmp(&b.0));
     let mut outer = Sha256::new();
@@ -262,6 +265,10 @@ mod tests {
         write(&root.path().join("RustPortPS2/native/build/CMakeCache.txt"), "cache");
         write(&root.path().join("RustPortPS2/native/tools/vu1_generated/x.cpp"), "generated");
         write(&root.path().join("RustPortPS2/native/tools/vu1n_generated/x.cpp"), "generated");
+        // The declaration headers the installer copies into the include folder are generated too (a fresh kit has none,
+        // an installed one does: the digest must not change when they appear).
+        write(&root.path().join("RustPortPS2/native/ps2xRuntime/include/ps2_recompiled_functions.h"), "generated");
+        write(&root.path().join("RustPortPS2/native/ps2xRuntime/include/ps2_recompiled_stubs.h"), "generated");
         assert_eq!(first, kit_digest(root.path()).unwrap());
         // A source file that is not generated does: a change, an addition, and a prebuilt tool.
         write(&root.path().join("RustPortPS2/native/ps2xRuntime/src/a.cpp"), "int b;");
@@ -270,12 +277,20 @@ mod tests {
         write(&root.path().join("RustPortPS2/native/ps2xIOP/src/native/real.cpp"), "x");
         let added = kit_digest(root.path()).unwrap();
         assert_ne!(changed, added);
-        write(&root.path().join(if cfg!(windows) { "bin/ps2-tools.exe" } else { "bin/ps2-tools" }), "tool");
-        assert_ne!(added, kit_digest(root.path()).unwrap());
+        // The stamp of the tools' sources counts; the bytes of the prebuilt executables do not (they differ between two builds
+        // of the same sources).
+        write(&root.path().join(TOOLS_STAMP), "sources v1");
+        let stamped = kit_digest(root.path()).unwrap();
+        assert_ne!(added, stamped);
+        write(&root.path().join(if cfg!(windows) { "bin/ps2-tools.exe" } else { "bin/ps2-tools" }), "tool build 1");
+        write(&root.path().join(if cfg!(windows) { "bin/ps2_recomp.exe" } else { "bin/ps2_recomp" }), "recomp build 1");
+        assert_eq!(stamped, kit_digest(root.path()).unwrap());
+        write(&root.path().join(TOOLS_STAMP), "sources v2");
+        assert_ne!(stamped, kit_digest(root.path()).unwrap());
         // Another file the build never reads is not part of it.
-        let with_tool = kit_digest(root.path()).unwrap();
+        let with_stamp = kit_digest(root.path()).unwrap();
         write(&root.path().join("install.cmd"), "echo");
-        assert_eq!(with_tool, kit_digest(root.path()).unwrap());
+        assert_eq!(with_stamp, kit_digest(root.path()).unwrap());
     }
 
     #[test]
