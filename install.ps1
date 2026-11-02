@@ -37,7 +37,9 @@ param(
     # GOW-Port: automated execution (the launcher's installation wizard).
     [switch]$NoPause,
     [switch]$AllowModifiedElf,
-    # GOW-Port: iteration without /GL or /LTCG; the full Release can take hours to link.
+    # GOW-Port: development iteration: RelWithDebInfo instead of Release, runtime logs and the console window on, and the VU1 AOT
+    # set frozen in a snapshot. The normal Release has no whole-program optimization either (PS2X_ENABLE_LTCG is opt-in and can take
+    # hours to link).
     [switch]$FastDev,
     [string]$Vu1BuildDir = '',
     # GOW-Port: folder where everything generated from the game goes (game\, build-gen\, build\, vu1_captures\).
@@ -67,8 +69,9 @@ if ($Vu1BuildDir -and -not (Test-Path -LiteralPath $Vu1BuildDir -PathType Contai
     throw "The VU1 directory does not exist: $Vu1BuildDir"
 }
 if ($Vu1BuildDir) { $Vu1ForBuild = (Resolve-Path -LiteralPath $Vu1BuildDir).Path }
-# Build processes: one per core, but at most one per 2 GB of memory (each unit of ~8 generated
-# files uses 1-2 GB with /O2 /GL). -Jobs N sets it.
+# Build processes: one per core, but at most one per 2 GB of memory. The memory bound is an estimate for a unit of ~8 generated
+# files; it was first written for /GL builds and has not been re-measured with the current flags (/O2, no whole-program
+# optimization). -Jobs N sets it.
 if ($Jobs -le 0) {
     $memGb = [math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
     $Jobs = [math]::Max(1, [math]::Min([Environment]::ProcessorCount, [math]::Floor($memGb / 2)))
@@ -448,7 +451,7 @@ function Configure {
         }
     }
     $extra = @()
-    # GOW-Port: RelWithDebInfo keeps /O2 but avoids MSVC's whole-program link optimization.
+    # GOW-Port: Release and RelWithDebInfo both build with /O2 and no whole-program optimization (PS2X_ENABLE_LTCG, off by default).
     $buildType = if ($FastDev) { 'RelWithDebInfo' } else { 'Release' }
     $runtimeLogs = if ($FastDev) { 'ON' } else { 'OFF' }
     $console = if ($FastDev) { 'ON' } else { 'OFF' }
