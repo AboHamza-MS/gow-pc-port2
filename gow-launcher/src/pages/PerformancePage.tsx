@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Activity, Cpu, Gauge, Hourglass, MemoryStick, RefreshCw, Rocket } from 'lucide-react';
-import { GroupTitle, Note, SecondaryButton, Select, SettingRow, Switch, type Option } from '../components/ui';
+import { GroupTitle, Note, ProgressBar, SecondaryButton, Select, SettingRow, Switch, type Option } from '../components/ui';
 import { useApp } from '../state/app';
 
 /** Internal scale requested: "auto" and anything above 6x fall back to 2x (mirrors `Settings::selected_scale`). */
@@ -44,12 +44,21 @@ export function PerformancePage() {
         <div className="mb-2">
           <Note tone="warn" title={t('rebuildNoteTitle')}>
             <p>{t('rebuildNoteText')}</p>
-            <div className="mt-2.5 flex items-center gap-3">
-              <SecondaryButton disabled={rebuildBlocker !== null} onClick={() => void startRebuild()}>
-                {t('rebuildButton')}
-              </SecondaryButton>
-              {rebuildBlocker && <span className="text-ink-muted">{t(`rebuildBlocked_${rebuildBlocker}`)}</span>}
-            </div>
+            {optimizer.compiling ? (
+              <div role="status" className="mt-2.5 flex items-center gap-3">
+                <span className="text-ink-muted">
+                  {optimizer.buildProgress >= 0 ? f('rebuildProgress', Math.min(100, Math.round(optimizer.buildProgress * 100))) : t('rebuildRunning')}
+                </span>
+                <ProgressBar label={t('rebuildProgressLabel')} fraction={optimizer.buildProgress} className="w-[220px]" />
+              </div>
+            ) : (
+              <div className="mt-2.5 flex items-center gap-3">
+                <SecondaryButton disabled={rebuildBlocker !== null} onClick={() => void startRebuild()}>
+                  {t('rebuildButton')}
+                </SecondaryButton>
+                {rebuildBlocker && <span className="text-ink-muted">{t(`rebuildBlocked_${rebuildBlocker}`)}</span>}
+              </div>
+            )}
           </Note>
         </div>
       )}

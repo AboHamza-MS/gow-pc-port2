@@ -95,6 +95,39 @@ describe('rebuild after an update', () => {
     expect(await screen.findByRole('switch', { name: 'Background optimization' })).toBeInTheDocument();
     expect(screen.queryByText('Rebuild the game to get the latest fixes')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Rebuild now' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Game fixes waiting')).not.toBeInTheDocument();
+  });
+
+  it('offers the rebuild on the first screen, shows its progress there and goes away when it finishes', async () => {
+    bootWithRebuild(true);
+    const user = userEvent.setup();
+    const start = vi.spyOn(api, 'rebuildStart');
+    // No tab is opened: the notice sits over the banner, next to the Play button.
+    expect(await screen.findByText('Game fixes waiting')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Rebuild' }));
+    expect(start).toHaveBeenCalledTimes(1);
+    const snapshot = { configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.42, status: 'compiling' as const };
+    act(() => api.emit('optimizer', snapshot));
+    expect(await screen.findByText('Rebuilding the game: 42 %')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Rebuild progress' })).toHaveAttribute('aria-valuenow', '42');
+    expect(screen.queryByRole('button', { name: 'Rebuild' })).not.toBeInTheDocument();
+    // Before ninja reports a count the bar has no value, only a label.
+    act(() => api.emit('optimizer', { ...snapshot, buildProgress: -1 }));
+    expect(await screen.findByText('Rebuilding the game')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Rebuild progress' })).not.toHaveAttribute('aria-valuenow');
+    act(() => api.emit('optimizer', { ...snapshot, compiling: false, buildProgress: -1, status: 'idle' }));
+    await waitFor(() => expect(screen.queryByText('Game fixes waiting')).not.toBeInTheDocument());
+    expect(screen.queryByRole('progressbar', { name: 'Rebuild progress' })).not.toBeInTheDocument();
+  });
+
+  it('shows the same progress in the Performance tab', async () => {
+    bootWithRebuild(true);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Performance' }));
+    expect(await screen.findByRole('button', { name: 'Rebuild now' })).toBeInTheDocument();
+    act(() => api.emit('optimizer', { configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.25, status: 'compiling' }));
+    expect(await screen.findAllByRole('progressbar', { name: 'Rebuild progress' })).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: 'Rebuild now' })).not.toBeInTheDocument();
   });
 
   it('announces it once, offers the rebuild in the Performance tab and clears the note when the rebuild succeeds', async () => {

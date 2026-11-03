@@ -134,6 +134,24 @@ export function Note({ title, children, tone = 'gold' }: { title?: string; child
   );
 }
 
+/** A thin progress bar; with no known fraction (`undefined`, or below zero) it pulses instead of filling. */
+export function ProgressBar({ label, fraction, className }: { label: string; fraction?: number; className?: string }) {
+  const known = typeof fraction === 'number' && fraction >= 0;
+  const percent = known ? Math.min(100, Math.round(fraction * 100)) : 0;
+  return (
+    <div
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={known ? percent : undefined}
+      className={cx('h-[6px] overflow-hidden rounded-full bg-ink/20', className)}
+    >
+      <div className={cx('h-full rounded-full bg-accent', !known && 'w-1/3 animate-pulse')} style={known ? { width: `${percent}%` } : undefined} />
+    </div>
+  );
+}
+
 // ----------------------------------------------------------------------------------------------- switch
 
 export function Switch({

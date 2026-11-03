@@ -3,7 +3,7 @@ import badgeUrl from '../assets/theme/badge.webp';
 import logoUrl from '../assets/theme/logo.webp';
 import { useApp } from '../state/app';
 import { MarkField, useReportExport } from './ReportTools';
-import { SecondaryButton, type IconComponent } from './ui';
+import { ProgressBar, SecondaryButton, type IconComponent } from './ui';
 
 // ----------------------------------------------------------------------------------------------- title bar
 
@@ -130,6 +130,39 @@ export function UpdateNotice() {
 /** Small parchment label for the information that sits over the banner art, so it stays legible on any part of it. */
 const chip = 'whitespace-nowrap rounded-md border border-line bg-[#eadbb9]/95 px-3 py-1 shadow-[0_1px_3px_rgba(40,20,5,0.35)]';
 
+/**
+ * The rebuild the last update asked for, on the first screen: a notice with the button while it is waiting, the progress
+ * while it runs. Nothing when the build is up to date (a background optimization alone stays quiet). The same state and
+ * the same button as the Performance tab, so the player does not have to know where to look.
+ */
+export function RebuildChip() {
+  const { rebuild, rebuildBlocker, startRebuild, optimizer, f, t } = useApp();
+  if (!rebuild.needed) return null;
+  const chipRow = `${chip} flex items-center gap-2 text-[12.5px] font-semibold text-ink`;
+  if (optimizer.compiling) {
+    const known = optimizer.buildProgress >= 0;
+    return (
+      <div role="status" className={chipRow}>
+        <span>{known ? f('rebuildProgress', Math.min(100, Math.round(optimizer.buildProgress * 100))) : t('rebuildRunning')}</span>
+        <ProgressBar label={t('rebuildProgressLabel')} fraction={optimizer.buildProgress} className="w-[110px]" />
+      </div>
+    );
+  }
+  return (
+    <div role="status" className={chipRow} title={rebuildBlocker ? t(`rebuildBlocked_${rebuildBlocker}`) : undefined}>
+      <span>{t('rebuildChip')}</span>
+      <button
+        type="button"
+        disabled={rebuildBlocker !== null}
+        onClick={() => void startRebuild()}
+        className="h-[22px] rounded border border-gold bg-[#4a2f18] px-2.5 text-[11px] font-semibold tracking-wide text-cream transition-colors hover:bg-[#6a4424] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-[#4a2f18]"
+      >
+        {t('rebuildChipButton')}
+      </button>
+    </div>
+  );
+}
+
 export function Hero() {
   const { status, gameRunning, play, stop, openWizard, textureInstall, t } = useApp();
   const ready = status?.ready ?? false;
@@ -146,6 +179,7 @@ export function Hero() {
               {t('closeGame')}
             </button>
           )}
+          <RebuildChip />
         </div>
       </div>
       <button
