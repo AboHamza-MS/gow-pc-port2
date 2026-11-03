@@ -14,7 +14,7 @@ $cmake = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\c
 $ninja = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
 $vcvarsCmd = Join-Path $env:TEMP 'gow_release_vcvars.cmd'
 Set-Content -LiteralPath $vcvarsCmd -Value "@call `"$(Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat')`" >nul`r`n@set" -Encoding ASCII
-cmd /c $vcvarsCmd | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] } }
+& $env:ComSpec /c $vcvarsCmd | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] } }
 function Slashes([string]$path) { return ($path -replace '\\', '/') }
 
 $recomp = Join-Path $root 'RustPortPS2\native'

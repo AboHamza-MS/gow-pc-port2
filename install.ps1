@@ -268,7 +268,9 @@ function LoadVsEnvironment {
         foreach ($l in $loaders) {
             if (-not (Test-Path -LiteralPath $l.File)) { $notes += "$path : $($l.Name) is missing"; continue }
             [IO.File]::WriteAllText($cmdFile, "@set `"PATH=$vsInstaller;%PATH%`"`r`n@call `"$($l.File)`" $($l.Args) > `"$outFile`" 2>&1`r`n@set`r`n", $oem)
-            cmd /c $cmdFile | ForEach-Object {
+            # GOW-Port: Windows' own interpreter (ComSpec), not "cmd" looked up in PATH: with devkitPro or MSYS2 first in PATH, "cmd" was
+            # their usr\bin\cmd, a file that PowerShell cannot run in a pipeline (issue #23).
+            & $env:ComSpec /c $cmdFile | ForEach-Object {
                 if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
             }
             # GOW-Port: only the compiler is required here. The newest Visual Studio may lack the "C++ CMake tools" component (a Visual

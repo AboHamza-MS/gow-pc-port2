@@ -43,5 +43,33 @@ $live = Test-Sse41
 Expect 'the live query answers true, false or nothing' $true (($null -eq $live) -or ($live -is [bool]))
 Write-Host "  info: this machine reports SSE4.1 = $(if ($null -eq $live) { 'unknown' } else { $live })"
 
+Write-Host 'Visual Studio loader (issue #23): the Windows interpreter is not looked up in PATH'
+# devkitPro and MSYS2 put a file named "cmd" first in PATH, which PowerShell cannot run in a pipeline: no script may call a bare cmd.
+foreach ($name in 'install.ps1', 'scripts\build_release_windows.ps1', 'scripts\build_runtime_windows.ps1') {
+    $file = (Resolve-Path (Join-Path $PSScriptRoot "..\..\$name")).Path
+    $tree = [System.Management.Automation.Language.Parser]::ParseFile($file, [ref]$null, [ref]$null)
+    $bare = @($tree.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -in 'cmd', 'cmd.exe' }, $true))
+    Expect "$name has no bare cmd call" 0 $bare.Count
+}
+if ($env:ComSpec -and (Test-Path -LiteralPath $env:ComSpec)) {
+    $fake = Join-Path ([IO.Path]::GetTempPath()) "gow-fakecmd-$PID"
+    New-Item -ItemType Directory -Path $fake -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $fake 'cmd') -Value 'not an interpreter'
+    $loader = Join-Path $fake 'loader.cmd'
+    Set-Content -LiteralPath $loader -Value "@set GOW_LOADER_TEST=loaded`r`n@set" -Encoding ASCII
+    $savedPath = $env:PATH
+    try {
+        $env:PATH = "$fake$([IO.Path]::PathSeparator)$env:PATH"
+        & $env:ComSpec /c $loader | ForEach-Object { if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] } }
+        Expect 'the loader runs with a fake cmd first in PATH' 'loaded' $env:GOW_LOADER_TEST
+    } finally {
+        $env:PATH = $savedPath
+        Remove-Item Env:GOW_LOADER_TEST -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $fake -Recurse -Force -ErrorAction SilentlyContinue
+    }
+} else {
+    Write-Host '  skip the live loader check (no Windows command interpreter on this system)'
+}
+
 if ($failures -gt 0) { Write-Host "$failures test(s) failed"; exit 1 }
 Write-Host 'all passed'

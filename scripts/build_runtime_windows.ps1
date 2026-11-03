@@ -9,7 +9,7 @@ if (-not $vs) { throw 'MSVC x64 was not found.' }
 $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
 $vcvarsCmd = Join-Path $env:TEMP 'gow_runtime_vcvars.cmd'
 Set-Content -LiteralPath $vcvarsCmd -Value "@call `"$vcvars`" >nul`r`n@set" -Encoding ASCII
-cmd /c $vcvarsCmd | ForEach-Object {
+& $env:ComSpec /c $vcvarsCmd | ForEach-Object {
     if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
 }
 function Slashes([string]$path) { return ($path -replace '\\', '/') }
