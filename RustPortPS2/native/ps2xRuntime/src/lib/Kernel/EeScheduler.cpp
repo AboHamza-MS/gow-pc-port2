@@ -1796,6 +1796,13 @@ namespace
     // GOW-Port: state of the GS interrupt edge (only used on the executor thread). It is kept
     // here and not in EeScheduler so as not to change the size of the class.
     uint32_t g_gsIrqLatched = 0u;
+    // GOW-Port: when the GS interrupt was last queued, how many anomalies were reported, and whether a request is waiting
+    // for INTC 0 to become deliverable (see pollGsInterrupt).
+    std::chrono::steady_clock::time_point g_gsIrqDispatchedAt{};
+    uint32_t g_gsIrqReports = 0u;
+    bool g_gsIrqWaitingForIntc = false;
+    // A FINISH the handler has not acknowledged this long after the interrupt was queued is queued again.
+    constexpr std::chrono::milliseconds kGsFinishRetry{100};
 }
 
 void EeScheduler::pollGsInterrupt()
@@ -1809,9 +1816,58 @@ void EeScheduler::pollGsInterrupt()
     const uint32_t masked = static_cast<uint32_t>(gs.imr >> 8) & 0x3u;
     const uint32_t active = csr & ~masked;
     const uint32_t rising = active & ~g_gsIrqLatched;
+    const auto now = std::chrono::steady_clock::now();
     g_gsIrqLatched = active;
     if (rising != 0u)
     {
+        // GOW-Port: the edge was consumed whether or not the interrupt could be delivered. With INTC cause 0 disabled (the
+        // game toggles it) or no enabled handler registered at that moment, dispatchIrq() returned silently, the bit stayed
+        // latched and, with CSR.FINISH still set, no new edge ever came: the game waited for its "GS done" flag forever (EE
+        // asleep in the frame wait, GS idle). The real INTC keeps the request pending until it can be delivered: here the
+        // edge is only latched once a handler was actually queued.
+        bool deliverable = (m_enabledIntcMask & 1u) != 0u;
+        if (deliverable)
+        {
+            deliverable = std::any_of(m_intcHandlers.begin(), m_intcHandlers.end(), [this](const auto &entry)
+                                      { const EeIrqHandler &h = entry.second;
+                                        return h.enabled && h.cause == 0u && h.handler != 0u && m_runtime.hasFunction(h.handler); });
+        }
+        if (!deliverable)
+        {
+            g_gsIrqLatched = active & ~rising;
+            if (!g_gsIrqWaitingForIntc && g_gsIrqReports < 20u)
+            {
+                ++g_gsIrqReports;
+                std::fprintf(stderr,
+                             "[gow-gs-irq] GS interrupt raised (csr=%x imr=%llx) while INTC 0 cannot take it (mask=%x, handlers=%zu): kept pending\n",
+                             csr, static_cast<unsigned long long>(gs.imr), m_enabledIntcMask, m_intcHandlers.size());
+            }
+            g_gsIrqWaitingForIntc = true;
+            return;
+        }
+        if (g_gsIrqWaitingForIntc && g_gsIrqReports < 20u)
+        {
+            ++g_gsIrqReports;
+            std::fprintf(stderr, "[gow-gs-irq] the pending GS interrupt is delivered now (csr=%x)\n", csr);
+        }
+        g_gsIrqWaitingForIntc = false;
+        g_gsIrqDispatchedAt = now;
+        dispatchIrq(false, 0u);
+        return;
+    }
+    // GOW-Port: a FINISH still set well after its interrupt was queued means the handler never ran or did not acknowledge it
+    // (an invocation lost to a stale edge). The handler is idempotent (it acts only on a pending FINISH and acknowledges it), so
+    // queueing it again, at most every kGsFinishRetry, unblocks the game instead of leaving it waiting for the flag.
+    if ((active & 0x2u) != 0u && now - g_gsIrqDispatchedAt >= kGsFinishRetry)
+    {
+        if (g_gsIrqReports < 20u)
+        {
+            ++g_gsIrqReports;
+            std::fprintf(stderr, "[gow-gs-irq] CSR.FINISH still set %lld ms after its interrupt (csr=%x imr=%llx): queued again\n",
+                         static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(now - g_gsIrqDispatchedAt).count()),
+                         csr, static_cast<unsigned long long>(gs.imr));
+        }
+        g_gsIrqDispatchedAt = now;
         dispatchIrq(false, 0u);
     }
 }

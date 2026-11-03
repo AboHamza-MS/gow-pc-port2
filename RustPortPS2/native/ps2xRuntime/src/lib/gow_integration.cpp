@@ -16,6 +16,7 @@
 //     game's speed with that loop's cycles and it keeps it at 1.00.
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
+#include "runtime/ee_scheduler.h"
 #include "raylib.h"
 
 #include <algorithm>
@@ -475,6 +476,50 @@ int gowWindowFps()
     return fps == 0 ? 0 : static_cast<int>(std::clamp<long>(fps, 30, 360));
 }
 
+// GOW-Port: what the EE is waiting for, printed by the hang watchdog before its sampling burst. Reads: the game's "GS done"
+// flag (0x29C7D0: 1 = waiting for the GS FINISH interrupt, 2 = done), the GS status and interrupt mask, the VBlank counter and
+// the guest threads of the kernel snapshot. A frame wait with the flag at 1 and CSR.FINISH (bit 1) clear means the FINISH was
+// consumed before the game waited for it; with CSR.FINISH set and unmasked in IMR (bit 9 clear) the interrupt was not delivered or
+// not acknowledged (the [gow-gs-irq] lines from the scheduler say which). `vsyncStep` is the VBlank ticks seen in the last second:
+// 0 means the EE's own clock stopped as well.
+static void gowHangReport(PS2Runtime &runtime, uint64_t vsyncStep, uint64_t frames)
+{
+    PS2Memory &memory = runtime.memory();
+    uint32_t flag = 0u, movie = 0u;
+    if (const uint8_t *rdram = memory.getRDRAM())
+    {
+        std::memcpy(&flag, rdram + 0x29C7D0u, sizeof(flag));
+        std::memcpy(&movie, rdram + 0x29C838u, sizeof(movie));
+    }
+    auto &gs = memory.gs();
+    std::fprintf(stderr, "[gow-hang] gs_done_flag=%u movie_state=%u csr=%llx imr=%llx vsync_tick=%llu (+%llu in the last second) frames=%llu\n", flag, movie,
+                 static_cast<unsigned long long>(gs.csr.load(std::memory_order_acquire)), static_cast<unsigned long long>(gs.imr),
+                 static_cast<unsigned long long>(gs.vsyncTick.load(std::memory_order_acquire)), static_cast<unsigned long long>(vsyncStep),
+                 static_cast<unsigned long long>(frames));
+    const EeKernelSnapshot snapshot = runtime.eeScheduler().snapshot();
+    std::fprintf(stderr, "[gow-hang] ee cycle=%llu next_event_cycle=%llu running_thread=%d threads=%zu\n",
+                 static_cast<unsigned long long>(snapshot.eeCycle), static_cast<unsigned long long>(snapshot.nextEventCycle),
+                 snapshot.runningThreadId, snapshot.threads.size());
+    static const char *const kStatus[] = {"running", "ready", "waiting", "waiting+suspended", "suspended", "dormant"};
+    static const char *const kWait[] = {"none", "sleep", "semaphore", "eventflag", "vsync", "external", "mpeg"};
+    for (const EeThreadSnapshot &thread : snapshot.threads)
+    {
+        if (thread.status == EeThreadStatus::Dormant)
+            continue;
+        const size_t status = static_cast<size_t>(thread.status), wait = static_cast<size_t>(thread.waitReason);
+        std::fprintf(stderr, "[gow-hang] thread %d %s wait=%s(%d) priority=%d pc=%08x ra=%08x sp=%08x invocations=%u suspend=%d wakeups=%u\n",
+                     thread.id, status < 6 ? kStatus[status] : "?", wait < 7 ? kWait[wait] : "?", thread.waitId, thread.currentPriority,
+                     thread.pc, thread.ra, thread.sp, thread.invocationDepth, thread.suspendCount, thread.wakeupCount);
+    }
+    for (const EeSemaphoreSnapshot &semaphore : snapshot.semaphores)
+        if (semaphore.waiters != 0u)
+            std::fprintf(stderr, "[gow-hang] semaphore %d count=%d/%d waiters=%u\n", semaphore.id, semaphore.count, semaphore.maxCount,
+                         semaphore.waiters);
+    for (const EeEventFlagSnapshot &eventFlag : snapshot.eventFlags)
+        if (eventFlag.waiters != 0u)
+            std::fprintf(stderr, "[gow-hang] event flag %d bits=%08x waiters=%u\n", eventFlag.id, eventFlag.bits, eventFlag.waiters);
+}
+
 // GOW-Port: ps2_runtime.cpp (loadELF), after the Waffle overrides (applyMatching): each wrapper calls the
 // previous one.
 void gowIntegrationInstall(PS2Runtime &runtime, const std::string &elfPath)
@@ -501,21 +546,31 @@ void gowIntegrationInstall(PS2Runtime &runtime, const std::string &elfPath)
     // 5 s, it samples the process's threads for 3 s (gow_hang_<n>.sampling, in the working folder; summarize with
     // ps2-dev sampling-win and gow-2005.map) to see where the EE spins and what the others wait for.
     if (g_gameFrameFunction && (envFlag("GOW_FRAMES_DIAG", false) || envFlag("GOW_PERF_DIAG", false)))
-        std::thread([]
+        std::thread([rt = &runtime]
                     {
-                        uint64_t last = 0;
+                        uint64_t last = 0, lastTick = 0, tickStep = 0;
                         int still = 0, dumps = 0;
                         for (;;)
                         {
                             std::this_thread::sleep_for(std::chrono::seconds(1));
                             const uint64_t now = g_gameFrames.load(std::memory_order_relaxed);
-                            if (now != last || now == 0)
+                            const uint64_t tick = rt->memory().gs().vsyncTick.load(std::memory_order_relaxed);
+                            tickStep = tick - lastTick;
+                            lastTick = tick;
+                            // GOW-Port: a movie is not a hang. While one plays (movie state 0x29C838: 10 loaded, 11 playing) the game
+                            // does not enter its frame function and the movie thread polls its stream service flat out, which looked
+                            // exactly like a freeze: the 31 s "hang" after a cutscene started (log of 3 Nov 2026) was the movie itself.
+                            uint32_t movieState = 0u;
+                            if (const uint8_t *rdram = rt->memory().getRDRAM())
+                                std::memcpy(&movieState, rdram + 0x0029C838u, sizeof(movieState));
+                            if (now != last || now == 0 || movieState == 10u || movieState == 11u)
                                 still = 0;
                             else if (++still == 5 && dumps < 3)
                             {
                                 char name[64];
                                 std::snprintf(name, sizeof(name), "gow_hang_%d.sampling", ++dumps);
                                 std::fprintf(stderr, "[gow-frames] the game has not entered the frame function for 5 s: 3 s sampling -> %s\n", name);
+                                gowHangReport(*rt, tickStep, now);
                                 gowSamplingBurst(name, 3.0, 1000);
                             }
                             last = now;

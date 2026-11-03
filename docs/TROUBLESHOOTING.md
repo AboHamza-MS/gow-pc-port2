@@ -79,6 +79,7 @@ The game log is plain text. Lines starting with `[gow-`, `[gs`, `[vu1` and `[iop
 | My PCSX2 saves are not listed | The file must be a PCSX2 card image named `Mcd001.ps2` next to the executable, or point `GOW_MC0` at it |
 | The save does not appear in PCSX2 | Copy the whole `Mcd001.ps2` out of `game/`; do not copy parts of it |
 | **The game hangs right after saving** | A known open problem on Windows. Note the area and what you did, then attach `logs/last.log`; its last lines show where it stopped |
+| **The picture freezes and `last.log` says `the game has not entered the frame function for 5 s`** | Two different things trigger that line. During a cutscene it is a false alarm (the movie player does not use the frame function; fixed in 0.2.9: no line while a movie plays). Outside a movie it is a real freeze: the lines `[gow-hang] gs_done_flag=... csr=... imr=...` that follow say what the game waits for (a `gs_done_flag` of 1 with `csr` bit 1 clear or set tells a lost FINISH from an undelivered interrupt) and `[gow-gs-irq]` lines say when the port had to deliver the GS interrupt again. Attach `logs/last.log` and the `gow_hang_*.sampling` files next to it |
 | Save does not survive a reinstall | `game/` is deleted on a clean reinstall. Back up `Mcd001.ps2` |
 
 ## Controls and features
