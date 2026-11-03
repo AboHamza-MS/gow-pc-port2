@@ -1,0 +1,27 @@
+# Checks of the Windows installer (install.ps1) and the PowerShell scripts: they parse, and the decisions that can be tested
+# without an installation (build jobs, the processor check, the Visual Studio loader with a fake cmd first in PATH) are
+# right. See scripts/ci/analyze_ps1.ps1 and scripts/ci/test-install-ps1.ps1.
+#
+# Nothing here builds the game: that needs the retail disc, which cannot be uploaded.
+name: install-ps1
+
+on:
+  push:
+    paths: ['install.ps1', 'install.cmd', 'scripts/**/*.ps1', '.github/workflows/install-ps1.yml']
+  pull_request:
+    paths: ['install.ps1', 'install.cmd', 'scripts/**/*.ps1', '.github/workflows/install-ps1.yml']
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every .ps1 parses
+        shell: pwsh
+        run: ./scripts/ci/analyze_ps1.ps1
+      - name: Installer decisions (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./scripts/ci/test-install-ps1.ps1
+      - name: Installer decisions (PowerShell 7)
+        shell: pwsh
+        run: ./scripts/ci/test-install-ps1.ps1

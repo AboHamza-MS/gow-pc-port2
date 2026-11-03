@@ -30,6 +30,16 @@ export function PerformancePage() {
   );
   return (
     <div className="flex flex-col gap-1">
+      {optimizer.status === 'error' && (
+        <div className="mb-2">
+          <Note tone="warn" title={t('rebuildFailedTitle')}>
+            <p>{t('rebuildFailedText')}</p>
+            <div className="mt-2.5">
+              <SecondaryButton onClick={() => void api.openOptimizerLog()}>{t('rebuildFailedLog')}</SecondaryButton>
+            </div>
+          </Note>
+        </div>
+      )}
       {rebuild.needed && (
         <div className="mb-2">
           <Note tone="warn" title={t('rebuildNoteTitle')}>

@@ -199,7 +199,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       api.on('optimizer', (snapshot: OptimizerSnapshot) => {
         setOptimizer(snapshot);
         // A rebuild that just ended may have cleared the need (or not, if it failed): ask again.
-        if (wasCompiling.current && !snapshot.compiling) void refreshRebuild();
+        if (wasCompiling.current && !snapshot.compiling) {
+          void refreshRebuild();
+          if (snapshot.status === 'error') notify(translate(asLanguage(settingsRef.current?.language ?? 'en'), 'rebuildFailedToast'));
+        }
         wasCompiling.current = snapshot.compiling;
       }),
       api.on('texture-pack-progress', (event: TexturePackProgress) => {

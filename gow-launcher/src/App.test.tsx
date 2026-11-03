@@ -113,6 +113,24 @@ describe('rebuild after an update', () => {
     await waitFor(() => expect(screen.queryByText('Rebuild the game to get the latest fixes')).not.toBeInTheDocument());
   });
 
+  it('says so when the rebuild fails, keeps offering it and opens the log', async () => {
+    bootWithRebuild(true);
+    const user = userEvent.setup();
+    const openLog = vi.spyOn(api, 'openOptimizerLog');
+    await user.click(await screen.findByRole('button', { name: 'Performance' }));
+    expect(await screen.findByRole('button', { name: 'Rebuild now' })).toBeInTheDocument();
+    expect(screen.queryByText('The last rebuild of the game failed')).not.toBeInTheDocument();
+    const snapshot = { configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.5, status: 'compiling' as const };
+    act(() => api.emit('optimizer', snapshot));
+    act(() => api.emit('optimizer', { ...snapshot, compiling: false, buildProgress: -1, status: 'error' }));
+    expect(await screen.findByText('The last rebuild of the game failed')).toBeInTheDocument();
+    expect(screen.getByText(/The rebuild of the game failed\. Open Performance/)).toBeInTheDocument();
+    // The failed build keeps its old marker: the offer to rebuild stays.
+    expect(screen.getByRole('button', { name: 'Rebuild now' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Open the rebuild log' }));
+    expect(openLog).toHaveBeenCalledTimes(1);
+  });
+
   it('disables the button with the reason while the game runs', async () => {
     bootWithRebuild(true);
     const user = userEvent.setup();
