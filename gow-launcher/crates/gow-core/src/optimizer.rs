@@ -366,11 +366,12 @@ impl Optimizer {
 
     /// The player asked to rebuild the game from the kit's current sources (see `rebuild`). Unlike [`Self::optimize_now`] it
     /// does not need the background optimization to be switched on: the installation folder is all it needs. Returns `false`
-    /// when it did not start (no installation folder, or a rebuild already running).
+    /// when it did not start (no installation folder, a rebuild already running, or the game open without the opt-in to
+    /// rebuild while playing: the interface refuses that case first, this is the same rule held here).
     pub fn rebuild_now(&self) -> bool {
         let ready = {
             let mut state = self.state.lock().unwrap();
-            let ready = state.destination.is_some() && state.run.is_none();
+            let ready = state.destination.is_some() && state.run.is_none() && (!state.game_running || state.during_game);
             if ready {
                 state.last_failure = None;
                 state.captured = state.destination.as_deref().map_or(0, count_captures);
@@ -651,6 +652,22 @@ mod tests {
         let state = optimizer.state.lock().unwrap();
         assert!(state.run.is_none());
         assert!(!state.resume_after_game);
+    }
+
+    #[test]
+    fn the_rebuild_button_does_not_start_with_the_game_open_unless_opted_in() {
+        let directory = tempfile::tempdir().unwrap();
+        let optimizer = quiet(directory.path());
+        optimizer.configure(&directory.path().to_string_lossy(), true, false, 0);
+        optimizer.game_state_changed(true);
+        // Refused before anything starts: no error state either (the `quiet` optimizer has no script, so starting would fail).
+        assert!(!optimizer.rebuild_now());
+        assert_eq!(optimizer.snapshot().status, OptimizerStatus::Idle);
+        assert!(optimizer.state.lock().unwrap().run.is_none());
+        // With the game closed it goes on to start (and fails only because the test has no script).
+        optimizer.game_state_changed(false);
+        assert!(optimizer.rebuild_now());
+        assert_eq!(optimizer.snapshot().status, OptimizerStatus::Error);
     }
 
     #[test]
