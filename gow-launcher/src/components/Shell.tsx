@@ -1,9 +1,10 @@
-﻿import { Gauge, Gamepad2, FolderOpen, Layers, Minus, Monitor, Play, Settings2, Sparkles, Square, Trophy, X } from 'lucide-react';
+﻿import { useState } from 'react';
+import { Gauge, Gamepad2, FolderOpen, Layers, Minus, Monitor, Play, Settings2, Sparkles, Square, Trophy, X } from 'lucide-react';
 import badgeUrl from '../assets/theme/badge.webp';
 import logoUrl from '../assets/theme/logo.webp';
 import { useApp } from '../state/app';
 import { MarkField, useReportExport } from './ReportTools';
-import { ProgressBar, SecondaryButton, type IconComponent } from './ui';
+import { PrimaryButton, ProgressBar, SecondaryButton, type IconComponent } from './ui';
 
 // ----------------------------------------------------------------------------------------------- title bar
 
@@ -163,9 +164,34 @@ export function RebuildChip() {
   );
 }
 
+/**
+ * Play was pressed while the game is being rebuilt. By default the rebuild is paused when the game opens (it would take the
+ * processor and the picture would freeze) and starts again when the game closes; with "Optimize during game" it keeps running.
+ * Either way the player is told before it happens.
+ */
+export function PlayDuringRebuildDialog({ onPlay, onWait }: { onPlay: () => void; onWait: () => void }) {
+  const { settings, t } = useApp();
+  const keeps = settings.optimizeDuringGame;
+  return (
+    <Modal>
+      <div className="flex flex-col gap-3.5">
+        <h2 className="gow-text-shadow font-title text-[18px] font-bold uppercase tracking-wide text-ink">{t('playRebuildTitle')}</h2>
+        <p className="text-[15px] font-medium text-ink">{t(keeps ? 'playRebuildKeepsText' : 'playRebuildPausesText')}</p>
+        <div className="flex justify-end gap-2">
+          <SecondaryButton onClick={onWait}>{t('playRebuildWait')}</SecondaryButton>
+          <PrimaryButton onClick={onPlay}>{t(keeps ? 'playRebuildPlayAnyway' : 'playRebuildPlayPause')}</PrimaryButton>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export function Hero() {
-  const { status, gameRunning, play, stop, openWizard, textureInstall, t } = useApp();
+  const { status, gameRunning, play, stop, openWizard, textureInstall, rebuild, optimizer, t } = useApp();
+  const [asking, setAsking] = useState(false);
   const ready = status?.ready ?? false;
+  // The same condition as the notice next to the button: a rebuild the last update asked for is running.
+  const rebuilding = rebuild.needed && optimizer.compiling;
   // The textures being written are the ones the game would read.
   const installingTextures = textureInstall.active;
   return (
@@ -185,12 +211,21 @@ export function Hero() {
       <button
         type="button"
         disabled={gameRunning || installingTextures}
-        onClick={() => (ready ? void play() : openWizard())}
+        onClick={() => (!ready ? openWizard() : rebuilding ? setAsking(true) : void play())}
         className="gow-plaque relative mb-1 flex h-[72px] w-[300px] shrink-0 items-center justify-center gap-3 self-end font-title text-[24px] font-bold tracking-[0.14em] text-cream"
       >
         {ready ? <Play size={22} fill="currentColor" /> : <Sparkles size={22} />}
         {gameRunning ? t('running') : installingTextures ? t('texturePackPlayBlocked') : ready ? t('play') : t('wizInstall')}
       </button>
+      {asking && (
+        <PlayDuringRebuildDialog
+          onWait={() => setAsking(false)}
+          onPlay={() => {
+            setAsking(false);
+            void play();
+          }}
+        />
+      )}
     </section>
   );
 }

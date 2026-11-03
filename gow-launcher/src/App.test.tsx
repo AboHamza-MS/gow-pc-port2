@@ -120,6 +120,32 @@ describe('rebuild after an update', () => {
     expect(screen.queryByRole('progressbar', { name: 'Rebuild progress' })).not.toBeInTheDocument();
   });
 
+  it('asks before opening the game while the rebuild runs, and says it will be paused', async () => {
+    bootWithRebuild(true);
+    const user = userEvent.setup();
+    const startGame = vi.spyOn(api, 'startGame');
+    await screen.findByRole('button', { name: 'PLAY' });
+    act(() => api.emit('optimizer', { configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.3, status: 'compiling' }));
+    await user.click(screen.getByRole('button', { name: 'PLAY' }));
+    // With "Also while playing" on (the mock's default) the rebuild keeps running: the dialog says the game can stutter.
+    expect(await screen.findByText('The game is being rebuilt')).toBeInTheDocument();
+    expect(screen.getByText(/it keeps running while you play/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Play anyway' })).toBeInTheDocument();
+    expect(startGame).not.toHaveBeenCalled();
+    // Waiting closes the dialog and starts nothing.
+    await user.click(screen.getByRole('button', { name: 'Wait' }));
+    expect(screen.queryByText('The game is being rebuilt')).not.toBeInTheDocument();
+    expect(startGame).not.toHaveBeenCalled();
+    // With it off (the real default) opening the game pauses the rebuild, and the dialog says so.
+    const changed = await api.patchSettings({ optimizeDuringGame: false });
+    act(() => api.emit('settings-changed', changed));
+    await user.click(screen.getByRole('button', { name: 'PLAY' }));
+    expect(await screen.findByText(/the rebuild is paused so the two do not compete/)).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Play and pause the rebuild' }));
+    await waitFor(() => expect(startGame).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText('The game is being rebuilt')).not.toBeInTheDocument();
+  });
+
   it('shows the same progress in the Performance tab', async () => {
     bootWithRebuild(true);
     const user = userEvent.setup();
