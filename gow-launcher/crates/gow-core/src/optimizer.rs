@@ -371,7 +371,8 @@ impl Optimizer {
     pub fn rebuild_now(&self) -> bool {
         let ready = {
             let mut state = self.state.lock().unwrap();
-            let ready = state.destination.is_some() && state.run.is_none() && (!state.game_running || state.during_game);
+            let ready =
+                state.destination.is_some() && state.run.is_none() && (!state.game_running || state.during_game);
             if ready {
                 state.last_failure = None;
                 state.captured = state.destination.as_deref().map_or(0, count_captures);
