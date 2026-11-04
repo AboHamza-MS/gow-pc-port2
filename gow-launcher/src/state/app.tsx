@@ -75,6 +75,11 @@ export interface AppContextValue {
   /** What a rebuild must not interrupt (the same reasons as an update), `null` when it can start. */
   rebuildBlocker: UpdateBlocker | null;
   startRebuild: () => Promise<void>;
+  /** Starts the speed-profile optimization ("Optimize now"): the game opens by itself, then a build uses the profile. */
+  startProfile: () => Promise<void>;
+  /** The player answered "Later" to the offer on the first screen (kept on this PC; the Performance tab still offers it). */
+  profileOfferDismissed: boolean;
+  dismissProfileOffer: () => void;
 }
 
 const Context = createContext<AppContextValue | null>(null);
@@ -89,7 +94,18 @@ const noRebuild: RebuildState = { needed: false, kit: '', built: '', announce: f
 
 const idleOptimizer: OptimizerSnapshot = {
   configured: false, compiling: false, captured: 0, compiled: 0, completionRatio: 1, buildProgress: -1, status: 'disabled',
+  profiling: false, profileReady: false, profileSupported: false,
 };
+
+const PROFILE_OFFER_KEY = 'gow.profileOfferDismissed';
+
+function readProfileOfferDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(PROFILE_OFFER_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 const idleTextureInstall: TextureInstall = { active: false, progress: null, installed: null };
 
@@ -185,7 +201,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         return state;
       });
-      if (state.announce) notify(translate(asLanguage(settingsRef.current?.language ?? 'en'), 'rebuildToast'));
+      if (state.announce) {
+        notify(translate(asLanguage(settingsRef.current?.language ?? 'en'), state.legacy ? 'rebuildLegacyToast' : 'rebuildToast'));
+      }
     },
     [api, notify],
   );
@@ -340,6 +358,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [api, notify]);
 
+  const startProfile = useCallback(async () => {
+    if (!api) return;
+    const language = asLanguage(settingsRef.current?.language ?? 'en');
+    try {
+      await api.profileStart();
+      notify(translate(language, 'profileStarted'));
+    } catch (failure) {
+      const code = String(failure);
+      notify(translate(language, code.startsWith('busy:') ? `rebuildBlocked_${code.slice(5)}` : 'profileUnavailable'));
+    }
+  }, [api, notify]);
+
+  const [profileOfferDismissed, setProfileOfferDismissed] = useState(readProfileOfferDismissed);
+  const dismissProfileOffer = useCallback(() => {
+    setProfileOfferDismissed(true);
+    try {
+      window.localStorage.setItem(PROFILE_OFFER_KEY, '1');
+    } catch {
+      // Not kept: the offer comes back next time, which is harmless.
+    }
+  }, []);
+
   const keepInstalling = useCallback(() => setCloseBlocked(false), []);
   const closeAnyway = useCallback(() => {
     setCloseBlocked(false);
@@ -379,13 +419,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       dismissError: () => setError(null), wizardOpen, openWizard: () => setWizardOpen(true),
       closeWizard: () => setWizardOpen(false), adoptSettings,
       textureInstall, installTexturePack, closeBlocked, keepInstalling, closeAnyway,
-      update, updateBlocker, installUpdate, openUpdatePage, rebuild, rebuildBlocker, startRebuild,
+      update, updateBlocker, installUpdate, openUpdatePage, rebuild, rebuildBlocker, startRebuild, startProfile, profileOfferDismissed, dismissProfileOffer,
     };
   }, [
     api, boot, settings, patch, flush, reset, lang, t, f, duration, status, refreshStatus, detectPaths, gameRunning,
     optimizer, play, stop, toast, notify, error, showError, wizardOpen, adoptSettings,
     textureInstall, installTexturePack, closeBlocked, keepInstalling, closeAnyway,
-    update, updateBlocker, installUpdate, openUpdatePage, rebuild, rebuildBlocker, startRebuild,
+    update, updateBlocker, installUpdate, openUpdatePage, rebuild, rebuildBlocker, startRebuild, startProfile, profileOfferDismissed, dismissProfileOffer,
   ]);
 
   if (!value) return null;

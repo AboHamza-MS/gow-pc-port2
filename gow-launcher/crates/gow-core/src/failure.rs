@@ -17,6 +17,12 @@ pub enum FailureKind {
     MissingDll,
     /// A DLL or the executable has the wrong architecture or is damaged (`STATUS_INVALID_IMAGE_FORMAT`).
     BadImage,
+    /// GOW-Port: `ps2-tools iso-extract` found a cut or damaged disc image (an incomplete download or copy).
+    DamagedDisc,
+    /// GOW-Port: the portable clang (llvm-mingw) could not be downloaded or unpacked.
+    CompilerSetup,
+    /// GOW-Port: the build folder kept another compiler after the configure step.
+    BuildFolderCompiler,
     // TODO needs a real log sample: DiskSpace and AccessDenied. The Windows texts ("not enough space on the disk",
     // "Access is denied") are localized and `install.ps1` prints no message of its own for either, so nothing is guessed.
 }
@@ -31,6 +37,9 @@ impl FailureKind {
             Self::OpenGl => "failureOpenGl",
             Self::MissingDll => "failureMissingDll",
             Self::BadImage => "failureBadImage",
+            Self::DamagedDisc => "failureDamagedDisc",
+            Self::CompilerSetup => "failureCompilerSetup",
+            Self::BuildFolderCompiler => "failureBuildFolderCompiler",
         }
     }
 }
@@ -53,8 +62,18 @@ fn install_line(line: &str) -> Option<FailureKind> {
     {
         return Some(FailureKind::CmakeUnusable);
     }
+    // GOW-Port: before "could not download": the compiler message also names the connection.
+    if lower.contains("could not set up the compiler") {
+        return Some(FailureKind::CompilerSetup);
+    }
     if lower.contains("could not download") {
         return Some(FailureKind::Download);
+    }
+    if lower.contains("the disc image is damaged or is not a ps2 game disc") {
+        return Some(FailureKind::DamagedDisc);
+    }
+    if lower.contains("the build folder uses another compiler") {
+        return Some(FailureKind::BuildFolderCompiler);
     }
     None
 }
@@ -110,6 +129,15 @@ mod tests {
         assert_eq!(classify_install_failure("", &lines(&["==> Downloading", download])), Some(FailureKind::Download));
         // Case does not matter.
         assert_eq!(classify_install_failure("COULD NOT DOWNLOAD x", &[]), Some(FailureKind::Download));
+        // GOW-Port: the 0.3.0 messages (clang, damaged discs, a build folder kept on another compiler).
+        let compiler =
+            "Could not set up the compiler: timed out. Check the Internet connection (github.com must be reachable)";
+        assert_eq!(classify_install_failure(compiler, &[]), Some(FailureKind::CompilerSetup));
+        let disc =
+            "[iso-extract] the disc image is damaged or is not a PS2 game disc (SYSTEM.CNF is cut: 0 of 70 bytes)";
+        assert_eq!(classify_install_failure("ps2-tools failed", &lines(&[disc])), Some(FailureKind::DamagedDisc));
+        let folder = "The build folder uses another compiler (cl.exe) instead of clang++.exe. Delete CMakeCache.txt";
+        assert_eq!(classify_install_failure(folder, &[]), Some(FailureKind::BuildFolderCompiler));
         // What is not recognized gets no hint.
         assert_eq!(classify_install_failure("ninja ended with code 1", &lines(&["[3/9] cl x.cpp"])), None);
         assert_eq!(classify_install_failure("", &[]), None);
@@ -142,6 +170,9 @@ mod tests {
             FailureKind::OpenGl,
             FailureKind::MissingDll,
             FailureKind::BadImage,
+            FailureKind::DamagedDisc,
+            FailureKind::CompilerSetup,
+            FailureKind::BuildFolderCompiler,
         ];
         let mut keys: Vec<_> = kinds.iter().map(|kind| kind.key()).collect();
         keys.sort_unstable();

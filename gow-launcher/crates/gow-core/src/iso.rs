@@ -23,6 +23,24 @@ pub enum IsoReason {
     OtherGame,
     NoExecutable,
     Modified,
+    /// GOW-Port (decision D4): God of War from another region or a demo: recognised and named, not supported yet.
+    OtherEdition,
+}
+
+/// GOW-Port (decision D4): the other God of War boot executables, from PCSX2's GameIndex. They have their own code, so the
+/// USA function map does not apply to them; the wizard names them instead of saying "not God of War".
+pub const OTHER_EDITIONS: [(&str, &str); 6] = [
+    ("SLPM_670.10", "Japan"),
+    ("SCES_531.33", "Europe / Australia"),
+    ("SCES_515.33", "Europe, alternate serial"),
+    ("SCAJ_300.10", "Asia, SCAJ-30010"),
+    ("SCUS_974.67", "USA demo"),
+    ("SCED_534.31", "Europe demo"),
+];
+
+/// The label of a known God of War edition the port does not support yet, by its boot executable.
+pub fn other_edition(boot: &str) -> Option<&'static str> {
+    OTHER_EDITIONS.iter().find(|(name, _)| name.eq_ignore_ascii_case(boot)).map(|(_, label)| *label)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -31,11 +49,16 @@ pub struct IsoValidation {
     pub ok: bool,
     pub reason: Option<IsoReason>,
     pub hash: String,
+    /// GOW-Port (decision D4): accepted because the executable has the USA code (`.text`) without being the original
+    /// disc's: a translation. It installs and plays the same; RetroAchievements stay off.
+    pub translation: bool,
+    /// GOW-Port: with `OtherEdition`, which one ("Japan", "Europe / Australia"...).
+    pub edition: String,
 }
 
 impl IsoValidation {
     fn failed(reason: IsoReason) -> Self {
-        Self { ok: false, reason: Some(reason), hash: String::new() }
+        Self { ok: false, reason: Some(reason), hash: String::new(), translation: false, edition: String::new() }
     }
 }
 
@@ -129,7 +152,11 @@ pub fn validate_iso(path: &str) -> IsoValidation {
     };
     let text = read_at(&mut file, cnf.lba, cnf.size.min(SECTOR));
     let text: String = text.iter().map(|&b| b as char).collect();
-    let Some(name) = boot_executable(&text).filter(|name| name.eq_ignore_ascii_case("SCUS_973.99")) else {
+    let boot = boot_executable(&text);
+    if let Some(label) = boot.as_deref().and_then(other_edition) {
+        return IsoValidation { edition: label.to_owned(), ..IsoValidation::failed(IsoReason::OtherEdition) };
+    }
+    let Some(name) = boot.filter(|name| name.eq_ignore_ascii_case("SCUS_973.99")) else {
         return IsoValidation::failed(IsoReason::OtherGame);
     };
 
@@ -146,9 +173,12 @@ pub fn validate_iso(path: &str) -> IsoValidation {
     md5.update(&elf);
     let hash = crate::game::hex(&md5.finalize());
     if hash != HASH_USA {
-        return IsoValidation { ok: false, reason: Some(IsoReason::Modified), hash };
+        // GOW-Port (decision D4): a fan translation keeps the USA code byte for byte and recompiles to the same C++.
+        let translation = ps2_elf::code_identity::identify(&elf) == ps2_elf::code_identity::CodeIdentity::SameCode;
+        let reason = (!translation).then_some(IsoReason::Modified);
+        return IsoValidation { ok: translation, reason, hash, translation, edition: String::new() };
     }
-    IsoValidation { ok: true, reason: None, hash }
+    IsoValidation { ok: true, reason: None, hash, translation: false, edition: String::new() }
 }
 
 const SKIPPED_FOLDERS: [&str; 7] = [
@@ -280,6 +310,17 @@ mod tests {
     fn another_game_is_recognized_by_its_boot_file() {
         let (_keep, path) = write(&build_iso("SLUS_123.45", b"ELF"));
         assert_eq!(validate_iso(&path).reason, Some(IsoReason::OtherGame));
+    }
+
+    #[test]
+    fn another_god_of_war_edition_is_named() {
+        let (_keep, path) = write(&build_iso("SCES_531.33", b"ELF"));
+        let result = validate_iso(&path);
+        assert!(!result.ok);
+        assert_eq!(result.reason, Some(IsoReason::OtherEdition));
+        assert_eq!(result.edition, "Europe / Australia");
+        assert_eq!(other_edition("slpm_670.10"), Some("Japan"));
+        assert_eq!(other_edition("SCUS_973.99"), None, "the supported disc is not an other edition");
     }
 
     #[test]

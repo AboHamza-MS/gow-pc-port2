@@ -173,6 +173,12 @@ export interface OptimizerSnapshot {
   completionRatio: number;
   buildProgress: number;
   status: OptimizerState;
+  /** The run in progress is the speed-profile optimization (the game opens by itself). */
+  profiling: boolean;
+  /** The installation has its speed profile (PGO), trained on this PC. */
+  profileReady: boolean;
+  /** This installation can have one (Windows, built with clang). */
+  profileSupported: boolean;
 }
 
 export interface WizardInfo {
@@ -193,16 +199,37 @@ export interface WizardInfo {
     cpuMissing: string[];
     /** Installation kit files (relative to the kit folder) that are gone and could not be restored; empty when all are there. */
     kitMissing: string[];
+    /** Windows: the kit has the prebuilt Rust tools, so the clang build needs no Visual Studio or Git (0.3.0). */
+    portableToolchain?: boolean;
   };
   hasManifest: boolean;
   defaultDestination: string;
 }
 
-export type IsoReason = 'empty' | 'not-found' | 'unreadable' | 'format' | 'other-game' | 'no-executable' | 'modified';
+export type IsoReason = 'empty' | 'not-found' | 'unreadable' | 'format' | 'other-game' | 'no-executable' | 'modified' | 'other-edition';
 export interface IsoValidation {
   ok: boolean;
   reason: IsoReason | null;
   hash: string;
+  /** Accepted as a translation: the USA code (.text) without the original disc's executable. RetroAchievements stay off. */
+  translation?: boolean;
+  /** With 'other-edition': which God of War edition it is ("Japan", "Europe / Australia"...). */
+  edition?: string;
+}
+
+/** Why a translation patch could not be applied (`gow_core::iso_patch::PatchError`). */
+export type PatchError =
+  | 'patch-unreadable' | 'not-xdelta' | 'compressed' | 'wrong-iso' | 'damaged' | 'space' | 'changes-code' | 'cancelled' | 'write';
+
+/** What applying a translation patch produced (`gow_core::iso_patch::PatchOutcome`). */
+export interface PatchOutcome {
+  ok: boolean;
+  /** The translated ISO, next to the original. */
+  path: string;
+  validation: IsoValidation | null;
+  error: PatchError | null;
+  /** The decoder's own message, in English. */
+  detail: string;
 }
 
 export type DestinationReason = 'empty' | 'characters' | 'space';
@@ -299,6 +326,8 @@ export interface RebuildState {
   built: string;
   /** True the first time this digest asks for a rebuild: the interface shows a toast once. */
   announce: boolean;
+  /** The build was made by 0.2.9 or older (Visual Studio): the rebuild deletes it and builds from scratch. */
+  legacy?: boolean;
 }
 
 /** What an update must not interrupt; the backend refuses with `busy:<code>` for the same reasons. */

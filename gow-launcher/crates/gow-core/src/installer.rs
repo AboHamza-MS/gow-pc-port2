@@ -16,7 +16,9 @@ use crate::script::{self, quote_for_powershell, ScriptOptions, ScriptRun};
 use crate::system;
 
 pub const STAGE_COUNT: usize = 8;
-pub const MINIMUM_FREE_GB: f64 = 30.0;
+// GOW-Port (0.3.0): measured peak of a clang installation with the ISO on the same drive: about 18 GB (ISO 8, extracted
+// disc 7.9, build 1.3, compiler and tools 0.9).
+pub const MINIMUM_FREE_GB: f64 = 20.0;
 
 /// Where to find `install.ps1`: the extracted kit first, then a repository checkout above the launcher (development).
 pub fn find_install_script(kit_dir: &Path, launcher_dir: &Path) -> Option<PathBuf> {
@@ -68,6 +70,10 @@ pub struct Environment {
     /// The installation kit files (relative to the kit folder) that are gone and could not be restored from the bundled
     /// copy; empty when all are there. Filled by the application, which knows the kit folder.
     pub kit_missing: Vec<String>,
+    /// GOW-Port: Windows, 0.3.0: the kit carries the Rust tools (`bin\ps2_recomp.exe`, `bin\ps2-tools.exe`), so the clang
+    /// build needs neither Visual Studio nor Git: install.ps1 downloads the compiler (llvm-mingw), CMake, Ninja and a portable
+    /// Git by itself. `vs` and `git` are then reported as present.
+    pub portable_toolchain: bool,
 }
 
 /// What `install.sh --check-deps` printed: the missing checks, their packages and the command that installs them.
@@ -162,6 +168,7 @@ pub fn check_environment(script: Option<&Path>) -> Environment {
         install_command: String::new(),
         cpu_missing: missing_cpu_features(detect_required_cpu_feature()),
         kit_missing: Vec::new(),
+        portable_toolchain: false,
     };
     if !cfg!(windows) {
         let report = script.map(linux_dependencies).unwrap_or_default();
@@ -214,8 +221,21 @@ pub fn check_environment(script: Option<&Path>) -> Environment {
         }
         environment.git =
             system::find_in_path("git").is_some() || Path::new(r"C:\Program Files\Git\cmd\git.exe").exists();
+        if script.is_some_and(kit_has_rust_tools) {
+            environment.portable_toolchain = true;
+            environment.vs = true;
+            environment.git = true;
+            environment.cmake_unusable = false;
+        }
     }
     environment
+}
+
+/// GOW-Port: the kit next to `install.ps1` has the prebuilt Rust tools, so cargo (and Visual Studio's linker) is not needed.
+pub fn kit_has_rust_tools(script: &Path) -> bool {
+    script.parent().is_some_and(|root| {
+        root.join("bin").join("ps2_recomp.exe").is_file() && root.join("bin").join("ps2-tools.exe").is_file()
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -617,6 +637,20 @@ mod tests {
         let result = validate_destination(&directory.path().join("game").to_string_lossy());
         assert!(result.free_gb > 0.0);
         assert_eq!(result.ok, result.free_gb >= MINIMUM_FREE_GB);
+    }
+
+    // GOW-Port: with the prebuilt Rust tools in the kit, the clang build needs no Visual Studio (0.3.0).
+    #[test]
+    fn the_kit_needs_both_rust_tools_to_skip_visual_studio() {
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("install.ps1");
+        std::fs::write(&script, "").unwrap();
+        assert!(!kit_has_rust_tools(&script));
+        std::fs::create_dir_all(directory.path().join("bin")).unwrap();
+        std::fs::write(directory.path().join("bin").join("ps2_recomp.exe"), "").unwrap();
+        assert!(!kit_has_rust_tools(&script), "one tool is not enough");
+        std::fs::write(directory.path().join("bin").join("ps2-tools.exe"), "").unwrap();
+        assert!(kit_has_rust_tools(&script));
     }
 
     #[test]

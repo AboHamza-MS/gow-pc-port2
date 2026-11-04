@@ -28,6 +28,9 @@ pub const DIGEST_MARKER: &str = ".kit-runtime-digest";
 pub const PRIOR_MARKER: &str = ".kit-runtime-prior";
 /// In `<destination>/build/`: the kit digest the build was made from.
 pub const BUILT_FROM_MARKER: &str = ".built-from-kit";
+/// GOW-Port (0.3.0): in `<destination>`: the build of 0.2.x set aside while a clean rebuild runs. Put back if the rebuild
+/// fails, deleted once it succeeds.
+pub const LEGACY_FOLDER: &str = "build-legacy";
 
 /// The folders of the kit whose files end up in a build.
 const SOURCE_FOLDERS: [&str; 2] = ["RustPortPS2/native", "RustPortPS2/games"];
@@ -134,6 +137,58 @@ fn has_build(destination: &Path) -> bool {
     built_directory(destination).join("ps2xRuntime").join(EXECUTABLE_NAME).is_file()
 }
 
+/// GOW-Port (0.3.0): `true` for a build made by 0.2.9 or older on Windows, compiled with Visual Studio: since 0.3.0 the game
+/// is compiled with clang, and such a build is redone from scratch instead of being reconfigured over its old files. Read
+/// from the compiler the build folder's CMake cache recorded. Linux builds did not change compiler, so they are never legacy.
+pub fn legacy_build(destination: &Path) -> bool {
+    if !cfg!(windows) || !has_build(destination) {
+        return false;
+    }
+    let Ok(cache) = fs::read_to_string(built_directory(destination).join("CMakeCache.txt")) else { return false };
+    cache
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("CMAKE_CXX_COMPILER:").and_then(|rest| rest.split_once('=')).map(|(_, path)| path)
+        })
+        .is_some_and(|compiler| !compiler.to_ascii_lowercase().contains("clang"))
+}
+
+fn legacy_folder(destination: &Path) -> PathBuf {
+    destination.join(LEGACY_FOLDER)
+}
+
+/// Before a clean rebuild: moves the old build to [`LEGACY_FOLDER`] (a rename, nothing is deleted yet) so the installer
+/// starts from an empty build folder. Returns `true` when it moved it. A build already set aside by an earlier attempt is
+/// kept as it is. The saves are not in the build folder (`game/Mcd001.ps2`, `game/mc0/`), and the game keeps running from
+/// its copy in `active/`.
+pub fn set_legacy_aside(destination: &Path) -> io::Result<bool> {
+    if !legacy_build(destination) || legacy_folder(destination).exists() {
+        return Ok(false);
+    }
+    fs::rename(built_directory(destination), legacy_folder(destination))?;
+    Ok(true)
+}
+
+/// After a clean rebuild that failed: the partial new build is removed and the old one put back, so the installation is as
+/// it was (and the launcher offers the clean rebuild again).
+pub fn restore_legacy(destination: &Path) -> io::Result<()> {
+    if !legacy_folder(destination).is_dir() {
+        return Ok(());
+    }
+    if built_directory(destination).exists() {
+        fs::remove_dir_all(built_directory(destination))?;
+    }
+    fs::rename(legacy_folder(destination), built_directory(destination))
+}
+
+/// After a clean rebuild that succeeded: deletes the old build (several GB).
+pub fn drop_legacy(destination: &Path) -> io::Result<()> {
+    if legacy_folder(destination).is_dir() {
+        fs::remove_dir_all(legacy_folder(destination))?;
+    }
+    Ok(())
+}
+
 /// Called after an extraction that changed the kit: records the new digest and, the first time a digest appears over a kit
 /// that did not have one, the digest of the kit it replaced (`before`) when that differs. Best effort: a kit that cannot
 /// be hashed leaves the player with no prompt, never with a failed start.
@@ -187,17 +242,29 @@ pub struct RebuildState {
     /// `true` the first time this kit digest is reported as needing a rebuild: the interface shows a toast then, once per
     /// digest. Filled by [`announce`], not by [`state`].
     pub announce: bool,
+    /// GOW-Port (0.3.0): the build was made by 0.2.9 or older ([`legacy_build`]): the rebuild deletes it and builds from
+    /// scratch, and the interface says so.
+    pub legacy: bool,
 }
 
 /// Compares the kit with the build in `destination`, adopting the kit's digest for a build that predates the marker.
 pub fn state(kit: &Path, destination: &Path) -> RebuildState {
     let Some(digest) = read_kit_digest(kit) else { return RebuildState::default() };
     if !has_build(destination) {
-        return RebuildState { kit: short(&digest).to_string(), ..RebuildState::default() };
+        // GOW-Port (0.3.0): a clean rebuild that did not finish (the launcher closed during it) still has to be done.
+        let unfinished = legacy_folder(destination).is_dir();
+        return RebuildState {
+            kit: short(&digest).to_string(),
+            needed: unfinished,
+            legacy: unfinished,
+            ..RebuildState::default()
+        };
     }
     let built = read_built_from(destination);
     let prior = read_trimmed(&kit.join(PRIOR_MARKER));
-    let decision = rebuild_needed(&digest, built.as_deref(), prior.as_deref());
+    let legacy = legacy_build(destination);
+    // A legacy build is never adopted or taken as up to date: it must be redone whatever it recorded.
+    let decision = if legacy { Decision::Needed } else { rebuild_needed(&digest, built.as_deref(), prior.as_deref()) };
     if decision == Decision::Adopt {
         let _ = fs::write(built_directory(destination).join(BUILT_FROM_MARKER), &digest);
     }
@@ -206,6 +273,7 @@ pub fn state(kit: &Path, destination: &Path) -> RebuildState {
         kit: short(&digest).to_string(),
         built: built.as_deref().map(short).unwrap_or_default().to_string(),
         announce: false,
+        legacy,
     }
 }
 
@@ -370,10 +438,66 @@ mod tests {
         assert!(!destination.exists());
     }
 
+    fn cache_with(destination: &Path, compiler: &str) {
+        write(
+            &destination.join("build/CMakeCache.txt"),
+            &format!("CMAKE_BUILD_TYPE:STRING=Release\nCMAKE_CXX_COMPILER:FILEPATH={compiler}\n"),
+        );
+    }
+
+    #[test]
+    fn a_visual_studio_build_is_legacy_and_asks_for_a_clean_rebuild() {
+        let root = tempfile::tempdir().unwrap();
+        let (kit, destination) = (root.path().join("kit"), root.path().join("game"));
+        kit_with_sources(&kit);
+        record_kit(&kit, None);
+        built_game(&destination);
+        record_build(&kit, &destination);
+        cache_with(&destination, "C:/BuildTools/VC/Tools/MSVC/14.40/bin/Hostx64/x64/cl.exe");
+        let asked = state(&kit, &destination);
+        // Only Windows changed compiler in 0.3.0.
+        assert_eq!(asked.legacy, cfg!(windows));
+        assert_eq!(asked.needed, cfg!(windows), "made from this kit, but with the old compiler");
+        cache_with(&destination, "D:/GOW/toolchain/llvm-mingw-20261020/bin/clang++.exe");
+        let current = state(&kit, &destination);
+        assert!(!current.legacy && !current.needed);
+        // No cache: nothing to tell.
+        fs::remove_file(destination.join("build/CMakeCache.txt")).unwrap();
+        assert!(!legacy_build(&destination));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_clean_rebuild_sets_the_old_build_aside_and_puts_it_back_or_deletes_it() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("game");
+        built_game(&destination);
+        cache_with(&destination, "cl.exe");
+        write(&destination.join("game/Mcd001.ps2"), "saves");
+        assert!(set_legacy_aside(&destination).unwrap());
+        assert!(
+            !destination.join("build").exists() && destination.join(LEGACY_FOLDER).join("CMakeCache.txt").is_file()
+        );
+        // A second attempt (a resumed or retried rebuild) keeps the old build where it is.
+        write(&destination.join("build/partial.o"), "new");
+        assert!(!set_legacy_aside(&destination).unwrap());
+        // Failure: the old build comes back, the partial one is gone.
+        restore_legacy(&destination).unwrap();
+        assert!(destination.join("build/CMakeCache.txt").is_file() && !destination.join("build/partial.o").exists());
+        assert!(!destination.join(LEGACY_FOLDER).exists());
+        // Success: the old build is deleted. The saves were never touched.
+        set_legacy_aside(&destination).unwrap();
+        built_game(&destination);
+        drop_legacy(&destination).unwrap();
+        assert!(!destination.join(LEGACY_FOLDER).exists() && destination.join("build").is_dir());
+        assert_eq!(fs::read_to_string(destination.join("game/Mcd001.ps2")).unwrap(), "saves");
+    }
+
     #[test]
     fn the_toast_is_announced_once_per_digest() {
         let data = tempfile::tempdir().unwrap();
-        let asked = RebuildState { needed: true, kit: "aaa".into(), built: "bbb".into(), announce: false };
+        let asked =
+            RebuildState { needed: true, kit: "aaa".into(), built: "bbb".into(), announce: false, legacy: false };
         assert!(announce(data.path(), asked.clone()).announce);
         assert!(!announce(data.path(), asked.clone()).announce);
         // A newer kit digest announces again; nothing needed announces nothing.

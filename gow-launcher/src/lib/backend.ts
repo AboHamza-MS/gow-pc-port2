@@ -3,7 +3,7 @@
 
 import type {
   Bootstrap, DestinationValidation, GameFinished, GameStatus, GamepadCaptured, InstallOutcome,
-  InstallProgress, IsoValidation, LiveState, OptimizerSnapshot, PadDeviceList, RebuildState, Settings, TexturePackInfo, TexturePackOutcome, TexturePackProgress,
+  InstallProgress, IsoValidation, LiveState, PatchError, PatchOutcome, OptimizerSnapshot, PadDeviceList, RebuildState, Settings, TexturePackInfo, TexturePackOutcome, TexturePackProgress,
   UpdateMode, UpdateState, WizardInfo,
 } from './types';
 
@@ -15,6 +15,9 @@ export interface EventMap {
   'gamepad-failed': { reason: string };
   'iso-searching': boolean;
   'iso-found': string;
+  /** The translation patch being applied: the fraction done. */
+  'iso-patch-progress': number;
+  'iso-patch-done': PatchOutcome;
   'install-progress': InstallProgress;
   'install-done': InstallOutcome;
   'texture-pack-progress': TexturePackProgress;
@@ -68,6 +71,11 @@ export interface Api {
   gamepadCancel(): Promise<void>;
   wizardInfo(): Promise<WizardInfo>;
   validateIso(path: string): Promise<IsoValidation>;
+  /** Checks a translation patch from its header: null when it can be applied. */
+  isoPatchCheck(path: string): Promise<PatchError | null>;
+  /** Applies the patch to the original ISO in the background (`iso-patch-progress`, `iso-patch-done`). */
+  isoPatchStart(iso: string, patch: string): Promise<void>;
+  isoPatchCancel(): Promise<void>;
   validateDestination(path: string): Promise<DestinationValidation>;
   findIso(): Promise<void>;
   installStart(args: { iso: string; destination: string; installTools: boolean; vu1MemoryLimitGb: number }): Promise<void>;
@@ -75,6 +83,9 @@ export interface Api {
   installComplete(args: { destination: string; elf: string; executable: string }): Promise<Settings>;
   optimizerSnapshot(): Promise<OptimizerSnapshot>;
   optimizeNow(): Promise<void>;
+  /** Starts the speed-profile optimization: the game opens by itself for a few minutes, then a build uses the profile.
+   * Rejects with a code (`busy:game`..., `notAvailable`) when it must not start. */
+  profileStart(): Promise<void>;
   rebuildState(): Promise<RebuildState>;
   /** Starts the rebuild of the game from the kit's sources. Rejects with a code (`busy:game`...) when it must not start. */
   rebuildStart(): Promise<void>;
@@ -133,6 +144,9 @@ async function createTauriApi(): Promise<Api> {
     gamepadCancel: () => call('gamepad_cancel'),
     wizardInfo: () => call('wizard_info'),
     validateIso: (path) => call('validate_iso', { path }),
+    isoPatchCheck: (path) => call('iso_patch_check', { path }),
+    isoPatchStart: (iso, patch) => call('iso_patch_start', { iso, patch }),
+    isoPatchCancel: () => call('iso_patch_cancel'),
     validateDestination: (path) => call('validate_destination', { path }),
     findIso: () => call('find_iso'),
     installStart: (arguments_) => call('install_start', { arguments: arguments_ }),
@@ -140,6 +154,7 @@ async function createTauriApi(): Promise<Api> {
     installComplete: (arguments_) => call('install_complete', { arguments: arguments_ }),
     optimizerSnapshot: () => call('optimizer_snapshot'),
     optimizeNow: () => call('optimize_now'),
+    profileStart: () => call('profile_start'),
     rebuildState: () => call('rebuild_state'),
     rebuildStart: () => call('rebuild_start'),
     updateState: () => call('update_state'),
@@ -202,12 +217,24 @@ export const dongleDevices: PadDeviceList = {
 };
 
 export function createMockApi(
-  options: { ready?: boolean; update?: UpdateState; rebuildNeeded?: boolean; padDevices?: PadDeviceList | null } = {},
+  options: {
+    ready?: boolean;
+    update?: UpdateState;
+    rebuildNeeded?: boolean;
+    legacyBuild?: boolean;
+    /** The demo's language (`?lang=pt-BR` in a browser). */
+    language?: string;
+    padDevices?: PadDeviceList | null;
+    otherEdition?: boolean;
+  } = {},
 ): MockApi {
   const ready = options.ready ?? true;
   let update = options.update ?? noUpdate;
+  let patchCancelled = false;
   let rebuild: RebuildState = {
-    needed: options.rebuildNeeded ?? false, kit: '3fa9c1d20b7e', built: options.rebuildNeeded ? '9b1e44c07a52' : '3fa9c1d20b7e', announce: false,
+    needed: (options.rebuildNeeded || options.legacyBuild) ?? false, kit: '3fa9c1d20b7e',
+    built: options.rebuildNeeded || options.legacyBuild ? '9b1e44c07a52' : '3fa9c1d20b7e', announce: false,
+    legacy: options.legacyBuild ?? false,
   };
   let announced = false;
   const listeners = new Map<string, Set<Handler>>();
@@ -216,7 +243,7 @@ export function createMockApi(
   let settings: Settings = {
     ...defaultSettings,
     settingsVersion: 9,
-    language: 'en',
+    language: options.language || 'en',
     aspectMode: '16:9',
     skipVideos: false,
     elf: ready ? 'C:\\GodOfWar-PC\\game\\SCUS_973.99' : '',
@@ -228,14 +255,15 @@ export function createMockApi(
   const display = { widthPx: 1920, heightPx: 1080, hz: 144 };
   let running = false;
   const status = (): GameStatus => ({
-    game: { exists: ready, valid: ready, modified: false, crc: 'D6385328' },
+    game: { exists: ready, valid: ready, modified: !!options.otherEdition, crc: options.otherEdition ? '5444DDCB' : 'D6385328' },
     data: { ok: ready, iso: '', extracted: ready, chosenIsoMissing: false },
     executable: { exists: ready, executable: ready },
     ready,
   });
+  let profileReady = false;
   const snapshot = (): OptimizerSnapshot => ({
     configured: ready, compiling: false, captured: 150, compiled: settings.optimizationCompiled, completionRatio: 0.8,
-    buildProgress: -1, status: 'idle',
+    buildProgress: -1, status: 'idle', profiling: false, profileReady, profileSupported: ready,
   });
   const merge = (patch: Partial<Settings>) => (settings = { ...settings, ...patch });
   const later = <T,>(value: T, ms = 0) => new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
@@ -320,6 +348,23 @@ export function createMockApi(
         : /god/i.test(path)
           ? { ok: true, reason: null, hash: '33c1808ac082e236188fb887d97b7688' }
           : { ok: false, reason: 'not-found', hash: '' }),
+    isoPatchCheck: async (path) => (/\.(xdelta|vcdiff)$/i.test(path.trim()) ? null : 'not-xdelta'),
+    isoPatchStart: async (iso, patch) => {
+      patchCancelled = false;
+      const folder = iso.slice(0, Math.max(iso.lastIndexOf('\\'), iso.lastIndexOf('/')) + 1);
+      const stem = (patch.split(/[\\/]/).pop() ?? 'translation').replace(/\.[^.]*$/, '');
+      [0.18, 0.41, 0.66, 0.9].forEach((fraction, index) =>
+        setTimeout(() => !patchCancelled && emit('iso-patch-progress', fraction), 350 * (index + 1)));
+      setTimeout(() => emit('iso-patch-done', patchCancelled
+        ? { ok: false, path: '', validation: null, error: 'cancelled', detail: 'cancelled' }
+        : {
+            ok: true, path: `${folder}${stem}.iso`, error: null, detail: '',
+            validation: { ok: true, reason: null, hash: '5f2b07c1d38e4a96b0e1c2d3a4f5b6c7', translation: true },
+          }), 1800);
+    },
+    isoPatchCancel: async () => {
+      patchCancelled = true;
+    },
     validateDestination: async (path) =>
       path.trim() === '' ? { ok: false, reason: 'empty', freeGb: 0 }
         : /[^\x20-\x7e]/.test(path) ? { ok: false, reason: 'characters', freeGb: 0 }
@@ -345,13 +390,17 @@ export function createMockApi(
     installComplete: async (args) => merge({ elf: args.elf, executable: args.executable, optimizationDestination: args.destination, iso: '' }),
     optimizerSnapshot: async () => snapshot(),
     optimizeNow: async () => undefined,
+    profileStart: async () => {
+      profileReady = true;
+      emit('optimizer', snapshot());
+    },
     rebuildState: async () => {
       const current = { ...rebuild, announce: rebuild.needed && !announced };
       announced = announced || rebuild.needed;
       return current;
     },
     rebuildStart: async () => {
-      rebuild = { needed: false, kit: rebuild.kit, built: rebuild.kit, announce: false };
+      rebuild = { needed: false, kit: rebuild.kit, built: rebuild.kit, announce: false, legacy: false };
     },
     updateState: async () => update,
     updateInstall: async () => {
@@ -371,7 +420,8 @@ export function createMockApi(
       listeners.set(event, set);
       return () => set.delete(handler as Handler);
     },
-    pick: async () => null,
+    // The demo picks an example translation patch; every other dialog is cancelled.
+    pick: async ({ filters }) => (filters?.some((filter) => filter.name === 'xdelta') ? 'D:\\Patches\\God of War PT-BR.xdelta' : null),
     onFileDrop: async () => () => undefined,
     minimize: async () => undefined,
     toggleMaximize: async () => undefined,
@@ -395,6 +445,8 @@ export function getApi(): Promise<Api> {
           ready: new URLSearchParams(window.location.search).get('state') !== 'missing',
           update: mockUpdateFromAddress(new URLSearchParams(window.location.search).get('update')),
           rebuildNeeded: new URLSearchParams(window.location.search).get('rebuild') === 'needed',
+          legacyBuild: new URLSearchParams(window.location.search).get('rebuild') === 'legacy',
+          language: new URLSearchParams(window.location.search).get('lang') ?? undefined,
         }),
       );
   return instance;

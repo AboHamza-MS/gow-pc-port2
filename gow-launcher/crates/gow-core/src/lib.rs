@@ -11,6 +11,7 @@ pub mod gamepad;
 pub mod gpu;
 pub mod installer;
 pub mod iso;
+pub mod iso_patch;
 pub mod keys;
 pub mod kit;
 pub mod launch;

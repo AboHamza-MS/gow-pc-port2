@@ -113,6 +113,7 @@ describe('translations', () => {
       // The failures the launcher explains (`FailureKind::key` in gow-core).
       ...['game', 'installation', 'optimizer', 'texturePack'].map((blocker) => `rebuildBlocked_${blocker}`),
       'failureKitFile', 'failureCmakeUnusable', 'failureDownload', 'failureOpenGl', 'failureMissingDll', 'failureBadImage',
+      'failureDamagedDisc', 'failureCompilerSetup', 'failureBuildFolderCompiler',
       // The gamepad button map: one row per physical button, one option per PS2 button.
       ...SOURCES.map((source) => `padmapSrc_${source}`),
       ...TARGETS.map((target) => `padmapTarget_${target}`),

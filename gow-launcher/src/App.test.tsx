@@ -82,6 +82,50 @@ describe('game failures', () => {
   });
 });
 
+// GOW-Port: RetroAchievements only with the original USA disc.
+describe('achievements with another edition', () => {
+  it('replaces the tab with a message when the installed game is not the original disc', async () => {
+    api = createMockApi({ ready: true, otherEdition: true });
+    setApi(api);
+    render(<App />);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Achievements' }));
+    expect(await screen.findByText(/Achievements only work with the original God of War \(USA\) disc/)).toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: 'Enable RetroAchievements' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the settings with the original disc', async () => {
+    api = createMockApi({ ready: true });
+    setApi(api);
+    render(<App />);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Achievements' }));
+    expect(await screen.findByRole('switch', { name: 'Enable RetroAchievements' })).toBeInTheDocument();
+  });
+});
+
+describe('speed profile offer', () => {
+  it('offers the optimization on the first screen, starts it and hides it on "Later"', async () => {
+    api = createMockApi({ ready: true });
+    setApi(api);
+    window.localStorage.removeItem('gow.profileOfferDismissed');
+    render(<App />);
+    const user = userEvent.setup();
+    const start = vi.spyOn(api, 'profileStart');
+    expect(await screen.findByText('Optimization available: more FPS')).toBeInTheDocument();
+    const base = { configured: true, compiling: false, captured: 1, compiled: 1, completionRatio: 1, buildProgress: -1, status: 'idle' as const, profileReady: false, profileSupported: true };
+    act(() => api.emit('optimizer', { ...base, compiling: true, status: 'compiling', profiling: true, buildProgress: 0.3 }));
+    expect(await screen.findByText('Optimizing the game')).toBeInTheDocument();
+    act(() => api.emit('optimizer', { ...base, profiling: false }));
+    await user.click(await screen.findByRole('button', { name: 'Optimize now' }));
+    expect(start).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByText('Optimization available: more FPS')).not.toBeInTheDocument());
+    act(() => api.emit('optimizer', { ...base, profiling: false }));
+    await user.click(await screen.findByRole('button', { name: 'Later' }));
+    expect(screen.queryByText('Optimization available: more FPS')).not.toBeInTheDocument();
+    expect(window.localStorage.getItem('gow.profileOfferDismissed')).toBe('1');
+    window.localStorage.removeItem('gow.profileOfferDismissed');
+  });
+});
+
 describe('rebuild after an update', () => {
   const bootWithRebuild = (rebuildNeeded: boolean) => {
     api = createMockApi({ ready: true, rebuildNeeded });
@@ -106,7 +150,7 @@ describe('rebuild after an update', () => {
     expect(await screen.findByText('Game fixes waiting')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Rebuild' }));
     expect(start).toHaveBeenCalledTimes(1);
-    const snapshot = { configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.42, status: 'compiling' as const };
+    const snapshot = { profiling: false, profileReady: false, profileSupported: false, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.42, status: 'compiling' as const };
     act(() => api.emit('optimizer', snapshot));
     expect(await screen.findByText('Rebuilding the game: 42 %')).toBeInTheDocument();
     expect(screen.getByRole('progressbar', { name: 'Rebuild progress' })).toHaveAttribute('aria-valuenow', '42');
@@ -125,7 +169,7 @@ describe('rebuild after an update', () => {
     const user = userEvent.setup();
     const startGame = vi.spyOn(api, 'startGame');
     await screen.findByRole('button', { name: 'PLAY' });
-    act(() => api.emit('optimizer', { configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.3, status: 'compiling' }));
+    act(() => api.emit('optimizer', { profiling: false, profileReady: false, profileSupported: false, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.3, status: 'compiling' }));
     await user.click(screen.getByRole('button', { name: 'PLAY' }));
     // With "Also while playing" on (the mock's default) the rebuild keeps running: the dialog says the game can stutter.
     expect(await screen.findByText('The game is being rebuilt')).toBeInTheDocument();
@@ -146,12 +190,32 @@ describe('rebuild after an update', () => {
     expect(screen.queryByText('The game is being rebuilt')).not.toBeInTheDocument();
   });
 
+  it('warns before deleting a build of 0.2.x and keeps the saves out of it', async () => {
+    api = createMockApi({ ready: true, legacyBuild: true });
+    setApi(api);
+    render(<App />);
+    const user = userEvent.setup();
+    const start = vi.spyOn(api, 'rebuildStart');
+    expect(await screen.findByText('Old build: rebuild for 0.3.0')).toBeInTheDocument();
+    // The chip does not start it: it explains first, and "Not now" starts nothing.
+    await user.click(screen.getByRole('button', { name: 'Rebuild' }));
+    expect(await screen.findByText(/the old build is deleted and the game is compiled again from scratch/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Your saves and the memory card \(game\/Mcd001\.ps2\)/).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(start).not.toHaveBeenCalled();
+    // The Performance tab says the same, and its button is the confirmation.
+    await user.click(screen.getByRole('button', { name: 'Performance' }));
+    expect(await screen.findByText('Rebuild the game from scratch for 0.3.0')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Delete and rebuild' }));
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
   it('shows the same progress in the Performance tab', async () => {
     bootWithRebuild(true);
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Performance' }));
     expect(await screen.findByRole('button', { name: 'Rebuild now' })).toBeInTheDocument();
-    act(() => api.emit('optimizer', { configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.25, status: 'compiling' }));
+    act(() => api.emit('optimizer', { profiling: false, profileReady: false, profileSupported: false, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.25, status: 'compiling' }));
     expect(await screen.findAllByRole('progressbar', { name: 'Rebuild progress' })).toHaveLength(2);
     expect(screen.queryByRole('button', { name: 'Rebuild now' })).not.toBeInTheDocument();
   });
@@ -166,7 +230,7 @@ describe('rebuild after an update', () => {
     await user.click(screen.getByRole('button', { name: 'Rebuild now' }));
     expect(start).toHaveBeenCalledTimes(1);
     // The optimizer reports the rebuild running and then finished: the need is asked again and is gone.
-    const snapshot = { configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.5, status: 'compiling' as const };
+    const snapshot = { profiling: false, profileReady: false, profileSupported: false, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.5, status: 'compiling' as const };
     act(() => api.emit('optimizer', snapshot));
     act(() => api.emit('optimizer', { ...snapshot, compiling: false, buildProgress: -1, status: 'idle' }));
     await waitFor(() => expect(screen.queryByText('Rebuild the game to get the latest fixes')).not.toBeInTheDocument());
@@ -179,7 +243,7 @@ describe('rebuild after an update', () => {
     await user.click(await screen.findByRole('button', { name: 'Performance' }));
     expect(await screen.findByRole('button', { name: 'Rebuild now' })).toBeInTheDocument();
     expect(screen.queryByText('The last rebuild of the game failed')).not.toBeInTheDocument();
-    const snapshot = { configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.5, status: 'compiling' as const };
+    const snapshot = { profiling: false, profileReady: false, profileSupported: false, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.5, status: 'compiling' as const };
     act(() => api.emit('optimizer', snapshot));
     act(() => api.emit('optimizer', { ...snapshot, compiling: false, buildProgress: -1, status: 'error' }));
     expect(await screen.findByText('The last rebuild of the game failed')).toBeInTheDocument();
@@ -302,6 +366,61 @@ describe('installation wizard', () => {
       destination: 'C:\\GodOfWar-PC', elf: 'C:\\g\\game\\SCUS_973.99', executable: 'C:\\g\\build\\ps2xRuntime\\gow-2005.exe',
     }));
     await waitFor(() => expect(screen.queryByText('All set!')).not.toBeInTheDocument());
+  });
+
+  it('applies a translation patch to the original ISO and installs the translated copy', async () => {
+    boot(false);
+    const user = userEvent.setup();
+    const install = vi.spyOn(api, 'installStart').mockResolvedValue(undefined);
+    const start = vi.spyOn(api, 'isoPatchStart');
+    vi.spyOn(api, 'pick').mockResolvedValue('D:\\Patches\\God of War PT-BR.xdelta');
+    const next = () => screen.getByRole('button', { name: 'NEXT' });
+    await waitFor(() => expect(next()).toBeEnabled(), { timeout: 4000 });
+    // The original ISO offers the patch; ticking it blocks NEXT until the patch is applied.
+    await user.click(screen.getByText('Apply a patch (.xdelta)'));
+    expect(next()).toBeDisabled();
+    expect(screen.getByText('Apply the patch, or untick the option, to continue.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Choose patch' }));
+    expect(await screen.findByText('Creates God of War PT-BR.iso in the same folder (about 8 GB).')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Apply patch' }));
+    expect(start).toHaveBeenCalledWith('D:\\Games\\God of War (USA).iso', 'D:\\Patches\\God of War PT-BR.xdelta');
+    expect(await screen.findByRole('progressbar', { name: 'Patch progress' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+    // Done: the translated copy replaces the ISO, the original is untouched and can be taken back.
+    expect(await screen.findByText('Patch applied: God of War PT-BR.iso', {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(screen.getByText(/The original ISO was not changed/)).toBeInTheDocument();
+    expect(screen.queryByText('Apply a patch (.xdelta)')).not.toBeInTheDocument();
+    await waitFor(() => expect(next()).toBeEnabled());
+    await user.click(next());
+    await user.click(await screen.findByRole('button', { name: 'NEXT' }));
+    await user.click(await screen.findByRole('button', { name: 'NEXT' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'INSTALL' }));
+    await waitFor(() => expect(install).toHaveBeenCalledWith(expect.objectContaining({ iso: 'D:\\Games\\God of War PT-BR.iso' })));
+  });
+
+  it('explains a wrong patch, hides the option for a translated ISO and goes back to the original', async () => {
+    boot(false);
+    const user = userEvent.setup();
+    const pick = vi.spyOn(api, 'pick').mockResolvedValue('D:\\Patches\\readme.txt');
+    const next = () => screen.getByRole('button', { name: 'NEXT' });
+    await waitFor(() => expect(next()).toBeEnabled(), { timeout: 4000 });
+    await user.click(screen.getByText('Apply a patch (.xdelta)'));
+    await user.click(screen.getByRole('button', { name: 'Choose patch' }));
+    expect(await screen.findByText('This file is not an xdelta patch.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply patch' })).toBeDisabled();
+    // A good patch, applied, then "Use the original" brings the original ISO and the option back.
+    pick.mockResolvedValue('D:\\Patches\\PT-BR.xdelta');
+    await user.click(screen.getByRole('button', { name: 'Choose patch' }));
+    await user.click(await screen.findByRole('button', { name: 'Apply patch' }));
+    await user.click(await screen.findByRole('button', { name: 'Use the original' }, { timeout: 4000 }));
+    expect(await screen.findByText('Apply a patch (.xdelta)')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('D:\\Games\\God of War (USA).iso')).toBeInTheDocument();
+    // An ISO that is already a translation never shows the option.
+    vi.spyOn(api, 'validateIso').mockResolvedValue({ ok: true, reason: null, hash: 'x', translation: true });
+    await user.clear(screen.getByDisplayValue('D:\\Games\\God of War (USA).iso'));
+    await user.type(screen.getByPlaceholderText(/./), 'D:\\Games\\God of War PT-BR.iso');
+    expect(await screen.findByText(/Modified disc recognized/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Apply a patch (.xdelta)')).not.toBeInTheDocument());
   });
 
   it('blocks the first step when the processor lacks SSE4.1, even with the ISO verified', async () => {
@@ -653,10 +772,10 @@ describe('launcher update notice', () => {
     act(() => api.emit('install-done', { ok: true, cancelled: false, error: '', elf: '', executable: '', failureKind: null }));
     expect(screen.getByRole('button', { name: 'Update' })).toBeEnabled();
 
-    act(() => api.emit('optimizer', { configured: true, compiling: true, captured: 1, compiled: 1, completionRatio: 0.5, buildProgress: 0.2, status: 'compiling' }));
+    act(() => api.emit('optimizer', { profiling: false, profileReady: false, profileSupported: false, configured: true, compiling: true, captured: 1, compiled: 1, completionRatio: 0.5, buildProgress: 0.2, status: 'compiling' }));
     expect(screen.getByRole('button', { name: 'Update' })).toBeDisabled();
     expect(screen.getByText('Wait for the optimization to finish.')).toBeInTheDocument();
-    act(() => api.emit('optimizer', { configured: true, compiling: false, captured: 1, compiled: 1, completionRatio: 1, buildProgress: -1, status: 'idle' }));
+    act(() => api.emit('optimizer', { profiling: false, profileReady: false, profileSupported: false, configured: true, compiling: false, captured: 1, compiled: 1, completionRatio: 1, buildProgress: -1, status: 'idle' }));
     expect(screen.getByRole('button', { name: 'Update' })).toBeEnabled();
 
     act(() => api.emit('texture-pack-progress', { stage: 'downloading', done: 1, total: 100, overall: 0.1 }));

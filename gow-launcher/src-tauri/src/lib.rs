@@ -13,6 +13,7 @@ use gow_core::gamepad::{self, Capture, CaptureResult};
 use gow_core::gpu::{self, GraphicsCard};
 use gow_core::installer::{self, InstallRequest, Installation};
 use gow_core::iso::{self, IsoValidation};
+use gow_core::iso_patch::{self, PatchError, PatchOutcome};
 use gow_core::launch::LaunchError;
 use gow_core::optimizer::{self, Optimizer, OptimizerSnapshot};
 use gow_core::paths::AppPaths;
@@ -37,6 +38,8 @@ struct AppState {
     gamepad_cancel: Mutex<Option<Arc<AtomicBool>>>,
     searching: AtomicBool,
     textures_running: AtomicBool,
+    /// GOW-Port (0.3.0): the translation patch being applied from the wizard, set to stop it.
+    patch_cancel: Mutex<Option<Arc<AtomicBool>>>,
     updater: updater::Updates,
 }
 
@@ -559,6 +562,50 @@ fn validate_destination(path: String) -> installer::DestinationValidation {
     installer::validate_destination(&path)
 }
 
+// ------------------------------------------------------------------------------------- translation patch in the wizard
+
+/// GOW-Port (0.3.0): checks a chosen `.xdelta` from its header; `None` when it can be applied.
+#[tauri::command]
+fn iso_patch_check(path: String) -> Option<PatchError> {
+    iso_patch::check_patch(Path::new(path.trim())).err()
+}
+
+/// GOW-Port (0.3.0): applies the patch to the original ISO in the background. Reports `iso-patch-progress` (a fraction) and
+/// `iso-patch-done` (a [`PatchOutcome`]); the translated ISO is written next to the original, which is only read.
+#[tauri::command]
+fn iso_patch_start(app: AppHandle, state: State<'_, AppState>, iso: String, patch: String) -> Result<(), String> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut running = state.patch_cancel.lock().unwrap();
+        if running.is_some() {
+            return Err("busy".into());
+        }
+        *running = Some(cancel.clone());
+    }
+    std::thread::spawn(move || {
+        let progress_app = app.clone();
+        let mut last = -1.0f64;
+        let outcome: PatchOutcome = iso_patch::apply(Path::new(iso.trim()), Path::new(patch.trim()), |fraction| {
+            if fraction - last >= 0.005 || fraction >= 1.0 {
+                last = fraction;
+                let _ = progress_app.emit("iso-patch-progress", fraction);
+            }
+            !cancel.load(Ordering::SeqCst)
+        });
+        *app.state::<AppState>().patch_cancel.lock().unwrap() = None;
+        let _ = app.emit("iso-patch-done", outcome);
+    });
+    Ok(())
+}
+
+/// GOW-Port (0.3.0): stops the patch being applied; `iso-patch-done` then reports `cancelled` and nothing is left behind.
+#[tauri::command]
+fn iso_patch_cancel(state: State<'_, AppState>) {
+    if let Some(cancel) = state.patch_cancel.lock().unwrap().as_ref() {
+        cancel.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Searches the PC for the original ISO in the background; reports through `iso-searching` and `iso-found`.
 #[tauri::command]
 fn find_iso(app: AppHandle, state: State<'_, AppState>) {
@@ -708,6 +755,27 @@ fn rebuild_start(state: State<'_, AppState>) -> Result<(), String> {
     }
 }
 
+/// GOW-Port: "Optimize now": the speed profile (PGO) and the native IOP modules, with the game opening by itself for a few
+/// minutes, then a build that uses them. Refused like a rebuild (`busy:game`, `busy:installation`, `busy:optimizer`,
+/// `busy:texturePack`), and `notAvailable` when the installation cannot have a profile (not Windows, or not built with clang).
+#[tauri::command]
+fn profile_start(state: State<'_, AppState>) -> Result<(), String> {
+    let activity = Activity {
+        game: state.game.lock().unwrap().is_some(),
+        installation: state.installation.lock().unwrap().is_some(),
+        optimizer: state.optimizer.snapshot().compiling,
+        texture_pack: state.textures_running.load(Ordering::SeqCst),
+    };
+    if let Some(blocker) = activity.blocker() {
+        return Err(format!("busy:{}", blocker.code()));
+    }
+    if state.optimizer.profile_now() {
+        Ok(())
+    } else {
+        Err("notAvailable".into())
+    }
+}
+
 // ---------------------------------------------------------------------------------------------- self-update
 
 #[tauri::command]
@@ -810,6 +878,7 @@ pub fn run() {
                 gamepad_cancel: Mutex::new(None),
                 searching: AtomicBool::new(false),
                 textures_running: AtomicBool::new(false),
+                patch_cancel: Mutex::new(None),
                 updater: updater::Updates::new(paths_logs.join("update.log")),
             };
             state.optimizer.set_script(install_script(&state));
@@ -870,6 +939,9 @@ pub fn run() {
             gamepad_cancel,
             wizard_info,
             validate_iso,
+            iso_patch_check,
+            iso_patch_start,
+            iso_patch_cancel,
             validate_destination,
             find_iso,
             install_start,
@@ -879,6 +951,7 @@ pub fn run() {
             optimize_now,
             rebuild_state,
             rebuild_start,
+            profile_start,
             update_state,
             update_install,
             update_open_release,

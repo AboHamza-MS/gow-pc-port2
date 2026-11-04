@@ -297,10 +297,14 @@ pub fn build_environment(ctx: &LaunchContext<'_>, inherited: impl Fn(&str) -> Op
     let user = settings.retro_achievements_user.trim();
     let password = ctx.retro_achievements_password.as_deref().filter(|_| settings.retro_achievements_enabled);
     let has_source = !iso.is_empty() || Path::new(&settings.elf).is_file();
+    // GOW-Port: only the original USA executable. A translation or any other edition the port accepts plays with the same
+    // code, but RetroAchievements identifies the game by the original disc: they stay off (the tab says why).
+    let original = std::fs::read(&settings.elf).is_ok_and(|bytes| game::elf_crc(&bytes) == game::CRC_GOD_OF_WAR);
     let enabled = settings.retro_achievements_enabled
         && !user.is_empty()
         && password.is_some_and(|p| !p.is_empty())
-        && has_source;
+        && has_source
+        && original;
     plan.insert("PC_RA_ENABLED", if enabled { "1" } else { "0" });
     if enabled {
         let hardcore = settings.retro_achievements_hardcore;
@@ -655,6 +659,11 @@ mod tests {
         fixture.settings.retro_achievements_enabled = true;
         fixture.settings.retro_achievements_user = " player ".into();
         fixture.settings.cheats = "god_mode".into();
+
+        // GOW-Port: another edition or a translation (its ELF is not the original): achievements stay off.
+        assert_eq!(value(&retro_plan(&fixture, Some("secret")), "PC_RA_ENABLED"), Some("0"));
+        // the original executable: one word holding the CRC is enough for game::elf_crc
+        std::fs::write(&fixture.settings.elf, crate::game::CRC_GOD_OF_WAR.to_le_bytes()).unwrap();
 
         assert_eq!(value(&retro_plan(&fixture, None), "PC_RA_ENABLED"), Some("0"));
         assert!(retro_plan(&fixture, None).remove.contains("PC_RA_PASSWORD"));

@@ -1458,6 +1458,7 @@ dependencies = [
  "libc",
  "md-5",
  "ps2-elf",
+ "ps2-tools",
  "semver",
  "serde",
  "serde_json",
@@ -2906,6 +2907,18 @@ dependencies = [
 [[package]]
 name = "ps2-elf"
 version = "0.2.9"
+
+[[package]]
+name = "ps2-parity"
+version = "0.2.9"
+
+[[package]]
+name = "ps2-tools"
+version = "0.2.9"
+dependencies = [
+ "ps2-elf",
+ "ps2-parity",
+]
 
 [[package]]
 name = "pxfm"

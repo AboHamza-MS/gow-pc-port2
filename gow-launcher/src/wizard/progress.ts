@@ -21,6 +21,7 @@ export const isoMessageKey: Record<IsoReason, string> = {
   'other-game': 'wizIsoOtherGame',
   'no-executable': 'wizIsoNoExe',
   modified: 'wizIsoModified',
+  'other-edition': 'wizIsoOtherEdition',
 };
 
 export const destinationMessageKey: Record<DestinationReason, string> = {

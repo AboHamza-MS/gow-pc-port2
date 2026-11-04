@@ -32,6 +32,10 @@ export function RetroAchievementsPage() {
   const originalElf = !!status?.game.valid && !status.game.modified;
   const enabled = settings.retroAchievementsEnabled;
 
+  // GOW-Port: a translation or another edition installs and plays, but RetroAchievements only works with the original USA disc;
+  // the launcher keeps them off then (launch.rs), and the tab says so instead of showing settings that would not apply.
+  const otherEdition = !!status?.game.exists && status.game.modified;
+
   const commitUser = () => {
     const name = user.trim();
     setUser(name);
@@ -47,6 +51,17 @@ export function RetroAchievementsPage() {
     await api.raClearCredential();
     await refresh(settings.retroAchievementsUser);
   };
+
+  if (otherEdition) {
+    return (
+      <div className="flex flex-col gap-1">
+        <div role="status" className="flex items-center gap-[11px] rounded-md border border-gold-dark bg-field p-[13px]">
+          <Trophy size={20} className="shrink-0 text-gold-light" />
+          <p className="text-[13px] leading-[1.2] text-ink-soft">{t('raOtherEdition')}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-1">

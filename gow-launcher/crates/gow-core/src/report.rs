@@ -548,6 +548,9 @@ mod tests {
             completion_ratio: 0.5,
             build_progress: -1.0,
             status: OptimizerStatus::Idle,
+            profiling: false,
+            profile_ready: false,
+            profile_supported: false,
         }
     }
 

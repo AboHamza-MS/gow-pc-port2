@@ -48,7 +48,7 @@ pub struct DetectedPaths {
 }
 
 pub fn elf_crc(bytes: &[u8]) -> u32 {
-    bytes.chunks_exact(4).fold(0u32, |crc, word| crc ^ u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+    bytes.as_chunks::<4>().0.iter().fold(0u32, |crc, word| crc ^ u32::from_le_bytes(*word))
 }
 
 fn read_trimmed(path: &Path) -> String {

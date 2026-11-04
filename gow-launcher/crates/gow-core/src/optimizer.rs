@@ -44,6 +44,43 @@ pub struct OptimizerSnapshot {
     /// Progress of the rebuild in progress (0-1, -1 unknown).
     pub build_progress: f64,
     pub status: OptimizerStatus,
+    /// The run in progress is the speed-profile optimization ("Optimize now": the game opens by itself, see [`Optimizer::profile_now`]).
+    pub profiling: bool,
+    /// The installation has a speed profile (PGO), so its builds use it.
+    pub profile_ready: bool,
+    /// This installation can have one: Windows, built with clang.
+    pub profile_supported: bool,
+}
+
+/// GOW-Port: the speed profile (clang PGO) of an installation, trained on this PC by install.ps1 -Pgo on and never shipped.
+pub fn profile_path(destination: &Path) -> PathBuf {
+    destination.join("build").join("pgo").join("gow.profdata")
+}
+
+/// Whether the installation's build is made with clang (the only compiler install.ps1 trains a profile for), from its CMake
+/// cache. Windows only: install.sh has no PGO.
+pub fn profile_supported(destination: &Path) -> bool {
+    if !cfg!(windows) {
+        return false;
+    }
+    fs::read_to_string(destination.join("build").join("CMakeCache.txt")).is_ok_and(|cache| {
+        cache.lines().any(|line| line.starts_with("CMAKE_CXX_COMPILER:") && line.to_lowercase().contains("clang"))
+    })
+}
+
+/// The installer arguments of "Optimize now": the optimization run with the game opening by itself, which records the VU1
+/// microcode, the IOP modules and the speed profile, then one build that uses them. `None` where the installer cannot do it.
+pub fn profile_arguments(destination: &str, windows: bool) -> Option<Vec<String>> {
+    windows.then(|| {
+        vec![
+            "-Destination".to_string(),
+            quote_for_powershell(destination),
+            "-NoPause".to_string(),
+            "-Optimize".to_string(),
+            "-Pgo".to_string(),
+            "on".to_string(),
+        ]
+    })
 }
 
 /// How many microprograms are recorded in `<destination>/vu1_captures`.
@@ -136,6 +173,8 @@ struct State {
     stopping: bool,
     /// A rebuild was stopped because the game opened; it starts again when the game closes.
     resume_after_game: bool,
+    /// The current run is "Optimize now" (it opens the game by itself): a game started by the player cancels it, for good.
+    profiling: bool,
 }
 
 type Notify = Arc<dyn Fn(&OptimizerSnapshot) + Send + Sync>;
@@ -167,6 +206,9 @@ impl State {
                 (self.compiled as f64 / self.captured as f64).min(1.0)
             },
             build_progress: self.build_progress,
+            profiling: compiling && self.profiling,
+            profile_ready: self.destination.as_deref().is_some_and(|d| profile_path(d).is_file()),
+            profile_supported: self.destination.as_deref().is_some_and(profile_supported),
             status: if !self.configured() {
                 OptimizerStatus::Disabled
             } else if compiling {
@@ -229,6 +271,7 @@ impl Optimizer {
                 run: None,
                 stopping: false,
                 resume_after_game: false,
+                profiling: false,
             })),
             script: Arc::new(Mutex::new(None)),
             log_file,
@@ -307,7 +350,21 @@ impl Optimizer {
     /// the CPU, stops entering its frame function and the picture freezes).
     fn pause_for_game(&self) {
         let mut state = self.state.lock().unwrap();
-        if state.during_game || state.run.is_none() {
+        if state.run.is_none() {
+            return;
+        }
+        if state.profiling {
+            // GOW-Port: "Optimize now" opens its own game window and must never share the PC with the player's game: it is
+            // cancelled (its game included, a child of the installer) and not started again by itself, so a game the player did
+            // not ask for never appears after they close theirs. The offer stays in the interface.
+            state.stopping = true;
+            state.resume_after_game = false;
+            if let Some(run) = state.run.as_ref() {
+                run.kill_tree();
+            }
+            return;
+        }
+        if state.during_game {
             return;
         }
         state.stopping = true;
@@ -385,6 +442,27 @@ impl Optimizer {
         ready
     }
 
+    /// GOW-Port: "Optimize now" (the speed profile): only with the game closed, nothing else running and a clang build on
+    /// Windows. The game opens by itself for a few minutes, then the game is built with the profile. Returns `false` when it did
+    /// not start.
+    pub fn profile_now(&self) -> bool {
+        let ready = {
+            let mut state = self.state.lock().unwrap();
+            let ready = state.run.is_none()
+                && !state.game_running
+                && state.destination.as_deref().is_some_and(profile_supported);
+            if ready {
+                state.last_failure = None;
+                state.captured = state.destination.as_deref().map_or(0, count_captures);
+            }
+            ready
+        };
+        if ready {
+            self.start_run(true);
+        }
+        ready
+    }
+
     /// One tick of the 30-second timer.
     pub fn check(&self) {
         let start = {
@@ -402,7 +480,16 @@ impl Optimizer {
                     }
                 }
                 let pending = state.captured.saturating_sub(state.compiled);
-                should_rebuild(pending, state.game_running, state.during_game, state.last_failure.map(|t| t.elapsed()))
+                // GOW-Port (0.3.0): a build of 0.2.x is only redone when the player asks (it is deleted and built from
+                // scratch, and the interface warns about that first).
+                let legacy = state.destination.as_deref().is_some_and(rebuild::legacy_build);
+                !legacy
+                    && should_rebuild(
+                        pending,
+                        state.game_running,
+                        state.during_game,
+                        state.last_failure.map(|t| t.elapsed()),
+                    )
             }
         };
         self.changed();
@@ -429,6 +516,10 @@ impl Optimizer {
     }
 
     fn start(&self) {
+        self.start_run(false);
+    }
+
+    fn start_run(&self, profile: bool) {
         if self.state.lock().unwrap().run.is_some() {
             return; // one rebuild at a time
         }
@@ -458,6 +549,25 @@ impl Optimizer {
         if let Some(kit) = &kit {
             let _ = writeln!(log.lock().unwrap(), "{}", rebuild::log_line(kit, &destination));
         }
+        // GOW-Port (0.3.0): a build of 0.2.x (Visual Studio) is redone from scratch: it is moved aside first and only deleted
+        // once the new build succeeds (see `finished`). The saves are not in it.
+        if !profile {
+            match rebuild::set_legacy_aside(&destination) {
+                Ok(true) => {
+                    let _ = writeln!(
+                        log.lock().unwrap(),
+                        "[rebuild] build of 0.2.x moved to {}: building from scratch",
+                        rebuild::LEGACY_FOLDER
+                    );
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    let _ = writeln!(log.lock().unwrap(), "[rebuild] could not move the old build aside: {error}");
+                    self.fail();
+                    return;
+                }
+            }
+        }
         // With the game open, few build processes and low priority; without it, the installer chooses.
         let jobs = if game_running {
             if std::thread::available_parallelism().map_or(1, |n| n.get()) >= 8 {
@@ -468,7 +578,17 @@ impl Optimizer {
         } else {
             0
         };
-        let mut arguments = optimizer_arguments(&destination.to_string_lossy(), jobs, cfg!(windows));
+        let mut arguments = if profile {
+            match profile_arguments(&destination.to_string_lossy(), cfg!(windows)) {
+                Some(arguments) => arguments,
+                None => {
+                    self.fail();
+                    return;
+                }
+            }
+        } else {
+            optimizer_arguments(&destination.to_string_lossy(), jobs, cfg!(windows))
+        };
         // Diagnostic: extra install.ps1 arguments (for example -ToolsExe) to test without the final environment.
         if let Ok(extra) = std::env::var("GOW_OPTIMIZER_EXTRA") {
             if !extra.is_empty() {
@@ -499,7 +619,11 @@ impl Optimizer {
         );
         match result {
             Ok(run) => {
-                self.state.lock().unwrap().run = Some(run);
+                {
+                    let mut state = self.state.lock().unwrap();
+                    state.run = Some(run);
+                    state.profiling = profile;
+                }
                 self.changed();
             }
             Err(_) => self.fail(),
@@ -511,6 +635,7 @@ impl Optimizer {
             let mut state = self.state.lock().unwrap();
             let stopped = state.stopping;
             state.stopping = false;
+            state.profiling = false;
             stopped
         };
         if stopped {
@@ -540,7 +665,16 @@ impl Optimizer {
             }
             succeeded.then_some(state.compiled)
         };
+        if compiled.is_none() {
+            // GOW-Port (0.3.0): a clean rebuild of a 0.2.x build that failed puts the old build back, as it was.
+            let _ = rebuild::restore_legacy(destination);
+        }
         if let Some(compiled) = compiled {
+            // GOW-Port (0.3.0): the old build of a clean rebuild is no longer needed; deleting several GB takes a while.
+            let old = destination.to_path_buf();
+            std::thread::spawn(move || {
+                let _ = rebuild::drop_legacy(&old);
+            });
             // The build now holds the kit's sources: say so, so the launcher stops offering a rebuild.
             if let Some(kit) = kit {
                 rebuild::record_build(kit, destination);
@@ -708,6 +842,76 @@ mod tests {
         assert_eq!(optimizer.snapshot().status, OptimizerStatus::Disabled);
         assert!(optimizer.rebuild_now());
         assert!(optimizer.state.lock().unwrap().has_error);
+    }
+
+    /// A build folder whose CMake cache names the given C++ compiler.
+    fn fake_build(directory: &Path, compiler: &str) {
+        let build = directory.join("build");
+        fs::create_dir_all(&build).unwrap();
+        fs::write(
+            build.join("CMakeCache.txt"),
+            format!("CMAKE_BUILD_TYPE:STRING=Release\nCMAKE_CXX_COMPILER:FILEPATH={compiler}\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn optimize_now_runs_the_installer_with_the_profile_run() {
+        assert_eq!(
+            profile_arguments(r"C:\GodOfWar-PC", true).unwrap(),
+            ["-Destination", r"'C:\GodOfWar-PC'", "-NoPause", "-Optimize", "-Pgo", "on"]
+        );
+        assert!(profile_arguments("/home/me/gow", false).is_none(), "install.sh has no speed profile");
+    }
+
+    #[test]
+    fn the_speed_profile_needs_a_clang_build_on_windows() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(!profile_supported(directory.path()), "no build yet");
+        fake_build(
+            directory.path(),
+            "C:/Program Files/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44/bin/cl.exe",
+        );
+        assert!(!profile_supported(directory.path()), "an MSVC build");
+        fake_build(directory.path(), "D:/GoW/toolchain/llvm-mingw-20261020/bin/clang++.exe");
+        assert_eq!(profile_supported(directory.path()), cfg!(windows));
+    }
+
+    #[test]
+    fn optimize_now_never_starts_with_the_game_open() {
+        let directory = tempfile::tempdir().unwrap();
+        fake_build(directory.path(), "D:/GoW/toolchain/llvm-mingw-20261020/bin/clang++.exe");
+        let optimizer = quiet(directory.path());
+        // Even with rebuilds during play allowed: this one opens the game by itself.
+        optimizer.configure(&directory.path().to_string_lossy(), true, true, 0);
+        optimizer.game_state_changed(true);
+        assert!(!optimizer.profile_now());
+        assert!(optimizer.state.lock().unwrap().run.is_none());
+        optimizer.game_state_changed(false);
+        // With the game closed it goes on to start on Windows (and fails only because the test has no kit).
+        assert_eq!(optimizer.profile_now(), cfg!(windows));
+    }
+
+    #[test]
+    fn optimize_now_is_not_offered_for_an_msvc_build() {
+        let directory = tempfile::tempdir().unwrap();
+        fake_build(directory.path(), "C:/VS/cl.exe");
+        let optimizer = quiet(directory.path());
+        optimizer.configure(&directory.path().to_string_lossy(), true, true, 0);
+        assert!(!optimizer.profile_now());
+        let snapshot = optimizer.snapshot();
+        assert!(!snapshot.profile_supported && !snapshot.profile_ready && !snapshot.profiling);
+    }
+
+    #[test]
+    fn the_snapshot_says_whether_the_profile_exists() {
+        let directory = tempfile::tempdir().unwrap();
+        let optimizer = quiet(directory.path());
+        optimizer.configure(&directory.path().to_string_lossy(), true, true, 0);
+        assert!(!optimizer.snapshot().profile_ready);
+        fs::create_dir_all(directory.path().join("build/pgo")).unwrap();
+        fs::write(profile_path(directory.path()), b"profile").unwrap();
+        assert!(optimizer.snapshot().profile_ready);
     }
 
     #[test]

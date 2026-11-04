@@ -138,6 +138,7 @@ const chip = 'whitespace-nowrap rounded-md border border-line bg-[#eadbb9]/95 px
  */
 export function RebuildChip() {
   const { rebuild, rebuildBlocker, startRebuild, optimizer, f, t } = useApp();
+  const [confirming, setConfirming] = useState(false);
   if (!rebuild.needed) return null;
   const chipRow = `${chip} flex items-center gap-2 text-[12.5px] font-semibold text-ink`;
   if (optimizer.compiling) {
@@ -151,14 +152,82 @@ export function RebuildChip() {
   }
   return (
     <div role="status" className={chipRow} title={rebuildBlocker ? t(`rebuildBlocked_${rebuildBlocker}`) : undefined}>
-      <span>{t('rebuildChip')}</span>
+      <span>{t(rebuild.legacy ? 'rebuildLegacyChip' : 'rebuildChip')}</span>
       <button
         type="button"
         disabled={rebuildBlocker !== null}
-        onClick={() => void startRebuild()}
+        // GOW-Port (0.3.0): a build of 0.2.x is deleted and built from scratch: the player confirms first.
+        onClick={() => (rebuild.legacy ? setConfirming(true) : void startRebuild())}
         className="h-[22px] rounded border border-gold bg-[#4a2f18] px-2.5 text-[11px] font-semibold tracking-wide text-cream transition-colors hover:bg-[#6a4424] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-[#4a2f18]"
       >
         {t('rebuildChipButton')}
+      </button>
+      {confirming && (
+        <LegacyRebuildDialog
+          onConfirm={() => {
+            setConfirming(false);
+            void startRebuild();
+          }}
+          onCancel={() => setConfirming(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * GOW-Port (0.3.0): the build was made by 0.2.9 or older, with Visual Studio. 0.3.0 compiles the game with clang, so the old
+ * build is deleted and the game built from scratch; the saves and the memory card are not in the build folder and stay.
+ */
+export function LegacyRebuildDialog({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
+  const { t } = useApp();
+  return (
+    <Modal>
+      <div className="flex flex-col gap-3.5">
+        <h2 className="gow-text-shadow font-title text-[18px] font-bold uppercase tracking-wide text-ink">{t('rebuildLegacyTitle')}</h2>
+        <p className="text-[15px] font-medium text-ink">{t('rebuildLegacyText')}</p>
+        <p className="text-[15px] font-medium text-ink">{t('rebuildLegacySaves')}</p>
+        <div className="flex justify-end gap-2">
+          <SecondaryButton onClick={onCancel}>{t('rebuildLegacyLater')}</SecondaryButton>
+          <PrimaryButton onClick={onConfirm}>{t('rebuildLegacyButton')}</PrimaryButton>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * GOW-Port: the offer of the speed-profile optimization on the first screen, once the game is installed with clang and
+ * has no profile yet. It says what will happen (the game opens by itself, do not use the PC) before anything starts;
+ * "Later" hides it on this PC, and the Performance tab keeps the button. While it runs, the progress takes its place.
+ */
+export function ProfileChip() {
+  const { settings, optimizer, rebuild, rebuildBlocker, startProfile, profileOfferDismissed, dismissProfileOffer, t } = useApp();
+  const chipRow = `${chip} flex items-center gap-2 text-[12.5px] font-semibold text-ink`;
+  if (rebuild.needed || !settings.optimizationDestination || !optimizer.profileSupported || optimizer.profileReady) return null;
+  if (optimizer.profiling) {
+    return (
+      <div role="status" className={chipRow}>
+        <span>{t('profileChipRunning')}</span>
+        <ProgressBar label={t('profileProgressLabel')} fraction={optimizer.buildProgress} className="w-[110px]" />
+      </div>
+    );
+  }
+  if (profileOfferDismissed || optimizer.compiling) return null;
+  const small = 'h-[22px] rounded border px-2.5 text-[11px] font-semibold tracking-wide transition-colors disabled:cursor-not-allowed disabled:opacity-45';
+  return (
+    <div role="status" className={chipRow} title={t('profileOfferDesc')}>
+      <span>{t('profileChip')}</span>
+      <button
+        type="button"
+        disabled={rebuildBlocker !== null}
+        onClick={() => void startProfile()}
+        className={`${small} border-gold bg-[#4a2f18] text-cream hover:bg-[#6a4424] disabled:hover:bg-[#4a2f18]`}
+      >
+        {t('profileButton')}
+      </button>
+      <button type="button" onClick={dismissProfileOffer} className={`${small} border-line bg-transparent text-ink hover:text-accent`}>
+        {t('profileLater')}
       </button>
     </div>
   );
@@ -206,6 +275,7 @@ export function Hero() {
             </button>
           )}
           <RebuildChip />
+          <ProfileChip />
         </div>
       </div>
       <button

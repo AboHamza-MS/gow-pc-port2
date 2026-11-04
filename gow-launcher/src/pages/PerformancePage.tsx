@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Activity, Cpu, Gauge, Hourglass, MemoryStick, RefreshCw, Rocket } from 'lucide-react';
+import { Activity, Cpu, Flame, Gauge, Hourglass, MemoryStick, RefreshCw, Rocket } from 'lucide-react';
 import { GroupTitle, Note, ProgressBar, SecondaryButton, Select, SettingRow, Switch, type Option } from '../components/ui';
 import { useApp } from '../state/app';
 
@@ -10,7 +10,7 @@ export function selectedScale(internalResolution: string): number {
 }
 
 export function PerformancePage() {
-  const { settings, patch, optimizer, info, api, t, f, rebuild, rebuildBlocker, startRebuild } = useApp();
+  const { settings, patch, optimizer, info, api, t, f, rebuild, rebuildBlocker, startRebuild, startProfile } = useApp();
   const optimizing = settings.optimizationDestination.length > 0;
   const { graphicsCards, platform } = info;
   const gpuUnavailable = settings.gpu !== 'auto' && !graphicsCards.some((card) => card.id === settings.gpu);
@@ -42,8 +42,9 @@ export function PerformancePage() {
       )}
       {rebuild.needed && (
         <div className="mb-2">
-          <Note tone="warn" title={t('rebuildNoteTitle')}>
-            <p>{t('rebuildNoteText')}</p>
+          <Note tone="warn" title={t(rebuild.legacy ? 'rebuildLegacyTitle' : 'rebuildNoteTitle')}>
+            <p>{t(rebuild.legacy ? 'rebuildLegacyText' : 'rebuildNoteText')}</p>
+            {rebuild.legacy && <p className="mt-1.5">{t('rebuildLegacySaves')}</p>}
             {optimizer.compiling ? (
               <div role="status" className="mt-2.5 flex items-center gap-3">
                 <span className="text-ink-muted">
@@ -54,7 +55,7 @@ export function PerformancePage() {
             ) : (
               <div className="mt-2.5 flex items-center gap-3">
                 <SecondaryButton disabled={rebuildBlocker !== null} onClick={() => void startRebuild()}>
-                  {t('rebuildButton')}
+                  {t(rebuild.legacy ? 'rebuildLegacyButton' : 'rebuildButton')}
                 </SecondaryButton>
                 {rebuildBlocker && <span className="text-ink-muted">{t(`rebuildBlocked_${rebuildBlocker}`)}</span>}
               </div>
@@ -101,6 +102,23 @@ export function PerformancePage() {
         <SecondaryButton disabled={optimizer.status === 'compiling'} onClick={() => void api.optimizeNow()}>
           {t('optimizeNowButton')}
         </SecondaryButton>
+      </SettingRow>
+      <SettingRow
+        hidden={!(optimizing && optimizer.profileSupported)}
+        icon={Flame} title={t('profileTitle')}
+        description={t(optimizer.profiling ? 'profileRunningDesc' : optimizer.profileReady ? 'profileReadyDesc' : 'profileOfferDesc')}
+      >
+        {optimizer.profiling ? (
+          <ProgressBar label={t('profileProgressLabel')} fraction={optimizer.buildProgress} className="w-[160px]" />
+        ) : optimizer.profileReady ? null : (
+          <SecondaryButton
+            disabled={optimizer.compiling || rebuildBlocker !== null}
+            title={rebuildBlocker ? t(`rebuildBlocked_${rebuildBlocker}`) : undefined}
+            onClick={() => void startProfile()}
+          >
+            {t('profileButton')}
+          </SecondaryButton>
+        )}
       </SettingRow>
       <div className="mt-[18px]">
         <Note title={t('noteFpsTitle')}>{t('noteFps')}</Note>

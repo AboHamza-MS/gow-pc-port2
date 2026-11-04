@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Check, FolderOpen, Loader2, Sparkles, Trophy } from 'lucide-react';
+import { Check, FileDiff, FolderOpen, Languages, Loader2, Sparkles, Trophy } from 'lucide-react';
 import { Modal } from '../components/Shell';
-import { CheckDot, PrimaryButton, SecondaryButton, TextInput } from '../components/ui';
-import type { DestinationValidation, InstallOutcome, InstallProgress, IsoValidation, WizardInfo } from '../lib/types';
+import { CheckDot, PrimaryButton, ProgressBar, SecondaryButton, TextInput } from '../components/ui';
+import type { DestinationValidation, InstallOutcome, InstallProgress, IsoValidation, PatchError, PatchOutcome, WizardInfo } from '../lib/types';
 import { useApp } from '../state/app';
 import { destinationMessageKey, fileName, isoMessageKey, overallProgress, stageWeights } from './progress';
 
@@ -61,6 +61,14 @@ export function Wizard() {
   const [errorHint, setErrorHint] = useState('');
   const [hovering, setHovering] = useState(false);
   const [rechecking, setRechecking] = useState(false);
+  // GOW-Port (0.3.0): a translation patch applied to the original ISO (only offered for the original).
+  const [patchWanted, setPatchWanted] = useState(false);
+  const [patchPath, setPatchPath] = useState('');
+  const [patchProblem, setPatchProblem] = useState<PatchError | null>(null);
+  const [patchFraction, setPatchFraction] = useState(-1);
+  const [patched, setPatched] = useState<{ original: string; path: string } | null>(null);
+  const patchingFrom = useRef('');
+  const patching = patchFraction >= 0;
   const outcome = useRef<InstallOutcome | null>(null);
   const live = useRef({ step, isoOk: false, weights: stageWeights(false) });
   live.current = { step, isoOk: isoCheck.ok, weights: stageWeights(info.hasManifest) };
@@ -143,6 +151,19 @@ export function Wizard() {
           setStep(6);
         }
       }),
+      api.on('iso-patch-progress', (fraction: number) => setPatchFraction((before) => (before < 0 ? before : Math.max(before, fraction)))),
+      api.on('iso-patch-done', (result: PatchOutcome) => {
+        setPatchFraction(-1);
+        if (result.ok && result.validation) {
+          setPatched({ original: patchingFrom.current, path: result.path });
+          setPatchProblem(null);
+          setIso(result.path);
+          setAutomaticIso(false);
+          setIsoCheck(result.validation);
+        } else {
+          setPatchProblem(result.error ?? 'write');
+        }
+      }),
       api.onFileDrop((paths, over) => {
         setHovering(over && live.current.step === 0);
         if (paths.length > 0 && live.current.step === 0) {
@@ -154,6 +175,16 @@ export function Wizard() {
     ];
     return () => stops.forEach((stop) => void stop.then((off) => off()));
   }, [api, t, validateIso]);
+
+  // Another ISO than the translated one drops the patch's result; closing the wizard stops a patch being applied.
+  useEffect(() => {
+    if (patched && iso !== patched.path) setPatched(null);
+  }, [iso, patched]);
+  const patchingNow = useRef(false);
+  patchingNow.current = patching;
+  useEffect(() => () => {
+    if (patchingNow.current) void api.isoPatchCancel();
+  }, [api]);
 
   useEffect(() => {
     if (step !== 4) return;
@@ -176,7 +207,7 @@ export function Wizard() {
 
   const canAdvance = (() => {
     switch (step) {
-      case 0: return isoCheck.ok && cpuSupported;
+      case 0: return isoCheck.ok && cpuSupported && !patching && !(patchWanted && !patched);
       case 1: return destinationCheck.ok && environment.installer && environment.kitMissing.length === 0;
       case 2: return componentsReady;
       case 3: case 5: case 6: return true;
@@ -241,15 +272,49 @@ export function Wizard() {
       void validateIso(chosen);
     }
   };
+  const isOriginal = isoCheck.ok && !isoCheck.translation && !patched;
+  const choosePatch = async () => {
+    const chosen = await api.pick({
+      title: t('wizPatchChooseTitle'),
+      filters: [{ name: 'xdelta', extensions: ['xdelta', 'vcdiff', 'xd3', 'delta'] }, { name: '*', extensions: ['*'] }],
+    });
+    if (!chosen) return;
+    setPatchPath(chosen);
+    setPatchProblem(await api.isoPatchCheck(chosen));
+  };
+  const applyPatch = async () => {
+    if (!patchPath || patchProblem || patching) return;
+    patchingFrom.current = iso;
+    setPatchProblem(null);
+    setPatchFraction(0);
+    try {
+      await api.isoPatchStart(iso, patchPath);
+    } catch {
+      setPatchFraction(-1);
+      setPatchProblem('write');
+    }
+  };
+  const useOriginal = () => {
+    if (!patched) return;
+    const original = patched.original;
+    setPatched(null);
+    setPatchWanted(false);
+    setIso(original);
+    setAutomaticIso(false);
+    void validateIso(original);
+  };
+  const patchOutput = patchPath ? `${fileName(patchPath).replace(/\.[^.]*$/, '')}.iso` : '';
   const browseFolder = async () => {
     const chosen = await api.pick({ title: t('wizChooseFolder'), directory: true, defaultPath: destination || undefined });
     if (chosen) typeDestination(chosen);
   };
 
   const isoMessage = () => {
+    if (isoCheck.ok && isoCheck.translation) return t('wizIsoTranslation');
     if (isoCheck.ok) return automaticIso ? t('wizIsoFound') : t('wizIsoOk');
     if (!iso) return searching ? t('wizSearchingHint') : t('wizDragHint');
     const key = isoCheck.reason ? isoMessageKey[isoCheck.reason] : '';
+    if (key === 'wizIsoOtherEdition') return f(key, isoCheck.edition ?? '');
     return key === 'wizIsoModified' ? f(key, isoCheck.hash) : key ? t(key) : '';
   };
   const destinationMessage = () => {
@@ -328,6 +393,69 @@ export function Wizard() {
               <SecondaryButton onClick={() => void browseIso()}>{t('browse')}</SecondaryButton>
             </div>
             <TextInput value={iso} onChange={(event) => typeIso(event.target.value)} placeholder={t('wizIsoPlaceholder')} className="h-[38px]" />
+            {patched ? (
+              <div role="status" className="gow-card flex items-center gap-3.5 py-3 pl-[22px] pr-[18px]">
+                <Languages size={20} className="shrink-0 text-gold-light" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[14px] font-bold text-ink">{f('wizPatchDone', fileName(patched.path))}</div>
+                  <div className="text-[13px] font-medium text-[#47321f]">{t('wizPatchOriginalKept')}</div>
+                </div>
+                <SecondaryButton onClick={useOriginal}>{t('wizPatchUseOriginal')}</SecondaryButton>
+              </div>
+            ) : (isOriginal || patching) && (
+              <div className="flex flex-col gap-2.5">
+                <label className={`gow-row flex items-start gap-3.5 py-3 pl-[22px] pr-[18px] ${patching ? 'opacity-60' : 'cursor-pointer'}`}>
+                  <input
+                    type="checkbox"
+                    checked={patchWanted}
+                    disabled={patching}
+                    onChange={(event) => {
+                      setPatchWanted(event.target.checked);
+                      setPatchProblem(patchPath ? patchProblem : null);
+                    }}
+                    className="peer sr-only"
+                  />
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-[4px] border-2 border-[#5f4326] bg-[#efdfc0] text-cream shadow-[inset_0_1px_2px_rgba(60,35,10,0.35)] peer-checked:border-[#5a0f08] peer-checked:bg-accent peer-focus-visible:ring-2 peer-focus-visible:ring-accent/50 [&>svg]:opacity-0 peer-checked:[&>svg]:opacity-100">
+                    <Check size={14} strokeWidth={3.5} />
+                  </span>
+                  <span className="flex-1">
+                    <span className="gow-text-shadow block text-[14.5px] font-bold leading-tight text-ink">{t('wizPatchTitle')}</span>
+                    <span className="mt-0.5 block text-[13px] font-medium leading-[1.25] text-[#47321f]">{t('wizPatchDesc')}</span>
+                  </span>
+                </label>
+                {patchWanted && (
+                  <div className="gow-card flex flex-col gap-2.5 py-3 pl-[22px] pr-[18px]">
+                    <div className="flex items-center gap-3">
+                      <FileDiff size={20} className={`shrink-0 ${patchPath && !patchProblem ? 'text-gold-light' : 'text-ink-soft'}`} />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[14px] font-semibold text-ink">{patchPath ? fileName(patchPath) : t('wizPatchNone')}</div>
+                        <div className={`text-[13px] font-medium ${patchProblem ? 'text-bad' : 'text-[#47321f]'}`}>
+                          {patchProblem
+                            ? t(`wizPatchError_${patchProblem}`)
+                            : patching
+                              ? f('wizPatchProgress', Math.min(100, Math.round(patchFraction * 100)))
+                              : patchPath
+                                ? f('wizPatchWillCreate', patchOutput)
+                                : t('wizPatchHint')}
+                        </div>
+                      </div>
+                      {patching ? (
+                        <SecondaryButton onClick={() => void api.isoPatchCancel()}>{t('wizPatchCancel')}</SecondaryButton>
+                      ) : (
+                        <>
+                          <SecondaryButton onClick={() => void choosePatch()}>{t('wizPatchChoose')}</SecondaryButton>
+                          <PrimaryButton disabled={!patchPath || (patchProblem !== null && patchProblem !== 'cancelled')} onClick={() => void applyPatch()}>
+                            {t('wizPatchApply')}
+                          </PrimaryButton>
+                        </>
+                      )}
+                    </div>
+                    {patching && <ProgressBar label={t('wizPatchProgressLabel')} fraction={patchFraction} />}
+                  </div>
+                )}
+                {patchWanted && !patching && !patched && <p className="text-[13px] text-ink-muted">{t('wizPatchPending')}</p>}
+              </div>
+            )}
             {!cpuSupported && <p role="alert" className="text-[13px] font-semibold text-bad">{t('wizCpuUnsupported')}</p>}
           </Body>
         )}
