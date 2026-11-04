@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Check, Disc, FileDiff, FolderOpen, Languages, Loader2, Sparkles, Trophy } from 'lucide-react';
+import { Check, FileArchive, FileCheck, FileDiff, FolderOpen, Languages, Loader2, Sparkles, Trophy } from 'lucide-react';
 import { Modal } from '../components/Shell';
 import { CheckDot, PrimaryButton, ProgressBar, SecondaryButton, TextInput } from '../components/ui';
 import type { ChdError, ChdOutcome, ChdPlan, DestinationValidation, InstallOutcome, InstallProgress, IsoValidation, PatchError, PatchOutcome, WizardInfo } from '../lib/types';
@@ -41,7 +41,7 @@ function Component({ title, description, size, checked, onChange }: {
 }
 
 export function Wizard() {
-  const { api, t, f, duration, closeWizard, settings, adoptSettings, notify } = useApp();
+  const { api, t, f, lang, duration, closeWizard, settings, adoptSettings, notify } = useApp();
   const [step, setStep] = useState<Step>(0);
   const [info, setInfo] = useState<WizardInfo>(noInfo);
   const [iso, setIso] = useState('');
@@ -335,13 +335,14 @@ export function Wizard() {
       setChdProblem('write');
     }
   };
+  const gb = (value: number) => value.toLocaleString(lang, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
   const chdMessage = () => {
     if (chdProblem) return t(`wizChdError_${chdProblem}`);
     if (converting) return f('wizChdProgress', Math.min(100, Math.round(chdFraction * 100)));
     if (!chdPlan) return t('wizChdReading');
     if (chdPlan.existing) return f('wizChdExisting', fileName(chdPlan.output));
-    if (!chdPlan.enoughSpace) return f('wizChdSpace', (chdPlan.isoGb + 0.25).toFixed(1), chdPlan.freeGb.toFixed(1));
-    return f('wizChdWillCreate', fileName(chdPlan.output), chdPlan.isoGb.toFixed(1));
+    if (!chdPlan.enoughSpace) return f('wizChdSpace', gb(chdPlan.isoGb + 0.25), gb(chdPlan.freeGb));
+    return f('wizChdWillCreate', fileName(chdPlan.output), gb(chdPlan.isoGb));
   };
   const choosePatch = async () => {
     const chosen = await api.pick({
@@ -468,7 +469,7 @@ export function Wizard() {
               <div className="flex flex-col gap-2.5">
                 <div className="gow-card flex flex-col gap-2.5 py-3 pl-[22px] pr-[18px]">
                   <div className="flex items-center gap-3">
-                    <Disc size={20} className={`shrink-0 ${chdProblem ? 'text-bad' : 'text-gold-light'}`} />
+                    <FileArchive size={20} className={`shrink-0 ${chdProblem ? 'text-bad' : 'text-gold-light'}`} />
                     <div className="min-w-0 flex-1">
                       <div className="text-[14px] font-bold text-ink">{t('wizChdTitle')}</div>
                       <div className={`text-[13px] font-medium ${chdProblem || (chdPlan && !chdPlan.enoughSpace) ? 'text-bad' : 'text-[#47321f]'}`}>
@@ -493,7 +494,7 @@ export function Wizard() {
             )}
             {converted && !patched && (
               <div role="status" className="gow-card flex items-center gap-3.5 py-3 pl-[22px] pr-[18px]">
-                <Disc size={20} className="shrink-0 text-gold-light" />
+                <FileCheck size={20} className="shrink-0 text-gold-light" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[14px] font-bold text-ink">{f('wizChdDone', fileName(converted.path))}</div>
                   <div className="text-[13px] font-medium text-[#47321f]">{t('wizChdKept')}</div>
