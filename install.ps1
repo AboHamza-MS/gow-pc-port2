@@ -56,7 +56,21 @@ param(
     # GOW-Port: a prebuilt ps2_recomp to use instead of the kit's or the cargo build (see the header).
     [string]$RecompExe = '',
     # GOW-Port: a prebuilt ps2-tools, same rule as -RecompExe.
-    [string]$ToolsExe = ''
+    [string]$ToolsExe = '',
+    # GOW-Port: the C++ compiler of the game. clang (default): llvm-mingw downloaded into toolchain\ with a pinned SHA-256,
+    # nothing installed on Windows and no Visual Studio (decision D1 of the 0.3.0 plan; most install failures came from Visual
+    # Studio: issues #9, #14, #19, #21, #23). msvc: Visual Studio Build Tools, as before.
+    [ValidateSet('clang', 'msvc')]
+    [string]$Compiler = 'clang',
+    # GOW-Port: profile-guided optimization (clang only), trained here on this PC in the optimization run, never downloaded.
+    # auto (default): the installation and "Recompilar agora" build once and use a profile only if one is already there, so the
+    # player can play after a single build. on: also trains one when there is none (the launcher's "Optimize now", run with the
+    # game closed: build with instrumentation, the optimization run, build with the profile; the same run gives the native IOP
+    # modules). off: never. -RetrainPgo trains again although a profile exists (an existing one is reused after an update:
+    # functions that changed are just compiled without profile data).
+    [ValidateSet('auto', 'on', 'off')]
+    [string]$Pgo = 'auto',
+    [switch]$RetrainPgo
 )
 $ErrorActionPreference = 'Stop'
 $Root = $PSScriptRoot
@@ -83,13 +97,16 @@ if ($Vu1BuildDir -and -not (Test-Path -LiteralPath $Vu1BuildDir -PathType Contai
 }
 if ($Vu1BuildDir) { $Vu1ForBuild = (Resolve-Path -LiteralPath $Vu1BuildDir).Path }
 # GOW-Port: build processes: the logical processors minus a reserve that keeps the PC responsive (2 from 8 processors, 1 from 4,
-# none below that), but at most one per 2 GB of memory. The memory bound is an estimate for a unit of ~8 generated files; it was
-# first written for /GL builds and has not been re-measured with the current flags (/O2, no whole-program optimization).
+# none below that), and a memory bound: one compiler per GB above 3 GB (the system and the VU1 generator, which may run next to
+# the compilers, keep those), or one per 2 GB if that gives more, so no PC gets fewer than with the former rule.
+# Measured on the game build (MSVC /O2, unity batches of 8, 12 threads / 32 GB): about 0.35 GB peak per cl.exe, under 1 GB for
+# four together; the former one per 2 GB, an estimate from the /GL builds, held back PCs with 8-16 GB.
 # Always at least one. -Jobs N sets it and skips the reserve. A function of its two inputs so that it can be tested without WMI
 # (scripts/ci/test-install-ps1.ps1).
 function Get-BuildJobs([int]$Cores, [int]$MemGb) {
     $reserve = if ($Cores -ge 8) { 2 } elseif ($Cores -ge 4) { 1 } else { 0 }
-    return [int][math]::Max(1, [math]::Min($Cores - $reserve, [math]::Floor($MemGb / 2)))
+    $byMemory = [math]::Max([math]::Floor($MemGb / 2), $MemGb - 3)
+    return [int][math]::Max(1, [math]::Min($Cores - $reserve, $byMemory))
 }
 if ($Jobs -le 0) {
     $memGb = [math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
@@ -236,11 +253,30 @@ else {
     $cpuProblem = Get-CpuProblem (Test-Sse41)
     if ($cpuProblem) { Fail "$cpuProblem To install anyway (a virtual machine may hide a feature the CPU has), pass -SkipCpuCheck." }
 }
-if ($InstallTools -and -not (FindVs)) { InstallVsBuildTools }
+# GOW-Port: the Rust tools (RustPortPS2/). Order for each: its parameter, then bin\<tool>.exe (the launcher's kit), then cargo,
+# which needs Visual Studio's linker: so with the kit's tools the clang build needs no Visual Studio at all.
+function ResolveTool([string]$given, [string]$parameter, [string]$name) {
+    if ($given) {
+        if (-not (Test-Path -LiteralPath $given)) { Fail "$parameter not found: $given" }
+        return (Resolve-Path -LiteralPath $given).Path
+    }
+    $kit = Join-Path $Root "bin\$name.exe"
+    if (Test-Path -LiteralPath $kit) { return $kit }
+    return $null
+}
+$recompExe = ResolveTool $RecompExe '-RecompExe' 'ps2_recomp'
+$toolsExe = ResolveTool $ToolsExe '-ToolsExe' 'ps2-tools'
+$needCargo = (-not $recompExe) -or (-not $toolsExe)
+$useVs = ($Compiler -eq 'msvc') -or $needCargo
+if ($useVs -and $InstallTools -and -not (FindVs)) { InstallVsBuildTools }
 
 Step 'Checking tools'
+Write-Host "Compiler: $Compiler$(if ($Compiler -eq 'clang' -and $needCargo) { ' (Visual Studio loaded only to build the Rust tools with cargo)' })"
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-if (-not (Test-Path $vswhere)) { Fail 'Visual Studio (Build Tools) is not installed. Run: install.cmd -InstallTools' }
+if ($useVs -and -not (Test-Path $vswhere)) {
+    if ($Compiler -eq 'msvc') { Fail 'Visual Studio (Build Tools) is not installed. Run: install.cmd -InstallTools, or use the default clang compiler.' }
+    Fail 'The Rust tools (ps2_recomp, ps2-tools) are not next to this script and building them with cargo needs Visual Studio. Use the launcher''s kit (bin\), or pass -RecompExe and -ToolsExe.'
+}
 $vs = $null
 # MSVC environment (cl, link, cmake and ninja from Visual Studio) in this PowerShell session. A temporary .cmd avoids the
 # quoting problems of "cmd /c" with paths containing spaces.
@@ -302,7 +338,7 @@ function LoadVsEnvironment {
     }
     Fail "cl not found after loading vcvars64.bat or VsDevCmd.bat ($($instances[0])). Open the Visual Studio Installer, choose Modify and check that ""Desktop development with C++"" is installed with an ""MSVC build tools"" component and a Windows SDK; the details are above in install.log."
 }
-LoadVsEnvironment
+if ($useVs) { LoadVsEnvironment }
 # GOW-Port: the build needs a CMake 3.21 or newer with cmcldeps.exe next to it, and the first one in PATH may not be that:
 # - an older one (an old Visual Studio's, Android SDK, another recompilation kit) does not understand "-S <src> -B <build>": it takes
 #   the last path as the source and stops with "The source directory <build> does not exist";
@@ -323,7 +359,7 @@ function CmakeUsable([string]$cmake = 'cmake') {
 function UseUsableCmake {
     # GOW-Port: every Visual Studio installation, the newest first, not only the one whose vcvars64.bat was loaded: a newer one
     # without the CMake component must not hide the CMake of Visual Studio 2022 Build Tools installed next to it.
-    $vsPaths = @(& $vswhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Where-Object { $_ })
+    $vsPaths = if (Test-Path -LiteralPath $vswhere) { @(& $vswhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Where-Object { $_ }) } else { @() }
     $bundledCmakes = @{}
     $candidates = @()
     foreach ($p in $vsPaths) {
@@ -401,7 +437,7 @@ if (-not $cmakeChosen) { $cmakeChosen = UsePortableCmake }
 # An old Visual Studio (2017, 2019 before 16.10) bundles an old CMake. With -InstallTools (the launcher's wizard, which asked the
 # user), Visual Studio 2022 is installed next to it: it becomes the newest, and the old one stays. Only if the portable CMake
 # could not be downloaded.
-if (-not $cmakeChosen -and $InstallTools) {
+if (-not $cmakeChosen -and $InstallTools -and $useVs) {
     Warn 'No usable CMake (3.21 or newer with cmcldeps.exe) was found: installing Visual Studio 2022 Build Tools next to the current Visual Studio.'
     InstallVsBuildTools
     LoadVsEnvironment
@@ -418,34 +454,103 @@ if ($cmakeChosen -ne $cmakeBefore) {
     $note = "CMake: using $cmakeChosen instead of $cmakeBefore ($cmakeBeforeVersion)."
     if ($cmakeWasUsable) { Write-Host $note } else { Warn "$note It is older than 3.21 or lacks cmcldeps.exe." }
 }
-# GOW-Port: the build environment in the log, to diagnose reports without asking for it.
-Write-Host "Visual Studio: $vs ($((& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property catalog_productDisplayVersion)))"
-foreach ($c in @('cl', 'cmake', 'ninja')) {
-    $cmd = Get-Command $c
-    # cl prints its banner on stderr, which would abort under $ErrorActionPreference = 'Stop': its file version is used.
-    $ver = if ($c -eq 'cl') { $cmd.Version } else { (& $c --version | Select-Object -First 1) }
-    Write-Host "  ${c}: $($cmd.Source) ($ver)"
-}
 # GOW-Port: the first configuration downloads raylib, imgui and rlImGui with Git; with the dependencies already downloaded
 # (or with Git installed) nothing is needed.
 if (-not (Get-Command git -ErrorAction SilentlyContinue) -and -not (Test-Path (Join-Path $Build '_deps\raylib-src'))) {
     $env:Path = (GetPortableGit) + ';' + $env:Path
 }
 
-# GOW-Port: the Rust tools (RustPortPS2/). Order for each: its parameter, then bin\<tool>.exe (the launcher's kit), then cargo.
-# Both come out of one cargo build when either is missing.
-function ResolveTool([string]$given, [string]$parameter, [string]$name) {
-    if ($given) {
-        if (-not (Test-Path -LiteralPath $given)) { Fail "$parameter not found: $given" }
-        return (Resolve-Path -LiteralPath $given).Path
+# GOW-Port: llvm-mingw (clang + lld + llvm-rc, UCRT), the game's compiler by default. One pinned release, its SHA-256 checked,
+# unpacked into toolchain\ without the ARM and 32-bit targets nobody uses here (about half of its ~1.5 GB). The same version for
+# every player, so a build does not depend on which Visual Studio, SDK or system compiler happens to be installed. The pin is the
+# release the gow-native-pc project measured (Clang 23); changing it is a decision measured with scripts\ab-perf.ps1.
+$ClangVersion = '20261020'
+$ClangUrl = "https://github.com/mstorsjo/llvm-mingw/releases/download/$ClangVersion/llvm-mingw-$ClangVersion-ucrt-x86_64.zip"
+$ClangSha256 = 'FD5462B7F5D93B2FF981FCD3F9C7E427E47F3203C64EA91C27BCC444EEBD74CD'
+function ExpandZipFiltered([string]$zip, [string]$dir, [string[]]$skip) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        foreach ($entry in $archive.Entries) {
+            $name = $entry.FullName -replace '\\', '/'
+            if ($name.EndsWith('/')) { continue }
+            $skipped = $false
+            foreach ($pattern in $skip) { if ($name -like $pattern) { $skipped = $true; break } }
+            if ($skipped) { continue }
+            $target = Join-Path $dir $name
+            $parent = Split-Path -Parent $target
+            if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+        }
     }
-    $kit = Join-Path $Root "bin\$name.exe"
-    if (Test-Path -LiteralPath $kit) { return $kit }
-    return $null
+    finally { $archive.Dispose() }
 }
-$recompExe = ResolveTool $RecompExe '-RecompExe' 'ps2_recomp'
-$toolsExe = ResolveTool $ToolsExe '-ToolsExe' 'ps2-tools'
-if (-not $recompExe -or -not $toolsExe) {
+function UsePortableClang {
+    $dir = Join-Path $Toolchain "llvm-mingw-$ClangVersion"
+    $bin = Join-Path $dir "llvm-mingw-$ClangVersion-ucrt-x86_64\bin"
+    if (Test-Path -LiteralPath (Join-Path $bin 'clang++.exe')) { return $bin }
+    $zip = Join-Path $Toolchain "llvm-mingw-$ClangVersion.zip"
+    New-Item -ItemType Directory -Force -Path $Toolchain | Out-Null
+    $lastError = ''
+    # Two attempts: a dropped connection on a 170 MB download should not end the installation.
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        try {
+            Step "Downloading the compiler (llvm-mingw $ClangVersion, about 170 MB$(if ($attempt -gt 1) { ', second attempt' }))"
+            Invoke-WebRequest -UseBasicParsing -Uri $ClangUrl -OutFile $zip
+            $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+            if ($actual -ne $ClangSha256) { throw "the download is not the expected file (SHA-256 $actual, expected $ClangSha256)" }
+            Write-Host 'Unpacking the compiler...'
+            if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
+            ExpandZipFiltered $zip $dir @('*/aarch64-w64-mingw32/*', '*/armv7-w64-mingw32/*', '*/i686-w64-mingw32/*', '*/python/*')
+            if (-not (Test-Path -LiteralPath (Join-Path $bin 'clang++.exe'))) {
+                throw "clang++.exe is missing after unpacking (an antivirus may have removed it; allow the folder $Toolchain and try again)"
+            }
+            return $bin
+        }
+        catch { $lastError = $_.Exception.Message }
+        finally { if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue } }
+    }
+    Fail "Could not set up the compiler: $lastError. Check the Internet connection (github.com must be reachable) and run the installation again; finished steps are kept. A complete package with the compiler inside is also published with each release."
+}
+$ClangBin = $null
+if ($Compiler -eq 'clang') {
+    $ClangBin = UsePortableClang
+    # GOW-Port: the build sees only its own tools and Windows: MSYS2, devkitPro, Cygwin, another project's CMake or an old
+    # compiler first in PATH made builds fail in ways that had nothing to do with the game (issues #1, #23). cargo stays when the
+    # Rust tools still have to be built (it runs before the game build, with Visual Studio's environment).
+    $keep = @($ClangBin)
+    # A Unix-like environment's folder (MSYS2, Cygwin, devkitPro) brings its own gcc, cmd, make and DLLs with the tool: never
+    # one of those. Without a clean Git, the portable MinGit (which install.ps1 already knows how to fetch) is used.
+    $foreign = '[\\/](msys64|msys32|msys2|cygwin64|cygwin|devkitpro|mingw64|ucrt64|clang64)([\\/]|$)'
+    foreach ($tool in @('cmake', 'ninja', 'git')) {
+        $found = @(Get-Command $tool -All -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch $foreign }) | Select-Object -First 1
+        if ($found) { $keep += (Split-Path -Parent $found.Source) }
+        elseif ($tool -eq 'git' -and -not (Test-Path (Join-Path $Build '_deps\raylib-src'))) { $keep += (GetPortableGit) }
+    }
+    if ($needCargo) {
+        $cargo = Get-Command cargo -ErrorAction SilentlyContinue
+        if ($cargo) { $keep += (Split-Path -Parent $cargo.Source) }
+    }
+    $system = Join-Path $env:SystemRoot 'System32'
+    $keep += @($system, $env:SystemRoot, (Join-Path $system 'Wbem'), (Join-Path $system 'WindowsPowerShell\v1.0'))
+    if (-not $needCargo) { $env:Path = (($keep | Select-Object -Unique) -join ';') }
+    else { $env:Path = (($keep | Select-Object -Unique) -join ';') + ';' + $env:Path }
+}
+
+# GOW-Port: the build environment in the log, to diagnose reports without asking for it.
+if ($useVs) {
+    Write-Host "Visual Studio: $vs ($((& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property catalog_productDisplayVersion)))"
+}
+$toolNames = if ($Compiler -eq 'clang') { @('clang++', 'cmake', 'ninja') } else { @('cl', 'cmake', 'ninja') }
+foreach ($c in $toolNames) {
+    $cmd = Get-Command $c
+    # cl prints its banner on stderr, which would abort under $ErrorActionPreference = 'Stop': its file version is used.
+    $ver = if ($c -eq 'cl') { $cmd.Version } else { (& $c --version | Select-Object -First 1) }
+    Write-Host "  ${c}: $($cmd.Source) ($ver)"
+}
+
+# Both Rust tools come out of one cargo build when either is missing.
+if ($needCargo) {
     Step 'Building the Rust tools (ps2_recomp, ps2-tools)'
     $rustRoot = Join-Path $Root 'RustPortPS2'
     if (-not (Test-Path -LiteralPath (Join-Path $rustRoot 'third_party\rabbitizer\Cargo.toml'))) {
@@ -488,6 +593,13 @@ $iopMod = Join-Path $Game 'IOP_MOD'
 $verifyArgs = @('verify-elf', (Join-Path $Game 'SCUS_973.99'), '--map', (Join-Path $Profile 'funcmap.csv'))
 if ($AllowModifiedElf) { $verifyArgs += '--allow-modified' }
 Run $toolsExe $verifyArgs
+# GOW-Port (R5): the memory card is created already formatted, laid out like a card the PS2 BIOS formats; the game's own
+# formatting of a blank card was never verified. An existing card (your saves) is never touched.
+$card = Join-Path $Game 'Mcd001.ps2'
+if (-not (Test-Path -LiteralPath $card)) {
+    & $toolsExe mc-format $card
+    if ($LASTEXITCODE -ne 0) { Warn 'Could not create the memory card; the game will start with a blank one.' }
+}
 New-Item -ItemType Directory -Force -Path $iopMod | Out-Null
 Get-ChildItem -Path $Game -Filter *.IRX -File | ForEach-Object { Copy-Item $_.FullName (Join-Path $iopMod $_.Name) -Force }
 Write-Host 'Done: IOP modules in game\IOP_MOD.'
@@ -529,18 +641,56 @@ function Configure {
     # existing compiler". That is what an old installation (launcher 0.1.0 or 0.2.x) meets when its game is rebuilt after an
     # update, so the cache is dropped here too; again the downloaded dependencies (_deps) are kept.
     if (Test-Path -LiteralPath $cache) {
-        $cachedCompiler = Select-String -LiteralPath $cache -Pattern '^CMAKE_CXX_COMPILER:(?:FILEPATH|STRING)=(.*)$' | Select-Object -First 1
+        $cachedCompiler = Select-String -LiteralPath $cache -Pattern '^CMAKE_CXX_COMPILER:[A-Z]+=(.*)$' | Select-Object -First 1
         if ($cachedCompiler) {
-            $compiler = $cachedCompiler.Matches[0].Groups[1].Value.Trim()
+            # GOW-Port: not $compiler: PowerShell names ignore case, and that local hid the -Compiler parameter (clang), so a
+            # build folder made with Visual Studio was kept and the game was built with MSVC.
+            $cachedPath = $cachedCompiler.Matches[0].Groups[1].Value.Trim()
             # An absolute path that is not there. A bare name (cl, c++) is looked up in PATH by CMake itself.
-            if ($compiler -match '^(?:[A-Za-z]:[\\/]|/)' -and -not (Test-Path -LiteralPath $compiler)) {
-                Warn "The build folder remembers a C++ compiler that is gone ($compiler): reconfiguring."
+            if ($cachedPath -match '^(?:[A-Za-z]:[\\/]|/)' -and -not (Test-Path -LiteralPath $cachedPath)) {
+                Warn "The build folder remembers a C++ compiler that is gone ($cachedPath): reconfiguring."
                 Remove-Item -LiteralPath $cache -Force
                 Remove-Item -LiteralPath (Join-Path $Build 'CMakeFiles') -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
     }
     $extra = @()
+    # GOW-Port: clang (default): the pinned llvm-mingw, and llvm-rc for the icon. A build folder configured with another compiler
+    # (an installation made with Visual Studio before 0.3.0) is reconfigured; the downloaded dependencies (_deps) are kept.
+    if ($Compiler -eq 'clang') {
+        $wantCxx = Slashes (Join-Path $ClangBin 'clang++.exe')
+        if (Test-Path -LiteralPath $cache) {
+            $cachedCxx = Select-String -LiteralPath $cache -Pattern '^CMAKE_CXX_COMPILER:[A-Z]+=(.*)$' | Select-Object -First 1
+            if ($cachedCxx -and ((Slashes $cachedCxx.Matches[0].Groups[1].Value.Trim()) -ine $wantCxx)) {
+                Write-Host "The build folder was configured with another compiler ($($cachedCxx.Matches[0].Groups[1].Value.Trim())): reconfiguring for clang."
+                Remove-Item -LiteralPath $cache -Force
+                Remove-Item -LiteralPath (Join-Path $Build 'CMakeFiles') -Recurse -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath (Join-Path $Build 'gow-configure.sig') -Force -ErrorAction SilentlyContinue
+            }
+        }
+        $extra += "-DCMAKE_C_COMPILER=$(Slashes (Join-Path $ClangBin 'clang.exe'))"
+        $extra += "-DCMAKE_CXX_COMPILER=$wantCxx"
+        $extra += "-DCMAKE_RC_COMPILER=$(Slashes (Join-Path $ClangBin 'llvm-rc.exe'))"
+    }
+    elseif (Test-Path -LiteralPath $cache) {
+        # GOW-Port: -Compiler msvc after a clang build: CMake is given no compiler then, so the folder would keep clang.
+        $cachedCxx = Select-String -LiteralPath $cache -Pattern '^CMAKE_CXX_COMPILER:[A-Z]+=(.*)$' | Select-Object -First 1
+        if ($cachedCxx -and $cachedCxx.Matches[0].Groups[1].Value -match 'clang') {
+            Write-Host "The build folder was configured with clang ($($cachedCxx.Matches[0].Groups[1].Value.Trim())): reconfiguring for Visual Studio."
+            Remove-Item -LiteralPath $cache -Force
+            Remove-Item -LiteralPath (Join-Path $Build 'CMakeFiles') -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath (Join-Path $Build 'gow-configure.sig') -Force -ErrorAction SilentlyContinue
+        }
+    }
+    # GOW-Port: PGO mode of this build ($script:PgoMode: generate, use or empty), see the end of this script.
+    $pgoSignature = ''
+    if ($script:PgoMode -eq 'generate') { $extra += '-DPS2X_PGO=generate' }
+    elseif ($script:PgoMode -eq 'use') {
+        $extra += '-DPS2X_PGO=use'
+        $extra += "-DPS2X_PGO_PROFILE=$(Slashes $PgoProfile)"
+        $pgoSignature = (Get-FileHash -LiteralPath $PgoProfile -Algorithm SHA256).Hash
+    }
+    else { $extra += '-DPS2X_PGO=' }
     # GOW-Port: Release and RelWithDebInfo both build with /O2 and no whole-program optimization (PS2X_ENABLE_LTCG, off by default).
     $buildType = if ($FastDev) { 'RelWithDebInfo' } else { 'Release' }
     $runtimeLogs = if ($FastDev) { 'ON' } else { 'OFF' }
@@ -554,14 +704,65 @@ function Configure {
         # repository is games/scus-97399/vu1-heads.list.
         # Without it those blocks are interpreted: ~7 million native block misses per 5 s in a fight.
         $headsSource = Join-Path $Profile 'vu1-heads.list'
-        if (Test-Path -LiteralPath $headsSource) {
-            Copy-Item -LiteralPath $headsSource -Destination (Join-Path (Split-Path -Parent $Vu1ForBuild) 'vu1n_heads.txt') -Force
+        $headsTarget = Join-Path (Split-Path -Parent $Vu1ForBuild) 'vu1n_heads.txt'
+        # GOW-Port: plus the block entries the game reached without native code while capturing (vu1n_heads_seen.txt, written
+        # by the runtime next to the captures): a pc entered through a register jump is no head the generator finds alone.
+        # Rewritten only when the list changes, so an unchanged list does not rebuild the VU1 code.
+        $heads = New-Object System.Collections.Generic.SortedSet[int]
+        foreach ($file in @($headsSource, (Join-Path $Vu1ForBuild 'vu1n_heads_seen.txt'))) {
+            if (-not (Test-Path -LiteralPath $file)) { continue }
+            foreach ($line in Get-Content -LiteralPath $file) {
+                $text = $line.Trim()
+                if ($text -match '^[0-9A-Fa-f]+$') { [void]$heads.Add([Convert]::ToInt32($text, 16)) }
+            }
+        }
+        if ($heads.Count -gt 0) {
+            $merged = (($heads | ForEach-Object { '{0:x}' -f $_ }) -join "`n") + "`n"
+            $current = if (Test-Path -LiteralPath $headsTarget) { [IO.File]::ReadAllText($headsTarget) -replace "`r`n", "`n" } else { '' }
+            if ($current -ne $merged) { [IO.File]::WriteAllText($headsTarget, $merged, (New-Object Text.UTF8Encoding $false)) }
         }
     }
-    Run 'cmake' (@('-S', $Native, '-B', $Build, '-G', 'Ninja', "-DCMAKE_BUILD_TYPE=$buildType",
+    $cmakeArgs = @('-S', $Native, '-B', $Build, '-G', 'Ninja', "-DCMAKE_BUILD_TYPE=$buildType",
         "-DPS2X_ENABLE_RUNTIME_LOGS=$runtimeLogs", '-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF', '-DPS2X_ENABLE_IOP_RPC_TRACE=OFF',
         '-DPS2X_BUILD_TEST=OFF', "-DPS2X_SHOW_WINDOWS_CONSOLE=$console",
-        '-DPS2X_RUNNER_UNITY_BUILD_BATCH_SIZE=8') + $extra)
+        '-DPS2X_RUNNER_UNITY_BUILD_BATCH_SIZE=8') + $extra
+    # GOW-Port: a rebuild ("Recompilar agora", -Optimize) with the same arguments skips the configure step. Ninja runs CMake
+    # again by itself when a CMakeLists.txt or a CONFIGURE_DEPENDS glob changed, so only what CMake reads at configure time
+    # alone goes into the signature: the arguments, the CMake executable and whether vu1n_heads.txt exists (its contents are a
+    # build dependency). Idea from gow-native-pc (build.ps1 Configure -MaySkip, gow-configure.sig).
+    $signatureFile = Join-Path $Build 'gow-configure.sig'
+    $headsExists = Test-Path -LiteralPath (Join-Path (Split-Path -Parent $Vu1ForBuild) 'vu1n_heads.txt')
+    $cmakeExe = (Get-Command cmake -ErrorAction SilentlyContinue).Source
+    $signature = (@("cmake=$cmakeExe", "heads=$headsExists", "pgo=$pgoSignature") + $cmakeArgs) -join "`n"
+    $previous = if (Test-Path -LiteralPath $signatureFile) { [IO.File]::ReadAllText($signatureFile) } else { $null }
+    if ((Test-Path -LiteralPath (Join-Path $Build 'build.ninja')) -and (Test-Path -LiteralPath $cache) -and $previous -eq $signature) {
+        Write-Host 'Configure: same arguments as the last time, skipped (ninja reconfigures by itself if the CMake files changed).'
+    }
+    else {
+        Run 'cmake' $cmakeArgs
+        [IO.File]::WriteAllText($signatureFile, $signature, (New-Object Text.UTF8Encoding $false))
+    }
+    # GOW-Port: a build folder that kept another compiler would build the whole game with it and without the speed profile,
+    # silently (it happened with a folder made by Visual Studio). Checked here, after every configure.
+    if ($Compiler -eq 'clang') {
+        $usedCxx = Select-String -LiteralPath $cache -Pattern '^CMAKE_CXX_COMPILER:[A-Z]+=(.*)$' | Select-Object -First 1
+        if (-not $usedCxx -or (Slashes $usedCxx.Matches[0].Groups[1].Value.Trim()) -ine $wantCxx) {
+            Remove-Item -LiteralPath $signatureFile -Force -ErrorAction SilentlyContinue
+            Fail "The build folder uses another compiler ($(if ($usedCxx) { $usedCxx.Matches[0].Groups[1].Value.Trim() } else { 'none' })) instead of $wantCxx. Delete $cache and run the installer again."
+        }
+    }
+}
+# GOW-Port: PGO (decision D3: trained on this PC, never shipped). The profile stays in the build folder, like the generated code.
+$PgoDir = Join-Path $Build 'pgo'
+$PgoProfile = Join-Path $PgoDir 'gow.profdata'
+$pgoPossible = ($Compiler -eq 'clang') -and -not $FastDev -and $Pgo -ne 'off'
+$hasProfile = Test-Path -LiteralPath $PgoProfile
+$trainPgo = $pgoPossible -and (($Pgo -eq 'on' -and -not $hasProfile) -or $RetrainPgo)
+$usePgo = $pgoPossible -and ($trainPgo -or $hasProfile)
+$script:PgoMode = if ($trainPgo) { 'generate' } elseif ($usePgo) { 'use' } else { '' }
+if ($Compiler -eq 'clang') {
+    $pgoState = if ($trainPgo) { 'trained in the optimization run' } elseif ($usePgo) { "the existing profile ($PgoProfile)" } else { "not trained yet ($(if ($Pgo -eq 'off') { '-Pgo off' } elseif ($FastDev) { '-FastDev' } else { 'the launcher''s Optimize now trains it; -Pgo on here' }))" }
+    Write-Host "Speed profile (PGO): $pgoState"
 }
 Step 'Configuring the build (the first time it downloads raylib, imgui and rlImGui)'
 Configure
@@ -609,43 +810,81 @@ foreach ($f in @('gow_overrides.cpp', 'gow_pad2_packet.h', 'gow_gs_replay.h')) {
 }
 
 # --- 3. Game ------------------------------------------------------------------------------------------
-function BuildGame {
-    Step "Building the game (the first time takes a while: ~6,400 files; VU1 RAM profile: $Vu1MemoryLimitGB GB)"
+function BuildGame([string]$what = '') {
+    Step "Building the game$what (the first time takes a while: ~6,400 files; VU1 RAM profile: $Vu1MemoryLimitGB GB)"
     Run 'ninja' @('-C', $Build, "-j$Jobs", 'ps2EntryRunner')
+    # GOW-Port: bind the exact local ELF to the generated runner; the launcher checks this fingerprint.
+    (Get-Sha256 (Join-Path $Game 'SCUS_973.99')) |
+        Set-Content -LiteralPath (Join-Path (Split-Path $GameExe) 'game-elf.sha256') -Encoding ASCII
 }
-Configure
-BuildGame
 $GameExe = Join-Path $Build 'ps2xRuntime\gow-2005.exe'
-# GOW-Port: bind the exact local ELF to the generated runner; the launcher checks this fingerprint.
-(Get-Sha256 (Join-Path $Game 'SCUS_973.99')) |
-    Set-Content -LiteralPath (Join-Path (Split-Path $GameExe) 'game-elf.sha256') -Encoding ASCII
 
-# --- 4. Optimization (native VU1 and IOP) -------------------------------------------------------------------------
-$hasVu1 = [bool](Get-ChildItem -Path $Vu1 -Filter *.bin -ErrorAction SilentlyContinue | Select-Object -First 1)
-if ($hasVu1 -and -not $Optimize) { Write-Host 'VU1: micro-memories available (manifest or captures); there is no need to open the game to capture.' }
-if ($Optimize -or (-not $NoOptimize -and -not $hasVu1)) {
-    Step "Optimization: the game opens by itself for $Seconds s (do not touch the keyboard); the VU1 and IOP code is saved"
+# GOW-Port: the optimization run. The game plays a scripted route by itself; it records the VU1 micro-memories that have no
+# native code yet and the IOP modules and, in a PGO training build, the profile. It is closed through its window (the profile
+# is written then), and only stopped if it does not exit within a minute.
+function RunOptimization([string]$profileDir = '') {
+    Step "Optimization: the game opens by itself for $Seconds s (do not touch the keyboard); the VU1 and IOP code$(if ($profileDir) { ' and the speed profile are' } else { ' is' }) saved"
     $mods = Join-Path $Gen 'iop_mods'
     New-Item -ItemType Directory -Force -Path $Vu1, $mods | Out-Null
     $vars = @{
         GOW_VU1_CAPTURE = $Vu1; PS2X_IOP_DUMP_MODULES = $mods; GOW_SKIP_FMV = '1'; GOW_PAD_TEST = '1';
         GOW_PAD_TEST_NO_CAPTURE = '1'; GOW_MC0 = (Join-Path $Gen 'optimize.ps2'); PS2X_GS_WORKER = '1'; GOW_GS_FINISH_ASYNC = '1';
+        # GOW-Port: Kratos died long before the end of the scripted route and the rest of the run was the game-over menu, so the
+        # capture and the speed profile learned menu code. God mode keeps the whole run in the fight.
+        PC_CHEATS = 'god_mode';
         GOW_PAD_SCRIPT = '5:start,12:x,20:x,28:x,40:square,41:square,42:square,44:triangle,48:lup*3,52:x,55:square,56:triangle,60:circle,64:r1,70:lleft*2,74:square,76:square,80:triangle,90:lup*4,96:x,100:square,104:l1,110:lright*2,120:square,125:triangle,140:lup*5,150:square,160:triangle,180:lup*5,200:square'
+    }
+    if ($profileDir) {
+        New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+        Get-ChildItem -Path $profileDir -Filter *.profraw -ErrorAction SilentlyContinue | Remove-Item -Force
+        $vars['LLVM_PROFILE_FILE'] = Join-Path $profileDir 'gow-%p.profraw'
     }
     foreach ($k in $vars.Keys) { Set-Item -Path "env:$k" -Value $vars[$k] }
     $p = Start-Process -FilePath $GameExe -ArgumentList "`"$(Join-Path $Game 'SCUS_973.99')`"" -WorkingDirectory $Native -PassThru
     # GOW-Port: the game inherited the lowered priority; this run feeds the VU1 and IOP capture, so it must run at normal speed.
     try { $p.PriorityClass = [Diagnostics.ProcessPriorityClass]::Normal } catch { Warn "Could not restore the game's priority: $($_.Exception.Message)" }
-    if (-not $p.WaitForExit($Seconds * 1000)) { Stop-Process -Id $p.Id -Force }
+    if (-not $p.WaitForExit($Seconds * 1000)) {
+        # Only the process this script started, by its PID: first through its window, as a player closes it.
+        [void]$p.CloseMainWindow()
+        if (-not $p.WaitForExit(60000)) { Stop-Process -Id $p.Id -Force }
+    }
     foreach ($k in $vars.Keys) { Remove-Item -Path "env:$k" -ErrorAction SilentlyContinue }
     $vu1Count = (Get-ChildItem -Path $Vu1 -Filter *.bin -ErrorAction SilentlyContinue).Count
     $iopCount = (Get-ChildItem -Path $mods -Filter *.bin -ErrorAction SilentlyContinue).Count
     Write-Host "VU1: $vu1Count micro-memories; IOP: $iopCount modules."
     if ($iopCount -gt 0) { Run $toolsExe @('iop-gen', $mods, (Join-Path $Native 'ps2xIOP\src\native')) }
+}
+
+Configure
+BuildGame $(if ($trainPgo) { ' with instrumentation for the speed profile' } else { '' })
+
+# --- 4. Optimization (native VU1 and IOP, and the PGO training) --------------------------------------------------
+# GOW-Port: the folder the build reads (-Vu1BuildDir) counts too, or a build from captures kept elsewhere opened the game again.
+$hasVu1 = [bool](Get-ChildItem -Path @($Vu1, $Vu1ForBuild) -Filter *.bin -ErrorAction SilentlyContinue | Select-Object -First 1)
+if ($trainPgo) {
+    # One run gives the VU1 / IOP captures and the profile; one more build uses both (gow-native-pc's "tune" stage: preparation
+    # with PGO in ~24 minutes instead of ~63 with separate runs).
+    RunOptimization $PgoDir
+    $raw = @(Get-ChildItem -Path $PgoDir -Filter *.profraw -ErrorAction SilentlyContinue)
+    if ($raw.Count -gt 0) {
+        Run (Join-Path $ClangBin 'llvm-profdata.exe') (@('merge', '-o', $PgoProfile) + @($raw | ForEach-Object { $_.FullName }))
+        $raw | Remove-Item -Force -ErrorAction SilentlyContinue
+        $script:PgoMode = 'use'
+    }
+    else {
+        Warn 'The optimization run wrote no speed profile (did the game close early?): the game is built without PGO this time.'
+        $script:PgoMode = ''
+    }
     Configure
-    BuildGame
-    (Get-Sha256 (Join-Path $Game 'SCUS_973.99')) |
-        Set-Content -LiteralPath (Join-Path (Split-Path $GameExe) 'game-elf.sha256') -Encoding ASCII
+    BuildGame $(if ($script:PgoMode -eq 'use') { ' with the speed profile' } else { '' })
+}
+else {
+    if ($hasVu1 -and -not $Optimize) { Write-Host 'VU1: micro-memories available (manifest or captures); there is no need to open the game to capture.' }
+    if ($Optimize -or (-not $NoOptimize -and -not $hasVu1)) {
+        RunOptimization
+        Configure
+        BuildGame
+    }
 }
 
 Step 'Done'

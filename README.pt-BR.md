@@ -110,18 +110,20 @@ nativas das bibliotecas que ele chama.
 
 ## O que você precisa
 
-- **Sua própria ISO de *God of War* (EUA, `SCUS-97399`)**, cerca de 8 GB.
-- **~30 GB livres** (disco extraído + build).
+- **Sua própria ISO de *God of War* (EUA, `SCUS-97399`)**, cerca de 8 GB. Um disco modificado sem mudar o código do jogo
+  (tradução, redublagem, mod de dados) também funciona, e um patch `.xdelta` pode ser aplicado à original no assistente.
+- **~20 GB livres** durante a instalação (sua ISO, o disco extraído e a build); ficam uns 11 GB depois de apagar a ISO.
 - **CPU x86 de 64 bits com SSE4.1** (Intel Core 2 "Penryn", 2008, ou mais nova; AMD "Bulldozer", 2011, ou mais nova; o AMD Phenom II não tem), 4 núcleos ou mais recomendado. AVX2 **não** é necessário.
 - **GPU com OpenGL 4.6** (qualquer NVIDIA/AMD recente, ou iGPU recente da Intel/AMD).
 - **8 GB de RAM** (16 GB para compilar com folga).
 - **Windows 10/11 x64** ou um Linux recente (Arch/CachyOS, Ubuntu 24.04+, Fedora 40+) - Linux é experimental.
-- **30–90 minutos** para a primeira compilação.
+- **Uns 10–20 minutos** para a primeira compilação no Windows (10 num Intel Core i5-12400F de 6 núcleos; mais em 4
+  núcleos ou CPUs mais antigas). No Linux, que ainda compila com g++, pode levar de 30 a 90 minutos.
 
 ## Instalação
 
 **Windows - o launcher.** Baixe o instalador na página de Releases, execute e deixe o assistente fazer o trabalho: ele
-encontra e verifica a sua ISO, baixa as ferramentas de compilação C++ se faltarem, extrai o disco, recompila o jogo e
+encontra e verifica a sua ISO, baixa um compilador C++ portátil (sem Visual Studio desde a 0.3.0), extrai o disco, recompila o jogo e
 compila tudo. Depois é só apertar **PLAY**.
 
 > **O Windows pode avisar sobre um "editor desconhecido".** O instalador do launcher ainda não tem assinatura de
@@ -142,7 +144,7 @@ compila tudo. Depois é só apertar **PLAY**.
 ```
 
 Antes de começar, o script confere CMake, Ninja, um compilador C++, Git e os arquivos de desenvolvimento de GL, X11,
-Wayland e ALSA, além de espaço em disco (30 GB) e RAM (no mínimo 4 GB, 8 GB recomendados). No Arch, Debian/Ubuntu e
+Wayland e ALSA, além de espaço em disco (20 GB) e RAM (no mínimo 4 GB, 8 GB recomendados). No Arch, Debian/Ubuntu e
 Fedora (e derivadas) o `--install-deps` instala o que faltar usando `sudo`; sem a opção, ele pergunta quando está
 em um terminal e, caso contrário, mostra o comando. Em qualquer outra distribuição ele lista o que instalar. O Rust
 não é necessário quando o kit do launcher traz as ferramentas. O assistente do launcher faz a mesma verificação no
@@ -233,15 +235,17 @@ como referência de hardware. Arquitetura, opções de build e testes estão em
 
 ## Por que a build é lenta e grande, e por que o PS2 é difícil
 
-Os números de [O que você precisa](#o-que-você-precisa) (30 a 90 minutos, ~30 GB) não são exagero. Eles vêm do que o
+Os números de [O que você precisa](#o-que-você-precisa) (10 a 20 minutos no Windows, ~20 GB) não são exagero. Eles vêm do que o
 instalador faz e da máquina que está sendo portada.
 
-**Por que a primeira build leva de 30 a 90 minutos**
+**Por que a primeira build ainda leva minutos**
 
 - O recompilador transforma cerca de 6.400 funções do jogo em cerca de 6.400 arquivos C++, aproximadamente **129 MB de
   código-fonte**. Cada instrução MIPS vira C++ explícito (acesso a registradores, acesso à memória, delay slots de
   desvio, operações multimídia de 128 bits), então poucos bytes de código de máquina viram muitas linhas. O compilador
   otimiza tudo isso em modo Release, do zero, uma vez. É o tamanho de uma aplicação grande, não de um projeto pequeno.
+  Desde a 0.3.0 o Windows compila com clang, que leva uns 10 minutos onde o Visual Studio levava mais de uma hora no
+  mesmo PC.
 - A VU1 (a unidade vetorial) executa microcódigo que é gerado antecipadamente como blocos nativos e também compilado.
   Sem essa etapa o jogo interpretaria o código da VU1 e rodaria bem mais devagar.
 - O paralelismo é limitado pela memória, não só pelos núcleos: os instaladores iniciam no máximo um processo de
@@ -250,13 +254,12 @@ instalador faz e da máquina que está sendo portada.
 - Mudar um header incluído pelo código gerado, ou qualquer `CMakeLists.txt`, recompila tudo (o header pré-compilado é
   regenerado). Atualizações posteriores recompilam só o que mudou.
 
-**Por que pede ~30 GB**
+**Por que pede ~20 GB**
 
-O jogo final é pequeno perto da sua build. O espaço vai principalmente para o que é necessário *durante* a instalação:
-sua ISO (cerca de 8 GB), o disco extraído (cerca de 8 GB), o Visual Studio Build Tools se faltar (cerca de 6 GB, no
-Windows), os 129 MB de C++ gerado, e os arquivos objeto, o header pré-compilado, os blocos de VU1 e os executáveis da
-build (mais alguns GB). Isso soma uns 25 GB, e o requisito deixa uma folga por cima. É uma margem de segurança, não um
-tamanho medido.
+O jogo final é pequeno perto do que a instalação precisa. Medido numa instalação 0.3.0: sua ISO (cerca de 8 GB), o
+disco extraído (7,9 GB), a build com arquivos objeto, header pré-compilado, blocos de VU1 e perfil de velocidade
+(1,3 GB), o compilador portátil (0,5 GB, no Windows) e o C++ gerado, as ferramentas e a cópia do jogo que você joga
+(cerca de 0,4 GB). São uns 18 GB no pico e uns 11 GB depois de apagar a ISO; o requisito deixa uma pequena folga.
 
 **Por que o PS2 é mais difícil de portar que a maioria dos consoles**
 

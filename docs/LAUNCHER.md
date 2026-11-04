@@ -46,14 +46,19 @@ A pack applies the next time the game starts. [`TEXTURES.md`](TEXTURES.md) expla
 | Background optimization | On | Recompiles the parts of the game you have reached, in the background, after you close the game |
 | Also while playing | **Off** | Rebuilds with the game open. It competes for the CPU and freezes the picture for tens of seconds, so leave it off unless you are debugging |
 | Optimize now | - | Runs one optimization pass immediately |
+| Speed profile | - | Windows, clang builds (0.3.0). **Optimize now** trains a speed profile (clang PGO) for this PC: the game opens by itself for about 4 minutes on a scripted fight (do not touch the keyboard), then the game is rebuilt with the profile, about 15 minutes in all. Pressing PLAY cancels it. The row shows **Active** once the build uses a profile. The profile is made from your game on your PC and never leaves it |
 | Rebuild now | - | Only shown, as a note at the top of the tab, when this launcher carries game fixes your build does not have yet (see below) |
+
+**The speed-profile offer.** After an installation with clang, the first screen shows *Optimization available: more FPS* with
+**Optimize now** and **Later**. *Later* hides the notice on this PC; the Performance tab keeps the button. The installation
+itself does one build only, so the first game is ready as soon as possible, and the optimization never runs while you play.
 
 **Rebuilding after a launcher update.** A launcher update brings new game code (the runtime sources in its kit), but the
 game you play is a build made on your PC, so the fixes do not reach it by themselves. The launcher remembers which kit each
 build was made from (`build/.built-from-kit` in your installation folder, written when an installation or a rebuild
 succeeds). When the kit it now carries has different runtime files or tools, it shows a note at the top of **Performance**
-and one notice, once per kit version. **Rebuild now** runs the build in the background; it takes from a few minutes to over
-an hour, and you keep playing the current build until it finishes (the new one opens the next time you start the game).
+and one notice, once per kit version. **Rebuild now** runs the build in the background; it takes from a few minutes to about
+20 minutes (a rebuild of everything takes as long as the first build), and you keep playing the current build until it finishes (the new one opens the next time you start the game).
 The button waits while the game, an installation, an optimization or a texture pack is running. An update that does not
 change the runtime files shows nothing, and the launcher never starts a rebuild by itself because of an update. A build
 made before the launcher kept this record is assumed up to date, except when the update that introduced the record changed
@@ -111,12 +116,17 @@ performance, controls and cheats; your file paths and the button layout you buil
 The wizard opens by itself the first time, or from **Files → Setup wizard**.
 
 1. **ISO**: the launcher looks for your God of War (USA, `SCUS-97399`) ISO (Home, Downloads, Desktop, Documents,
-   `~/Games` and the drive roots) and verifies it. Drag and drop or **Browse** also work. Translated, patched or
-   other-region ISOs are rejected: the game must be the original USA image.
-2. **Location**: where the extracted game and the build go. The path must be **ASCII only** and needs **30 GB free**.
+   `~/Games` and the drive roots) and verifies it. Drag and drop or **Browse** also work. A translation that kept the USA
+   code is accepted (RetroAchievements stay off with it); other regions and demos are named but not supported yet, and
+   discs with changed code are refused. With the original ISO, **Apply a patch (.xdelta)** (a translation, an undub,
+   a data mod) creates a patched copy next to it, with a progress bar and a Stop button, and installs that copy; the
+   original is never written, and **Use the original** returns to it.
+2. **Location**: where the extracted game and the build go. The path must be **ASCII only** and needs **20 GB free**.
    The default is `C:\Users\<you>\GodOfWar-PC`.
-3. **Components**: shown only when something is missing. Visual Studio 2022 Build Tools (C++, about 6 GB, needs
-   administrator permission, 15–30 minutes) and portable Git (about 50 MB, stays inside the install folder). A Visual
+3. **Components**: shown only when something is missing. Since 0.3.0 the launcher's kit compiles the game with a portable
+   clang and carries the Rust tools prebuilt, so a normal installation asks for no Visual Studio. It is listed only for a
+   kit without those tools: Visual Studio 2022 Build Tools (C++, about 6 GB, needs administrator permission, 15–30
+   minutes). Portable Git (about 50 MB, stays inside the install folder). A Visual
    Studio without a usable CMake (3.21 or newer, with `cmcldeps.exe` next to it) or Ninja, such as 2017, early 2019 or a
    2026 install without the CMake component, needs nothing here: the installer downloads portable CMake and Ninja into
    the install folder.

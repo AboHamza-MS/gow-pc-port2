@@ -30,6 +30,8 @@ Two structural facts drive most numbers:
 | `GOW_IO_HIST=<s>`, `GOW_IOP_IO_HIST=<s>` | Hardware registers still touched by game code | Finds work that could become native |
 | `GOW_SAMPLING=1` | Periodic samples of the running threads | Feed `ps2-dev sampling` / `sampling-win` for per-function attribution |
 | `GOW_PERF_DIAG` + `ps2-dev perf-summary LOG --game` | Windows of 5 s in the loaded game only | Removes menus, loading and transitions from the average |
+| `GOW_FRAME_DIAG=1` + `GOW_PERF_FRAME_PC=0x001837B8` | `[gow-frames] p50_ms=… p95_ms=… p99_ms=… max_ms=… over16_7ms=… over33_3ms=…` every 5 s | Frame-time distribution of the game's own frames (the entries `guest_flip_hz` counts): a stutter shows in p99 and `over16_7ms` long before it moves the average. One clock read per frame: cheap enough to keep on during an A/B run. Not presentation latency |
+| `PS2X_GS_WORKER_DIAG=1` | `[gs-worker:sync] <site> … waits=… wait_ms=… stage_waits=… stage_wait_ms=…` and `[gs-stage:sync] packets=… push_waits=… wakeups=… idle_ms=… busy_ms=…` | Who waits for whom: the EE for the VU1 worker, the EE for the GS stage alone (worker idle, stage still drawing), the worker for a full stage queue, and how often a push woke a sleeping stage |
 
 With `--game`, `ps2-dev perf-summary` keeps only the windows enclosed by `[gow-pad2:state] state=11 pending=0 levelReady=1`
 reports, so menu flips do not pollute the average. Without `--game` it selects windows by time, which is useful for
@@ -49,6 +51,37 @@ loading.
 6. **Compare like with like**: same scene, same settings, same build options, one change at a time, previous commit
    rebuilt with the same configuration as the baseline.
 7. **Sanity**: `speed=1.00`, no other build running, laptop on the performance profile, game window focused.
+
+## Comparing two builds
+
+`scripts/ab-perf.ps1` runs two executables alternately (A B, B A, …) with the launcher's environment, the same disc and the
+same pad script, and prints the mean and worst 5 s guest frame rate, p95/p99 and frames over 16.7 ms for each:
+
+```powershell
+cargo run -p gow-cli -- env > env.txt     # from gow-launcher/: the environment the saved settings produce
+scripts\ab-perf.ps1 -ExeA old\gow-2005.exe -ExeB new\gow-2005.exe -Elf <game>\SCUS_973.99 -EnvFile env.txt `
+    -Pairs 4 -Seconds 150 -WarmupSeconds 30 -PadScript '5:start,12:x,18:x,24:x,30:x,36:x'
+```
+
+It refuses to start while a `gow-2005` is running and closes only the processes it started (by PID, through their window
+first). Logs and `results.json` go to `logs/ab-perf/<date>/`. Only alternating pairs count: the noise between two runs of
+the same build is several fps. Both builds must be final builds (see the procedure below), and nothing else may use the
+machine while it runs.
+
+### VU1 replay bench
+
+The VU1 alone, without the game's timing noise, through the record/replay of `ps2_vu1_native.inl`:
+
+1. Record once in a combat scene: `GOW_VU1N_RECORD=<file> GOW_VU1N_RECORD_N=4000 GOW_VU1N_RECORD_STRIDE=101
+   GOW_VU1N_RECORD_SKIP=3000000` (programs skipped first, so the recording starts in the fight). The file is game data:
+   keep it under `logs/` or outside the repository, never in git or a report.
+2. Replay with each build: `GOW_VU1N_REPLAY=<file> GOW_VU1N_REPLAY_REPS=6`. The first round checks every record against
+   the recorded hash (`[vu1n-replay] N records, M differ`: M must be 0 when the change is meant to be exact); the warm rounds
+   only measure and end in `[vu1n-replay] rounds_ms=… median_ms=… min_ms=… max_ms=…`.
+3. Compare medians of alternating runs of the two builds. The spread (min to max) says how much a difference must be to
+   mean anything; it is typically a few percent, far below the frame-rate noise.
+
+The replay runs on the first VU1 program after start-up, so the game has to boot that far; nothing is drawn or heard.
 
 ## Reducing a regression
 

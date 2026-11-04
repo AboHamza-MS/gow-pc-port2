@@ -48,7 +48,7 @@ build_jobs() {   # build_jobs CORES MEM_GB -> the number of processes
 }
 MEM_GB="$(awk '/MemTotal/ {print int($2 / 1048576)}' /proc/meminfo 2>/dev/null || echo 8)"
 JOBS="$(build_jobs "$(nproc 2>/dev/null || echo 4)" "$MEM_GB")"
-MIN_FREE_GB=30
+MIN_FREE_GB=20
 MIN_MEM_GB=4
 RECOMMENDED_MEM_GB=8
 
@@ -304,6 +304,10 @@ fi
 grep -q "SCUS_973.99" "$GAME/SYSTEM.CNF" 2>/dev/null || error "game/ is not God of War USA (SCUS-97399): SYSTEM.CNF does not boot SCUS_973.99."
 # GOW-Port: a correct file name does not identify the executable's revision.
 "$TOOLS" verify-elf "$GAME/SCUS_973.99" --map "$PROFILE/funcmap.csv"
+# GOW-Port (R5): the memory card is created already formatted (like a BIOS-formatted card); an existing one is never touched.
+if [ ! -e "$GAME/Mcd001.ps2" ]; then
+    "$TOOLS" mc-format "$GAME/Mcd001.ps2" || echo "warning: could not create the memory card; the game will start with a blank one."
+fi
 mkdir -p "$GAME/IOP_MOD"
 for f in "$GAME"/*.IRX; do
     n="$(basename "$f")"
@@ -345,6 +349,17 @@ configure() {
     if compgen -G "$VU1/*.bin" >/dev/null; then
         extra+=("-DPS2X_VU1_MICROCODE_DIR=$VU1" "-DPS2X_VU1_GENERATOR_SOURCE=$NATIVE/tools/vu1/generate_vu1.cpp"
                 "-DPS2X_TOOLS_EXE=$TOOLS")
+        # GOW-Port: CMake reads vu1n_heads.txt next to the microcode folder: the profile's list plus the block entries the
+        # game reached without native code while capturing (vu1n_heads_seen.txt, written by the runtime). It was never
+        # written here, so on Linux the blocks entered through a register jump ran in the interpreter. Rewritten only when
+        # the list changes, so an unchanged list does not rebuild the VU1 code.
+        local heads_target merged
+        heads_target="$(dirname "$VU1")/vu1n_heads.txt"
+        merged="$(cat "$PROFILE/vu1-heads.list" "$VU1/vu1n_heads_seen.txt" 2>/dev/null | tr -d '\r' | tr 'A-F' 'a-f' \
+            | grep -E '^[0-9a-f]+$' | sed 's/^0*\([0-9a-f]\)/\1/' | sort -u)"
+        if [ -n "$merged" ] && [ "$(cat "$heads_target" 2>/dev/null)" != "$merged" ]; then
+            printf '%s\n' "$merged" > "$heads_target"
+        fi
     fi
     cmake -S "$NATIVE" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
         -DPS2X_ENABLE_RUNTIME_LOGS=OFF -DPS2X_ENABLE_AGRESSIVE_LOGS=OFF -DPS2X_ENABLE_IOP_RPC_TRACE=OFF \
@@ -385,6 +400,7 @@ if [ "$OPTIMIZE" = "yes" ] || { [ "$OPTIMIZE" = "auto" ] && ! compgen -G "$VU1/*
     mkdir -p "$VU1" "$GEN/iop_mods"
     (cd "$NATIVE" && env GOW_VU1_CAPTURE="$VU1" PS2X_IOP_DUMP_MODULES="$GEN/iop_mods" GOW_SKIP_FMV=1 \
         GOW_PAD_TEST=1 GOW_PAD_TEST_NO_CAPTURE=1 GOW_MC0="$GEN/optimize.ps2" PS2X_GS_WORKER=1 GOW_GS_FINISH_ASYNC=1 \
+        PC_CHEATS=god_mode \
         GOW_PAD_SCRIPT="5:start,12:x,20:x,28:x,40:square,41:square,42:square,44:triangle,48:lup*3,52:x,55:square,56:triangle,60:circle,64:r1,70:lleft*2,74:square,76:square,80:triangle,90:lup*4,96:x,100:square,104:l1,110:lright*2,120:square,125:triangle,140:lup*5,150:square,160:triangle,180:lup*5,200:square" \
         timeout "$SECONDS_TO_RUN" "$BUILD/ps2xRuntime/gow-2005" "$GAME/SCUS_973.99" > "$GEN/optimize.log" 2>&1) || true
     echo "VU1: $(ls "$VU1"/*.bin 2>/dev/null | wc -l) micro-memories; IOP: $(ls "$GEN"/iop_mods/*.bin 2>/dev/null | wc -l) modules."

@@ -118,7 +118,13 @@ If you prefer the original timing, turn the switch off.
 - Loading and saving were verified end to end (list with thumbnails, "Load Complete", overwrite, "Save Complete").
 - The `mc0/` folder next to `SCUS_973.99` holds the few `mc0:` file operations the game performs outside the card
   image. It is created automatically.
-- Creating a save on a **blank** card (formatting it) has not been verified: start from a PCSX2-formatted card.
+- The installer creates the card **already formatted** when there is none (an existing card is never replaced).
+  Formatting a blank card from inside the game has not been verified, so avoid copying in a blank card.
+- Before the first save of each session the card is copied to **`Mcd001.ps2.bak`**: if a crash or a power loss cuts a
+  save, close the game and rename the `.bak` back to `Mcd001.ps2`.
+- A card file of the wrong size (cut, empty, or a 16/32 MB card) is never written over: it is renamed to
+  `Mcd001.ps2.unusable` and the game gets a blank card. `ps2-tools mc-check Mcd001.ps2` checks a card, and
+  `ps2-tools mc-format <file>` creates a formatted one.
 
 ## Custom textures
 
@@ -132,8 +138,9 @@ the game starts.
 
 - The account password is **not** stored with the settings: it goes to the Windows Credential Manager. On Linux the
   password store is not implemented yet, so the sign-in cannot be saved there.
-- The game is identified from your original ISO, or from an unmodified `SCUS_973.99`; translated or patched ISOs are not
-  recognized.
+- RetroAchievements only recognises the original USA disc. With a modified disc (a translation, an undub or a mod,
+  including one made with the wizard's `.xdelta` option) the game plays normally, but the Achievements tab says so and
+  nothing is sent.
 - **Hardcore mode** is required for hardcore achievements and **disables every cheat** (the cheat list is not even sent
   to the game).
 - In-game notifications can be switched off.

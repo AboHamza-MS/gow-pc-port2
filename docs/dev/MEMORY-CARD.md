@@ -46,9 +46,19 @@ With a copy of a PCSX2 card that holds a save, the load menu lists saves with th
 play time, and loading ends in "Load Complete" at the save point. Saving (including overwriting) ends in "Save Complete",
 the file system stays valid and the port loads the new save afterwards.
 
+## Creating and protecting the card
+
+- `ps2-tools mc-format` (`crates/ps2-tools/src/memcard.rs`) writes a formatted, empty card: superblock, indirect FAT
+  cluster 8, FAT clusters 9–40, root directory at cluster 41 with `.` and `..`. The superblock, the indirect FAT cluster and
+  the FAT match a card the PS2 BIOS formatted in PCSX2 (`GOW_TEST_PCSX2_CARD=<card> cargo test -p ps2-tools` compares
+  them). The installers run it when `Mcd001.ps2` does not exist.
+- `memory_card.cpp` creates a missing card through `<card>.tmp` and a rename, copies an existing card to `<card>.bak`
+  (through a temporary too) before the first write of each session, and moves a card of the wrong size to
+  `<card>.unusable` instead of writing pages over it. `native/tests/memory_card_test.cpp` covers the three.
+
 ## Not verified
 
-- **Formatting a blank card.** Start from a card PCSX2 formatted.
+- **The game formatting a blank card.** The installer avoids it by creating the card formatted.
 - **PCSX2 opening a card written by the port** (the reverse direction) was not checked recently.
 - Card sizes other than 8 MB, and the second slot.
 

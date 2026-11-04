@@ -93,6 +93,9 @@ arrives as `GOW_SHARPEN` and the render scale as `PS2X_GS_HW_SCALE`.
 |---|---|
 | `GOW_PERF_DIAG=1`, `GOW_PERF_FRAME_PC=<pc>` | `[gow-perf]` per-second split: EE, VU1, GS, upload, flip rate |
 | `GOW_DELTA_DIAG=1` | `[gow-speed]` game time vs wall time (see [`../PERFORMANCE.md`](../PERFORMANCE.md)) |
+| `GOW_FRAMES_HITCH_LOG=1` | `[gow-frames] stutter of N ms at t=...` for every game frame over 50 ms (alone, without the 5 s report) |
+| `GOW_GAP_DIAG=<ms>` | `[gow-gap]` when two guest function entries are more than `<ms>` apart: the pc entered before the gap (where the time went) |
+| `GOW_LOG_DIRECT=1` | Write stdout/stderr straight to the files again. By default (0.3.0) they go through a pipe and a writer thread, because a direct write could stall the game for 50-100 ms |
 | `GOW_SAMPLING=1` | Periodic subsystem sampling (`ps2-dev perf-summary` parses it) |
 | `GOW_VU1_STATS=1`, `GOW_VU1N_DIAG=1`, `GOW_VU1_BUDGET_DIAG=1` | VU1 native/interpreted coverage, native block hits |
 | `GOW_GS_HW_STATS=1`, `GOW_GS_HW_PROFILE=1`, `GOW_GS_QUEUE_DIAG`, `GOW_GS_PRESENT_PHASE_DIAG` | GS backend counters and queue timing |

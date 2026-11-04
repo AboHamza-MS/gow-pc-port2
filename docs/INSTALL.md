@@ -20,12 +20,34 @@ PS2. On Windows a launcher does all of it for you, and two installer scripts cov
 | | |
 |---|---|
 | **Game** | Your own *God of War* (USA, `SCUS-97399`) disc image (`.iso`, about 8 GB). Rip it from your own disc with any DVD tool. Please don't pirate it |
-| **Disk** | About **30 GB** free (the extracted disc is about 8 GB, the build a few more) |
+| **Disk** | About **20 GB** free while installing (the ISO and the extracted disc are about 8 GB each, the build and the compiler about 2 GB); about 11 GB stay once the ISO is deleted |
 | **CPU** | 64-bit x86 with **SSE4.1** (Intel Core 2 "Penryn", 2008, or newer; AMD "Bulldozer", 2011, or newer; the AMD Phenom II does not have it), 4 cores or more recommended. AVX2 is **not** required by the shipped build |
 | **RAM** | 8 GB (16 GB recommended while building) |
 | **GPU** | OpenGL 4.3 or newer (the renderer asks for 4.6 first and falls back down to 4.3; 4.6 is the tested path): any recent NVIDIA/AMD card, or the integrated graphics of a recent Intel/AMD CPU |
 | **OS** | Windows 10/11 x64, or Linux: Arch/CachyOS, Ubuntu 24.04+, Fedora 40+ or similar (**experimental**, see above) |
-| **Time** | The first build takes **30–90 minutes** depending on the CPU. Later updates only rebuild what changed |
+| **Time** | Windows: the first build takes **about 10–20 minutes** (10 on a 6-core Core i5-12400F, longer on 4 cores), plus a few minutes for the disc and a 170 MB compiler download. Linux (g++, not measured on 0.3.0): 30–90 minutes. Later updates only rebuild what changed |
+
+### Modified discs, patches and other editions
+
+- **Modified discs** (a translation, an undub, a texture or other data mod) work when they kept the game's code: the
+  wizard checks the code section of the executable (`.text`) against the USA disc, says "modified disc recognized", and
+  installs it like the original.
+  RetroAchievements stay off with any disc other than the original USA image, because they only recognise that one.
+- **Patches shipped as an .xdelta file** (translations, undubs, texture and other data mods) are applied by the wizard
+  itself. With the original ISO chosen, tick **Apply a patch (.xdelta)**, choose the patch and press **Apply patch**: the
+  patched ISO is created in the same folder (about 8 GB more), checked like any ISO, and used for the installation. The original ISO is only read,
+  and **Use the original** goes back to it. A patch made for another disc stops at the first block, a patch that changes
+  the game's executable (widescreen hacks, cheats, code fixes) is refused, because the port runs the USA disc's own code,
+  and either way nothing is left behind. The option is not shown for an ISO that is already modified. Patches made with secondary compression (`xdelta3 -S djw|fgk|lzma`) are not supported: ask for one made
+  with `xdelta3 -S none`. Without the launcher, the same decoder runs from the command line:
+
+  ```
+  bin\ps2-tools.exe xdelta-apply patch.xdelta "God of War (USA).iso" "God of War (patched).iso"
+  ```
+- **Other regions and demos** (Japan `SLPM-67010`, Europe `SCES-53133`/`SCES-51533`, Asia `SCAJ-30010`, the USA and
+  Europe demos) are recognised and named, but not supported yet: their code is different from the USA disc's.
+- **Mods that change the code** (an executable with a different `.text`) are refused, because the port is built for the
+  USA code.
 
 The installation folder must not contain accents or special characters (the launcher enforces this; the Windows
 installer works around it by moving the generated code to `%SystemDrive%\PCGen`).
@@ -40,12 +62,12 @@ installer works around it by moving the generated code to `%SystemDrive%\PCGen`)
 2. Open the launcher. The **setup wizard** starts by itself:
    1. **ISO**: it looks for your ISO and verifies it. If it can't find the file, drop it on the window or use
       **Browse**.
-   2. **Location**: where the game goes (`C:\Users\<you>\GodOfWar-PC` by default), ASCII path, 30 GB free.
-   3. **Components**: only if something is missing. Visual Studio 2022 Build Tools (C++, about 6 GB, asks for
-      administrator permission, 15–30 minutes) and portable Git (about 50 MB, stays inside the install folder). CMake and
-      Ninja are never asked for: when the PC has no usable CMake (3.21 or newer, with `cmcldeps.exe`) or no Ninja, the
-      installer downloads portable ones (about 45 MB, SHA-256 checked) into the install folder, without administrator
-      permission. The C++ compiler is the only part that must come from Visual Studio.
+   2. **Location**: where the game goes (`C:\Users\<you>\GodOfWar-PC` by default), ASCII path, 20 GB free.
+   3. **Components**: since 0.3.0 there is nothing to install by hand. The game is built with a portable clang
+      ([llvm-mingw](https://github.com/mstorsjo/llvm-mingw), about 170 MB, SHA-256 checked) that the installer downloads into
+      the install folder, without administrator permission and without Visual Studio. CMake, Ninja and Git are handled the
+      same way when the PC has no usable ones. The step only appears for an old kit without the prebuilt tools (`bin\`),
+      which still needs Visual Studio 2022 Build Tools.
    4. **Install**: a progress bar and a cancel button. Finished steps are kept, so you can cancel and resume later.
 3. Press **PLAY**. Check **Files** once: the executable, the runner and the memory card should all be detected.
 
@@ -58,8 +80,8 @@ settings and the game are kept. Details: [`LAUNCHER.md`](LAUNCHER.md#updating-th
 
 **Game fixes after a launcher update.** The game itself is not replaced by a launcher update: it is a build made on your
 PC. When the new launcher carries game fixes your build lacks, **Performance** shows a **Rebuild now** note. The rebuild
-reuses what is already built, so it is much shorter than the first installation, but it can still take over an hour when a
-fix changes a header the whole game includes. Until it finishes you keep playing the current build. Details:
+reuses what is already built, so it usually takes a few minutes; a fix that changes a header the whole game includes
+rebuilds everything, which takes about as long as the first build (10–20 minutes on Windows). Until it finishes you keep playing the current build. Details:
 [`LAUNCHER.md`](LAUNCHER.md#performance).
 
 ## Windows: the portable zip
@@ -102,7 +124,10 @@ install.cmd -Destination "D:\GodOfWar"               # keep the game data and th
 |---|---|
 | `-Iso <file>` | The disc image. Without it, the first `.iso` in `game\` and then in the repository root is used |
 | `-Destination <folder>` | Where `game\`, `build\`, `build-gen\` and `vu1_captures\` go. The generated C++ still lands in the repository |
-| `-InstallTools` | Downloads Microsoft's Build Tools installer (signature checked) and installs the C++ workload, when Visual Studio is missing. A missing or unusable CMake or Ninja is not a reason: portable ones are downloaded first |
+| `-Compiler clang\|msvc` | `clang` (default since 0.3.0): the portable llvm-mingw, downloaded into the install folder; no Visual Studio is needed when prebuilt `ps2_recomp` / `ps2-tools` are available (the launcher's kit, or `-RecompExe` / `-ToolsExe`), otherwise Visual Studio's linker builds them with cargo. `msvc`: the Visual Studio compiler, as before 0.3.0 |
+| `-Pgo auto\|on\|off` | Speed profile (clang only). `auto` (default): use the profile this PC already trained, if any. `on`: train it when missing (the game opens by itself for the optimization run, then a second build uses it). `off`: never. The profile is made on your PC from your game and is never distributed |
+| `-RetrainPgo` | Train the speed profile again even when one exists |
+| `-InstallTools` | Downloads Microsoft's Build Tools installer (signature checked) and installs the C++ workload, when Visual Studio is missing and needed (`-Compiler msvc`, or the Rust tools must be built). A missing or unusable CMake or Ninja is not a reason: portable ones are downloaded first |
 | `-NoOptimize` / `-Optimize` | Skip / force the optimization pass (see below) |
 | `-Seconds <n>` | Duration of the optimization run (default 240 s) |
 | `-Jobs <n>` | Parallel compiler processes. Default: the logical processors minus a reserve (2 from 8 processors, 1 from 4 to 7, none below), at most one per 2 GB of RAM. An explicit value skips the reserve |
@@ -139,7 +164,7 @@ install.cmd -Destination "D:\GodOfWar"               # keep the game data and th
    Xi, xkbcommon, Wayland, ALSA). Rust is only needed if you do not have prebuilt tools in `bin/` (see below). Python
    is **not** needed.
 
-   Before building, it also checks the free space of the destination (about 30 GB; only a warning once the disc is
+   Before building, it also checks the free space of the destination (about 20 GB; only a warning once the disc is
    already extracted) and the RAM (4 GB at least, a warning under 8 GB). `GOW_SKIP_RESOURCE_CHECK=1` skips both.
 
 2. Put your ISO in `game/God of War.iso` or pass its path.
@@ -216,6 +241,13 @@ git pull
 ```
 
 Only changed files are rebuilt. The extracted game, the recorded VU1/IOP code and your memory card are kept.
+
+**From 0.2.9 or older to 0.3.0 (Windows).** 0.3.0 compiles the game with clang instead of Visual Studio, so an old build
+cannot be updated file by file. The launcher says so (a notice on the home screen and in **Performance**) and, when you
+press **Delete and rebuild**, moves the old `build` folder aside, compiles the game from scratch and deletes the old one
+once the new build works. If the new build fails, the old one is put back. You can keep playing the current version
+meanwhile. Your saves and the memory card (`game/Mcd001.ps2`, `game/mc0/`) are outside the `build` folder and are never
+touched. With the installer script alone, `install.cmd` reconfigures the old folder for clang by itself.
 
 ## Removing the installation
 

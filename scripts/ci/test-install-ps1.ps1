@@ -19,10 +19,12 @@ function Expect([string]$what, $expected, $actual) {
 
 . ([scriptblock]::Create((Get-ScriptFunction 'Get-BuildJobs')))
 Write-Host 'build jobs: cores, RAM in GB -> jobs'
-# (cores, RAM, expected): the reserve is 2 from 8 logical processors, 1 from 4, 0 below; one job per 2 GB; never below 1.
+# (cores, RAM, expected): the reserve is 2 from 8 logical processors, 1 from 4, 0 below; one job per GB above 3 GB or one per
+# 2 GB, whichever is more; never below 1.
 $jobCases = @(
-    @(16, 32, 14), @(8, 32, 6), @(6, 16, 5), @(4, 16, 3), @(2, 16, 2), @(16, 8, 4), @(1, 4, 1),
-    @(12, 16, 8), @(7, 64, 6), @(3, 64, 3), @(4, 2, 1), @(8, 1, 1), @(32, 128, 30), @(2, 2, 1)
+    @(16, 32, 14), @(8, 32, 6), @(6, 16, 5), @(4, 16, 3), @(2, 16, 2), @(16, 8, 5), @(1, 4, 1),
+    @(12, 16, 10), @(7, 64, 6), @(3, 64, 3), @(4, 2, 1), @(8, 1, 1), @(32, 128, 30), @(2, 2, 1),
+    @(8, 8, 5), @(4, 4, 2), @(12, 12, 9), @(16, 6, 3)
 )
 foreach ($c in $jobCases) { Expect "$($c[0]) cores, $($c[1]) GB" $c[2] (Get-BuildJobs $c[0] $c[1]) }
 
@@ -70,6 +72,20 @@ if ($env:ComSpec -and (Test-Path -LiteralPath $env:ComSpec)) {
 } else {
     Write-Host '  skip the live loader check (no Windows command interpreter on this system)'
 }
+
+# GOW-Port: PowerShell names ignore case, so `$compiler = ...` inside a function hid the -Compiler parameter and the clang
+# build silently used MSVC. No function of install.ps1 may assign a variable named like one of the script's parameters.
+Write-Host 'parameters: no function assigns a variable of the same name (names ignore case)'
+$parameters = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+$shadows = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object {
+        $function = $_
+        $function.Body.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                $n.Left -is [System.Management.Automation.Language.VariableExpressionAst] }, $true) | ForEach-Object {
+            $name = $_.Left.VariablePath.UserPath
+            if (-not $_.Left.VariablePath.IsScript -and ($parameters | Where-Object { $_ -ieq $name })) { "$($function.Name): `$$name" }
+        }
+    })
+Expect 'no parameter is shadowed' '' ($shadows -join ', ')
 
 if ($failures -gt 0) { Write-Host "$failures test(s) failed"; exit 1 }
 Write-Host 'all passed'

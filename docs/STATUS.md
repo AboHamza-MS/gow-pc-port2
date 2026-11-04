@@ -58,10 +58,10 @@ Last reviewed: October 2026, against the code in this repository.
 | Camera | The camera is scripted by the game and cannot be locked or moved freely; the target lock only aims attacks |
 | Second controller | Port 2 is not connected |
 | Custom textures | Textures read through a CLAMP region and textures sampled from render targets are not replaced; there is no texture dump |
-| Blank memory card | Creating a save on a card that was never formatted was not verified; start from a PCSX2 card |
+| Blank memory card | The game's own formatting of a blank card was not verified. Since 0.3.0 the installer creates `Mcd001.ps2` already formatted (laid out like a BIOS-formatted card), so this path is only reached with a blank card copied in by hand |
 | RetroAchievements | The account password is stored in the Windows Credential Manager only; on Linux the sign-in cannot be saved. Hardcore mode disables all cheats |
 | Second language | Only English and Brazilian Portuguese; the game's own text is untouched |
-| Disc | Only the USA release (`SCUS-97399`) is supported. Translated, patched or other-region discs are rejected on purpose |
+| Disc | Only the USA release (`SCUS-97399`) and discs modified without changing its code (translations, undubs, data mods, also applied from an `.xdelta` patch in the wizard). Other regions and demos are named but not supported; discs whose executable changed are rejected |
 
 ## Open problems
 
@@ -76,6 +76,12 @@ Last reviewed: October 2026, against the code in this repository.
 - **Portable zip:** assembled by the release workflow (the launcher, its `kit/` and a README), and the workflow checks
   that the kit is complete. It has not been run from a published release yet, so the first one is its first test. It
   does not remove the SmartScreen warning by itself: the executable is still unsigned (see [`INSTALL.md`](INSTALL.md#windows-the-portable-zip)).
+- **Clang build (0.3.0):** the default Windows build moved from MSVC to a portable clang (llvm-mingw) with an optional
+  speed profile trained on the player's PC. It has been built and played on one development PC only. Against the MSVC
+  build it gives steadier frames (p95 17.9 → 17.0 ms in the reference fight, less than half the IOP time). A hitch every
+  5 s that only the clang build had (writing a log line cost the game 50-100 ms) is fixed: the log now goes through its
+  own writer thread (`GOW_LOG_DIRECT=1` restores the old path). An installation without Visual Studio on a clean PC has
+  not been verified yet. `install.cmd -Compiler msvc` keeps the previous build.
 - **Coverage of areas:** no systematic play-through validation exists. Zones beyond the ones tested while developing the
   port may still show visual or audio defects.
 
