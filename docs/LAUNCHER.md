@@ -42,7 +42,7 @@ A pack applies the next time the game starts. [`TEXTURES.md`](TEXTURES.md) expla
 | Graphics card | Automatic | On Windows: Power saving (integrated) or High performance (dedicated); on Linux the launcher sets the PRIME variables. The game always renders on the card that drives the window, so a dedicated GPU is much faster |
 | FPS limit | 60 | The game's real frame rate. 60 is the native rate; **120 and 240 are experimental**: the game logic runs at that rate with the game kept at normal speed (smoother, never faster). The window refreshes at the monitor's rate. Settings from older versions go back to 60 once |
 | Vertical sync | Off | Prevents tearing; locks the presentation to the display refresh |
-| FPS counter | Off | Shows game and window frame rates in a corner |
+| FPS counter | Off | Shows the game's real frame rate in a corner (never above the FPS limit) |
 | Background optimization | On | Recompiles the parts of the game you have reached, in the background, after you close the game |
 | Also while playing | **Off** | Rebuilds with the game open. It competes for the CPU and freezes the picture for tens of seconds, so leave it off unless you are debugging |
 | Optimize now | - | Runs one optimization pass immediately |

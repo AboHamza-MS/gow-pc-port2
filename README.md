@@ -40,7 +40,8 @@
 is then compiled into a normal PC program. The PlayStation 2 hardware around it (graphics synthesizer, vector unit, I/O
 processor, sound, pad, memory card) is implemented natively. Nothing interprets the game's code at run time.
 
-On top of that you get the original 60 Hz game logic, an OpenGL renderer with 1×–6× internal resolution, native movies
+On top of that you get the original 60 Hz game logic (or an experimental 120/240 FPS limit at the same speed), an
+OpenGL renderer with 1×–6× internal resolution, native movies
 with sound, a launcher with settings, keyboard and mouse support, a cheat menu, target lock, widescreen, custom texture
 packs and RetroAchievements.
 

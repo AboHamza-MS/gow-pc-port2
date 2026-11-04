@@ -30,7 +30,7 @@ flowchart TB
     LAUNCHER["launcher<br/>settings as env vars"] -. "at startup" .-> EE
     EE -- "DMA packets" --> VIF
     EE <-- "SIF RPC" --> R3000
-    GS -- "frames + scaling" --> PRESENT["presentation<br/>window / FPS mode"]
+    GS -- "frames + scaling" --> PRESENT["presentation<br/>window at the display's rate"]
     SND -- "48 kHz stereo ring" --> AUDIO["host audio device"]
 ```
 

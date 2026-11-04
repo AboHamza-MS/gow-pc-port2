@@ -89,7 +89,8 @@ The replay runs on the first VU1 program after start-up, so the game has to boot
 - If `gs_ms`/`upload_ms` grew: the GS backend or the packet path changed.
 - If `ee_ms` grew: a hot override or a syscall got heavier (`getenv` in a hot loop is the classic case; read the
   variables once into statics).
-- If the frame time is fine but the window is slow: presentation (scaling, vsync, FPS mode).
+- If the frame time is fine but the window is slow: presentation (scaling, vsync, `GOW_PRESENT_MIN_INTERVAL_US`);
+  `GOW_FRAME_PACING_DIAG=1` counts the new frames that reach the screen (`new`, `skipped`).
 
 Profiling per function: `GOW_SAMPLING=1` plus `ps2-dev sampling` (Linux, with `nm`) or `sampling-win` (Windows, with
 the linker map: configure with `PS2X_MAP=ON`). The sampler executable itself is built from
@@ -108,6 +109,9 @@ Two tools reproduce parts of the frame deterministically:
 
 - Measuring with logs on (`PS2X_ENABLE_RUNTIME_LOGS=ON`) or with a `-FastDev` build: numbers are not comparable.
 - Measuring while another build, another game or a video call is running.
-- Trusting the window FPS: the game is capped at 60 Hz while the window can run at 120/144.
+- Trusting the window rate: the window refreshes at the display's rate (144 Hz on the test PC) whatever the game does.
+  Use `guest_flip_hz` for the game and `GOW_FRAME_PACING_DIAG=1` for what reaches the screen.
+- Comparing FPS limits without `game_s/host_s` (`GOW_HFPS_DIAG=1`): above 60 the game must still run at real-time
+  speed (1.00 while playing; loading screens read lower).
 - Comparing scenes with different enemy counts: VU1 cost follows what is on screen.
 - Forgetting the power profile: on laptops it can halve the frame rate by itself.

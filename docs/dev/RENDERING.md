@@ -74,7 +74,8 @@ on their own through the queue. Without it, FINISH waits for the GPU.
 cutting the picture to the game's 448-line TV area, and either publishes it as a shared GL texture
 (`GSSharedPresent`, the default; no readback) or reads it back for `GSHostPresentation::prepare` to upload.
 `GSSharedPresent::Acquire` shows completed frames in order, one per window refresh, jumping to the newest only when
-more than three are queued; `GOW_PRESENT_MIN_INTERVAL_US` (default 15000, the launcher sets 0 for the 120/144 modes)
+more than three are queued; `GOW_PRESENT_MIN_INTERVAL_US` (default 15000; the launcher sets 80 % of a frame at the FPS limit, 13333 at 60, so that
+60 FPS still advances every second refresh of a 144 Hz display)
 keeps a burst from being shown faster than real time, and `GOW_SHARED_WAIT_US` (0 by default) bounds the wait for a
 frame that is microseconds from completing. `GOW_PRESENT_FIFO=0` selects "show the newest frame" instead.
 `GSThreadedBackend::Present` skips the presentation (the window repeats the last frame) when the queue is full;
@@ -121,9 +122,13 @@ internal scale and stretched to the window, so the horizontal detail per degree 
 is advisable at 32:9); and with the menu background showing, `F = 1/A` crops the picture vertically, which at 32:9 keeps
 only about 37 % of the original height.
 
-**Frame-rate limits.** `PC_GAME_FPS` selects the game's 30 or 60 Hz logic rate. `PC_WINDOW_FPS` (60 by default, 0
-unlimited, clamped to 30–360) sets the host loop's `SetTargetFPS`; `PC_VSYNC=1` requests the vsync hint instead. The
-120 and 144 FPS modes only change how fast the window refreshes.
+**Frame-rate limits.** `PC_GAME_FPS=30` caps the game at 30. `PC_LOGIC_FPS=<120|144|165|240>` (experimental, unset by
+default) runs the game logic at that rate (`src/game/gow_logic_rate.cpp`: the frame end waits for 1/N s slots of guest
+time and the time step floor becomes 60/N fields, so the game keeps real-time speed); the launcher's FPS limit
+(60 / 120 / 240) sets it. With it, `GSHostPresentation::prepare` latches a new picture on each game buffer swap
+(`gowGameFlipCount`, counted by the display setup) and on the VBlank only after two VBlanks without a swap; at 60 it
+latches on each VBlank. `PC_WINDOW_FPS` (60 by default, 0 unlimited, clamped to 30–360) sets the host loop's
+`SetTargetFPS`; the launcher passes the display's refresh rate. `PC_VSYNC=1` requests the vsync hint instead.
 
 ## 3. Texture replacement
 

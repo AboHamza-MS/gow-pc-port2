@@ -1,6 +1,6 @@
 # Performance
 
-## The 60 Hz rule
+## Real-time speed and the FPS limit
 
 *God of War* is built around the PlayStation 2's 60 Hz vertical blank: its logic, animations, physics and scripts tick
 60 times per second. The port keeps the game at real-time speed: it never runs faster than on a PS2, and it never runs
@@ -77,6 +77,7 @@ To compare builds or settings:
 - Use a **Release** build (`install.cmd` without `-FastDev`, or `./install.sh`). Development builds have logs on and
   are slower; numbers from them do not transfer.
 - Do not measure while anything else is compiling, and keep the laptop on the performance profile.
-- Prefer the game-frame rate (`FPS` in the counter, or `[gow-perf]` lines with `GOW_PERF_DIAG=1`) over the window rate.
+- Read the game's frame rate (the one number in the counter, or `[gow-perf]` lines with `GOW_PERF_DIAG=1`), not the
+  window rate: the window always refreshes at the monitor's rate.
 
 The developer-side procedure and the available counters are in [`dev/PERFORMANCE.md`](dev/PERFORMANCE.md).

@@ -41,7 +41,8 @@ Rust e depois compilado como um programa de PC comum. O hardware do PlayStation 
 unidade vetorial, processador de I/O, som, controle, cartão de memória - é implementado de forma nativa. Nada
 interpreta o código do jogo em tempo de execução.
 
-O resultado é o jogo na lógica original de 60 Hz, com renderizador OpenGL de 1× a 6× de resolução interna, vídeos
+O resultado é o jogo na lógica original de 60 Hz (ou num limite experimental de 120/240 FPS na mesma velocidade), com
+renderizador OpenGL de 1× a 6× de resolução interna, vídeos
 nativos com som, um launcher com ajustes, teclado e mouse, menu de cheats, mira travada, widescreen, packs de texturas
 personalizadas e RetroAchievements.
 
