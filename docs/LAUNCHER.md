@@ -15,7 +15,7 @@ If you just want to play, set **Graphics → render resolution 2×** and **Perfo
 |---|---|---|
 | Display mode | Fullscreen | Fullscreen or windowed. **F11** toggles it in game |
 | Widescreen (Hor+) | On | PCSX2's widescreen patch: widens the camera to the sides at the chosen aspect. Off gives you the game's original 4:3 picture, with side bars in a wide window |
-| Aspect ratio | Your display's | 4:3, 16:9, 16:10 or 21:9 (ultrawide, experimental) |
+| Aspect ratio | Your display's | 4:3, 16:9, 16:10, 21:9 (ultrawide, experimental) or 32:9 (super ultrawide, very experimental). 32:9 is picked by default on displays such as 5120×1440 and 3840×1080. At 32:9 the HUD is stretched across the whole width and a higher internal resolution (3× or more) keeps the image sharp |
 | Resolution | Native | Fullscreen always uses the display's native mode; this is the initial window size |
 | Graphics preset | Balanced | **Performance** (1×, Bilinear, no FXAA), **Balanced** (2×, Bilinear, FXAA) or **Quality** (3×, Bicubic at 0.8, FXAA). It sets only render resolution, upscaling, sharpness and FXAA, and shows **Custom** as soon as you change one of them by hand. It changes how heavy the picture is for your graphics card, not the speed of the game itself |
 | Render resolution | 2× | Internal render scale, 1× to 6×. 2× is recommended: **from 3× up the game gets heavy**, and 4×–6× are experimental |

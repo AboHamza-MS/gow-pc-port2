@@ -4,8 +4,9 @@
 // the fewest possible changes to its files, the PC port's functions are wired in:
 //   - Launcher window: PC_WIDTH / PC_HEIGHT (or GOW_WINDOW=<w>x<h>), PC_SCREEN=completa
 //     (F11 toggles it), PC_VSYNC=1, PC_TITLE, PC_ICON, PC_ESC_QUITS=0, PC_WINDOW_FPS.
-//   - Image aspect ratio: PC_ASPECT ("stretch", "4:3", "21:9"...) and the widescreen switch, whose aspect comes in
-//     PC_WIDESCREEN; with neither, the original 4:3 picture.
+//   - Image aspect ratio: PC_ASPECT ("stretch", "4:3", "21:9", "32:9"...) and the widescreen switch, whose aspect comes in
+//     PC_WIDESCREEN (4:3 < aspect <= 4.0, so up to 32:9; 21:9 and 32:9 are experimental); with neither, the original 4:3
+//     picture.
 //   - Widescreen Hor+ (PC_WIDESCREEN=A, the launcher's "Widescreen" switch): the projection reads the factor from 0x7F00
 //     (patch in games/scus-97399/gow-port.toml) and it is written here every VBlank. With the switch off the game stays
 //     in its original 4:3 mode (gow_pad2.cpp does not force its own widescreen) and F = 0.75, so F * aspect is exactly 1:
@@ -34,6 +35,7 @@
 #include <cwchar>
 #include <mutex>
 #include <vector>
+#include "gow_aspect.h" // GOW-Port: PC_ASPECT / PC_WIDESCREEN parsing (testable without the game)
 #include "gow_osd.inl" // GOW-Port: MSI Afterburner-style performance OSD (GS FPS, GPU, CPU, RAM)
 #if defined(_WIN32)
 #include <fcntl.h>
@@ -169,14 +171,8 @@ namespace
         return std::clamp(std::strtol(value, nullptr, 10), low, high);
     }
 
-    float parseAspect(const char *value)
-    {
-        float width = 0.0f, height = 0.0f;
-        if (std::sscanf(value, "%f:%f", &width, &height) == 2 && width > 0.0f && height > 0.0f)
-            return width / height;
-        const float aspect = std::strtof(value, nullptr);
-        return aspect >= 0.5f && aspect <= 4.0f ? aspect : 0.0f;
-    }
+    // GOW-Port: the parsing and the 4:3..4.0 range (32:9 included) are in gow_aspect.h, tested without the game.
+    float parseAspect(const char *value) { return gowaspect::parseAspect(value); }
 
     bool escClosesGame()
     {
@@ -383,14 +379,7 @@ namespace
 // game must not be put in the widescreen mode it uses with vertical cropping.
 float gowWidescreenAspect()
 {
-    static const float aspect = []
-    {
-        const char *value = std::getenv("PC_WIDESCREEN");
-        if (!value || !*value)
-            return 0.0f;
-        const float result = parseAspect(value);
-        return result > 4.0f / 3.0f + 0.02f && result <= 4.0f ? result : 0.0f;
-    }();
+    static const float aspect = [] { return gowaspect::widescreenAspect(std::getenv("PC_WIDESCREEN")); }();
     return aspect;
 }
 

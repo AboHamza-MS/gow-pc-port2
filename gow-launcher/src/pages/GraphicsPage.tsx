@@ -22,6 +22,7 @@ const COMMON_RESOLUTIONS: Array<[number, number]> = [
   [1152, 648], [1280, 720], [1366, 768], [1600, 900], [1920, 1080], [2560, 1440], [3200, 1800], [3840, 2160],
   [1280, 800], [1440, 900], [1680, 1050], [1920, 1200], [2560, 1600], [3840, 2400],
   [2560, 1080], [3440, 1440], [3840, 1600], [5120, 2160],
+  [3840, 1080], [5120, 1440], [7680, 2160],
 ];
 
 /** "Native (PS2)" for 1×, "4× Native (~1440px/QHD)" for the rest, plus the default marker. */
@@ -38,8 +39,9 @@ function aspectRatio(aspect: string, display: DisplayInfo): number {
 }
 
 /** Closest aspect the port offers for this display (`DisplayInfo::default_aspect_ratio` on the Rust side). */
-function closestAspect(display: DisplayInfo): string {
+export function closestAspect(display: DisplayInfo): string {
   const ratio = display.widthPx / Math.max(1, display.heightPx);
+  if (ratio >= 3.0) return '32:9';
   if (ratio >= 2.2) return '21:9';
   if (ratio >= 1.7) return '16:9';
   if (ratio >= 1.5) return '16:10';
@@ -146,11 +148,17 @@ export function GraphicsPage() {
             { text: t('aspect169') + screenTag(16 / 9), value: '16:9' },
             { text: t('aspect1610') + screenTag(16 / 10), value: '16:10' },
             { text: t('aspect219') + screenTag(21 / 9), value: '21:9' },
+            { text: t('aspect329') + screenTag(32 / 9), value: '32:9', detail: t('aspect329Detail') },
           ]}
           value={settings.aspectMode}
           onChange={changeAspect}
         />
       </SettingRow>
+      {settings.widescreen && settings.aspectMode === '32:9' && (
+        <Note tone="warn" title={t('aspect329NoteTitle')}>
+          {t('aspect329Note')}
+        </Note>
+      )}
       <SettingRow icon={Maximize} title={t('resolution')} description={fullscreen ? t('fullResolution') : t('windowResolution')}>
         <Select
           label={t('resolution')}

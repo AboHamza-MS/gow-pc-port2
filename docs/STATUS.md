@@ -34,7 +34,7 @@ Last reviewed: October 2026, against the code in this repository.
 
 - **The whole game is recompiled**, not emulated: about 6,400 functions of `SCUS_973.99` become C++ and run natively.
 - **Rendering** is a native OpenGL renderer with GPU render targets, internal resolution 1×–6× (2× recommended),
-  bicubic/bilinear/pixel scaling, FXAA, 480p progressive mode, Hor+ widescreen (4:3, 16:9, 16:10, 21:9).
+  bicubic/bilinear/pixel scaling, FXAA, 480p progressive mode, Hor+ widescreen (4:3, 16:9, 16:10, 21:9 experimental, 32:9 very experimental).
 - **Movies** play natively with their sound (MPEG-2 through libmpeg2), including the game's widescreen `.PSW` versions.
 - **Sound** runs on a native sound engine fed by the game's own IOP libraries; there is no SPU2 emulation.
 - **Memory card** is a PCSX2-compatible image; loading and saving work, with thumbnails and dates.
@@ -52,7 +52,8 @@ Last reviewed: October 2026, against the code in this repository.
 | Frame rate | The game's logic is tied to the PS2's 60 Hz VBlank and never runs faster. 120/144 FPS modes speed up the **presentation** only. Heavy scenes on integrated GPUs drop below 60 |
 | Multi-threading | The VU1 thread is the CPU bottleneck in combat. The optimization pass converts more of it to native code over time |
 | Window | At 3× and above, presentation can stall behind the GPU on mid-range cards; the launcher caps presentation at 60 FPS there |
-| Widescreen | With Hor+ on, the HUD and 2D screens are stretched horizontally (the PCSX2 patch does not correct them) |
+| Widescreen | With Hor+ on, the HUD and 2D screens are stretched horizontally (the PCSX2 patch does not correct them), more the wider the aspect |
+| Ultrawide | 21:9 is experimental and 32:9 (5120×1440) very experimental (the HUD and menus are stretched across the whole width): the camera is widened by the same Hor+ patch, but edge pop-in, LOD and full-screen effects at those widths have not been checked in game. At 32:9 an internal resolution of 3× or more is advisable |
 | Upscaling | The "Pixel" option currently behaves as a bilinear stretch (no nearest-neighbour shader) |
 | Rendering corner cases | The GS backend does **not** apply the per-primitive alpha test (PABE), counts points as skipped, and does not use the game's mip levels (MIPTBP). Textures read through a CLAMP region are not replaced |
 | Camera | The camera is scripted by the game and cannot be locked or moved freely; the target lock only aims attacks |

@@ -100,13 +100,26 @@ sprites are not shifted, because they are 2D blits whose planes must read the sa
 to 1–6 and writes both `PS2X_GS_SCALE` and `PS2X_GS_HW_SCALE`, but only the latter is read by the runtime.
 
 **Aspect and Hor+ widescreen.** `PC_ASPECT` decides the shape of the presented picture (`auto`, `stretch`, `4:3`,
-`16:9`, …) and `gowPresentationAspect()` falls back to 4:3 with side bars when the widescreen switch is off.
+`16:9`, `21:9`, `32:9`, …) and `gowPresentationAspect()` falls back to 4:3 with side bars when the widescreen switch is off.
 `PC_WIDESCREEN=<aspect>` turns on PCSX2's "Widescreen 16:9" patch: on every VBlank `gowWidescreenVBlank()` writes the
 aspect into the game's data (`0x32F1B0`, `0x2FD930`, `0x2FD968`, flag `0x29CC90`) and then the **projection factor** as a
 float at `0x7F00` plus the video flag at `0x7F04`; `0x7F00` is what the game's projection code loads
 (`lwc1 $f1, 0x7F00`). The factor is `0.75`, or `1/A` while the menu background is showing; during a movie the patch
 keeps the game's own 16:9 mode and only sets the flag at `0x7F04`. `PC_WIDESCREEN_304D94=1` also writes
-`0x304D94 = 2` for comparison.
+`0x304D94 = 2` for comparison. The parsing and the accepted range (`4:3 < aspect <= 4.0`) live in
+`src/lib/gow_aspect.h`, tested without the game by `native/tests/gow_aspect_test.cpp`.
+
+**32:9 (5120×1440) is experimental.** Nothing in the runtime is specific to it: F stays `0.75` and the camera's field of
+view is scaled by `F * A`, which at 32:9 is `8/3` against `7/4` at 21:9 and `4/3` at 16:9. Reading the generated code
+(`sub_00169238`, called by `sub_001697F0` before `sub_001696C8`), the projection matrices and the values that
+`sub_001696C8` derives at camera `+0x38C..+0x398` are computed from the same widened field at camera `+0x37C`, so the
+game's own frustum should widen with the picture; there is no separate hard-coded width limit in that path. That has
+**not** been confirmed in game: objects appearing or disappearing near the edges, LOD changes and full-screen effects at
+such a wide angle still need to be looked at. Known costs that are not bugs of the patch: the HUD and 2D screens are
+stretched across the whole width (see Limits); the 3D scene is rendered at the PS2 frame's 4:3 pixel grid times the
+internal scale and stretched to the window, so the horizontal detail per degree drops as the picture widens (3× or more
+is advisable at 32:9); and with the menu background showing, `F = 1/A` crops the picture vertically, which at 32:9 keeps
+only about 37 % of the original height.
 
 **Frame-rate limits.** `PC_GAME_FPS` selects the game's 30 or 60 Hz logic rate. `PC_WINDOW_FPS` (60 by default, 0
 unlimited, clamped to 30–360) sets the host loop's `SetTargetFPS`; `PC_VSYNC=1` requests the vsync hint instead. The
@@ -188,7 +201,8 @@ the first 400 textures, plus each upload, under the `[gow-texrepl]` tag. Format,
 ## 6. Limits and unknowns
 
 - **Hor+ stretches the HUD.** Only the projection factor changes; the 2D HUD keeps its 4:3 layout inside the wider
-  view and is therefore stretched with it.
+  view and is therefore stretched with it. The stretch grows with the aspect: 4/3 times as wide at 16:9, about 1.75 times
+  at 21:9 and about 2.67 times at 32:9, where the corners of the HUD sit far from the centre of the screen.
 - **CLAMP-region textures are never replaced** (`-r<w>x<h>` names are generated for packs, but the runtime skips
   them), nor is anything the game samples back out of a render target (`src`/`rsrc`/`zsrc` draws).
 - **No PS2 cache model.** There is no 8 KiB texture cache, no page-validity table and no access-order model for a

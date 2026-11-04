@@ -578,6 +578,16 @@ mod tests {
         fixture.settings.widescreen = true;
         fixture.settings.aspect_mode = "21:9".into();
         assert_eq!(value(&plan(&fixture, 2.0), "PC_WIDESCREEN"), Some("21:9"));
+        fixture.settings.aspect_mode = "32:9".into();
+        let super_wide = plan(&fixture, 2.0);
+        assert_eq!(value(&super_wide, "PC_WIDESCREEN"), Some("32:9"));
+        assert_eq!(value(&super_wide, "PC_ASPECT"), Some("32:9"));
+        // With the switch off, 32:9 is not presented: the original 4:3 picture keeps its geometry.
+        fixture.settings.widescreen = false;
+        let off = plan(&fixture, 2.0);
+        assert!(off.remove.contains("PC_WIDESCREEN"));
+        assert_eq!(value(&off, "PC_ASPECT"), Some("4:3"));
+        fixture.settings.widescreen = true;
         // A 4:3 aspect has nothing to widen: the switch is effectively off there.
         fixture.settings.aspect_mode = "4:3".into();
         assert!(plan(&fixture, 2.0).remove.contains("PC_WIDESCREEN"));

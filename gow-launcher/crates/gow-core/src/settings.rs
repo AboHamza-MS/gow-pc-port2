@@ -149,7 +149,10 @@ impl DisplayInfo {
     /// Closest aspect the port offers for this display.
     pub fn default_aspect_ratio(&self) -> &'static str {
         let ratio = self.width_px as f64 / self.height_px.max(1) as f64;
-        if ratio >= 2.2 {
+        // 21:9 monitors are 2.33 to 2.4 (2560x1080, 3440x1440), 32:9 ones 3.56 (3840x1080, 5120x1440).
+        if ratio >= 3.0 {
+            "32:9"
+        } else if ratio >= 2.2 {
             "21:9"
         } else if ratio >= 1.7 {
             "16:9"
@@ -379,6 +382,15 @@ mod tests {
         let laptop = DisplayInfo { width_px: 1920, height_px: 1200, hz: 60 };
         let old = DisplayInfo { width_px: 1024, height_px: 768, hz: 60 };
         assert_eq!(wide.default_aspect_ratio(), "21:9");
+        for (width_px, height_px) in [(5120, 1440), (3840, 1080), (7680, 2160)] {
+            assert_eq!(
+                DisplayInfo { width_px, height_px, hz: 60 }.default_aspect_ratio(),
+                "32:9",
+                "{width_px}x{height_px}"
+            );
+        }
+        assert_eq!(DisplayInfo { width_px: 2560, height_px: 1080, hz: 60 }.default_aspect_ratio(), "21:9");
+        assert_eq!(DisplayInfo { width_px: 1920, height_px: 1080, hz: 60 }.default_aspect_ratio(), "16:9");
         assert_eq!(laptop.default_aspect_ratio(), "16:10");
         assert_eq!(old.default_aspect_ratio(), "4:3");
     }

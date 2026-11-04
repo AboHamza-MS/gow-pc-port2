@@ -35,8 +35,8 @@ arrives as `GOW_SHARPEN` and the render scale as `PS2X_GS_HW_SCALE`.
 | Variable | Effect |
 |---|---|
 | `PC_SCREEN=fullscreen\|window`, `PC_WIDTH`, `PC_HEIGHT` | Initial mode and window size |
-| `PC_ASPECT=auto\|stretch\|4:3\|16:9\|16:10\|21:9` | Shape of the presented picture; `stretch` fills the window |
-| `PC_WIDESCREEN=<aspect>` | Hor+ widescreen patch at that aspect (absent = the game's 4:3) |
+| `PC_ASPECT=auto\|stretch\|4:3\|16:9\|16:10\|21:9\|32:9` | Shape of the presented picture; `stretch` fills the window |
+| `PC_WIDESCREEN=<aspect>` | Hor+ widescreen patch at that aspect, `4:3 < aspect <= 4.0` (so `16:9`, `16:10|21:9|32:9``, `21:9` and `32:9`; `4:3` or anything wider, such as `48:9`, leaves it off). Absent = the game's 4:3 |
 | `PC_FILTER=fsr\|bilinear\|pixel`, `PC_FXAA=1` | Filter *intent*; the runtime itself reads `GOW_SCALER` and `GOW_SHARPEN` |
 | `GOW_SCALER=sharp\|bilinear`, `GOW_SHARPEN` (0–1) | The scaler that actually runs: bicubic + contrast-adaptive sharpening, or a linear tap |
 | `PS2X_GS_HW_SCALE=<n>` | Internal render scale (float, clamped to ≥ 1). This is the one the runtime reads |

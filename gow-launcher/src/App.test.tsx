@@ -281,6 +281,20 @@ describe('graphics', () => {
     );
     expect(screen.getByRole('combobox', { name: 'Aspect ratio' })).toBeEnabled();
   });
+
+  it('offers 32:9 as very experimental with a short label, and explains the limits in a note once chosen', async () => {
+    boot(true);
+    const user = userEvent.setup();
+    expect(screen.queryByText('32:9 is very experimental')).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('combobox', { name: 'Aspect ratio' }));
+    const option = await screen.findByRole('option', { name: /32:9 ultrawide/ });
+    // a short label (it has to fit the select on one line) with the warning as its second line
+    expect(option).toHaveTextContent('very experimental');
+    expect(option.textContent).not.toMatch(/stretched/);
+    await user.click(option);
+    expect(await screen.findByText('32:9 is very experimental')).toBeInTheDocument();
+    expect(screen.getByText(/HUD and menus are stretched across the whole width/)).toBeInTheDocument();
+  });
 });
 
 describe('controls', () => {
