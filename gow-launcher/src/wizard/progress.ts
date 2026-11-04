@@ -22,6 +22,7 @@ export const isoMessageKey: Record<IsoReason, string> = {
   'no-executable': 'wizIsoNoExe',
   modified: 'wizIsoModified',
   'other-edition': 'wizIsoOtherEdition',
+  chd: 'wizIsoChd',
 };
 
 export const destinationMessageKey: Record<DestinationReason, string> = {
@@ -31,3 +32,6 @@ export const destinationMessageKey: Record<DestinationReason, string> = {
 };
 
 export const fileName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+
+/** GOW-Port (0.3.1): a CHD disc image, converted to ISO before installing. */
+export const isChd = (path: string) => /\.chd$/i.test(path.trim());

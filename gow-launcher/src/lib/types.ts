@@ -206,7 +206,7 @@ export interface WizardInfo {
   defaultDestination: string;
 }
 
-export type IsoReason = 'empty' | 'not-found' | 'unreadable' | 'format' | 'other-game' | 'no-executable' | 'modified' | 'other-edition';
+export type IsoReason = 'empty' | 'not-found' | 'unreadable' | 'format' | 'other-game' | 'no-executable' | 'modified' | 'other-edition' | 'chd';
 export interface IsoValidation {
   ok: boolean;
   reason: IsoReason | null;
@@ -332,3 +332,28 @@ export interface RebuildState {
 
 /** What an update must not interrupt; the backend refuses with `busy:<code>` for the same reasons. */
 export type UpdateBlocker = 'game' | 'installation' | 'optimizer' | 'texturePack';
+
+/** Why a CHD could not be converted to ISO (`gow_core::iso_chd::ChdError`). */
+export type ChdError = 'unreadable' | 'damaged' | 'space' | 'not-game' | 'cancelled' | 'write';
+
+/** What converting a CHD will do (`gow_core::iso_chd::ChdPlan`). */
+export interface ChdPlan {
+  /** The ISO that will be written next to the CHD, or the one already converted there. */
+  output: string;
+  isoGb: number;
+  freeGb: number;
+  enoughSpace: boolean;
+  /** Converted before and valid: it is used as it is. */
+  existing: boolean;
+}
+
+/** What converting a CHD produced (`gow_core::iso_chd::ChdOutcome`). */
+export interface ChdOutcome {
+  ok: boolean;
+  /** The ISO, next to the CHD. */
+  path: string;
+  validation: IsoValidation | null;
+  error: ChdError | null;
+  /** The reader's own message, in English. */
+  detail: string;
+}

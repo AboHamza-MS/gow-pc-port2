@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PC Port - installer for Linux.
 #
-#   ./install.sh [path/to/God of War.iso] [--destination DIR] [--no-optimize] [--optimize [seconds]] [--jobs N]
+#   ./install.sh [path/to/God of War.iso (or .chd)] [--destination DIR] [--no-optimize] [--optimize [seconds]] [--jobs N]
 #                [--normal-priority] [--install-deps] [--check-deps] [--recomp-exe FILE] [--tools-exe FILE]
 #
 #   --destination    where game/, build/, build-gen/ and vu1_captures/ go (default: next to this script). The launcher's
@@ -295,11 +295,24 @@ mkdir -p "$GAME"
 mkdir -p "$ROOT/textures/replacements"
 if [ ! -f "$GAME/SCUS_973.99" ] || [ ! -f "$GAME/.disc_layout" ]; then
     if [ -z "$ISO" ]; then
-        for c in "$GAME"/*.iso "$GAME"/*.ISO "$ROOT"/*.iso "$ROOT"/*.ISO; do [ -f "$c" ] && { ISO="$c"; break; }; done
+        for c in "$GAME"/*.iso "$GAME"/*.ISO "$ROOT"/*.iso "$ROOT"/*.ISO "$GAME"/*.chd "$GAME"/*.CHD "$ROOT"/*.chd "$ROOT"/*.CHD; do [ -f "$c" ] && { ISO="$c"; break; }; done
     fi
-    [ -n "$ISO" ] && [ -f "$ISO" ] || error "God of War ISO (USA, SCUS-97399) not found. Pass it as an argument: ./install.sh \"/path/God of War.iso\""
+    [ -n "$ISO" ] && [ -f "$ISO" ] || error "God of War ISO (USA, SCUS-97399) not found. Pass it as an argument: ./install.sh \"/path/God of War.iso\" (a .chd works too)"
+    # GOW-Port (0.3.1): a CHD (chdman) is first converted to a temporary ISO in the destination (every hunk and its SHA-1
+    # checked; the CHD is only read), deleted once the disc is extracted. A leftover from a failed run is replaced.
+    TEMP_ISO=""
+    case "$ISO" in
+        *.chd|*.CHD)
+            TEMP_ISO="$DEST/disc-from-chd.iso"
+            rm -f "$TEMP_ISO"
+            echo "Converting $ISO to a temporary ISO (about 8 GB, deleted after the extraction)..."
+            low_priority "$TOOLS" chd-extract "$ISO" "$TEMP_ISO"
+            ISO="$TEMP_ISO"
+            ;;
+    esac
     echo "Extracting $ISO (about 8 GB; the game does not need the ISO afterwards)..."
     low_priority "$TOOLS" iso-extract "$ISO" "$GAME" --layout
+    [ -n "$TEMP_ISO" ] && rm -f "$TEMP_ISO"
 fi
 grep -q "SCUS_973.99" "$GAME/SYSTEM.CNF" 2>/dev/null || error "game/ is not God of War USA (SCUS-97399): SYSTEM.CNF does not boot SCUS_973.99."
 # GOW-Port: a correct file name does not identify the executable's revision.

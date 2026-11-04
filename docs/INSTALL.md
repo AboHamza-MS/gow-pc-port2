@@ -19,7 +19,7 @@ PS2. On Windows a launcher does all of it for you, and two installer scripts cov
 
 | | |
 |---|---|
-| **Game** | Your own *God of War* (USA, `SCUS-97399`) disc image (`.iso`, about 8 GB). Rip it from your own disc with any DVD tool. Please don't pirate it |
+| **Game** | Your own *God of War* (USA, `SCUS-97399`) disc image (`.iso`, about 8 GB, or a `.chd` of it). Rip it from your own disc with any DVD tool. Please don't pirate it |
 | **Disk** | About **20 GB** free while installing (the ISO and the extracted disc are about 8 GB each, the build and the compiler about 2 GB); about 11 GB stay once the ISO is deleted |
 | **CPU** | 64-bit x86 with **SSE4.1** (Intel Core 2 "Penryn", 2008, or newer; AMD "Bulldozer", 2011, or newer; the AMD Phenom II does not have it), 4 cores or more recommended. AVX2 is **not** required by the shipped build |
 | **RAM** | 8 GB (16 GB recommended while building) |
@@ -38,11 +38,26 @@ PS2. On Windows a launcher does all of it for you, and two installer scripts cov
   patched ISO is created in the same folder (about 8 GB more), checked like any ISO, and used for the installation. The original ISO is only read,
   and **Use the original** goes back to it. A patch made for another disc stops at the first block, a patch that changes
   the game's executable (widescreen hacks, cheats, code fixes) is refused, because the port runs the USA disc's own code,
-  and either way nothing is left behind. The option is not shown for an ISO that is already modified. Patches made with secondary compression (`xdelta3 -S djw|fgk|lzma`) are not supported: ask for one made
+  and either way nothing is left behind. The option is not shown for an ISO that is already modified (nor for a CHD until it is converted, and then only if its disc is the unmodified original). Patches made with secondary compression (`xdelta3 -S djw|fgk|lzma`) are not supported: ask for one made
   with `xdelta3 -S none`. Without the launcher, the same decoder runs from the command line:
 
   ```
   bin\ps2-tools.exe xdelta-apply patch.xdelta "God of War (USA).iso" "God of War (patched).iso"
+  ```
+- **CHD images** (`.chd`, the compressed format of `chdman` that many emulator collections use) are accepted as they
+  are: drop, browse or let the wizard find the `.chd`. It is checked in place, without converting it (a second or so),
+  and the wizard says whether the disc inside is the original, a modified disc or another game. Press **Convert**: the
+  ISO is written **in the CHD's folder** under the CHD's name (about 8 GB more, about a minute on a 6-core CPU, with a
+  progress bar and **Stop**), every block of the CHD and its SHA-1 are checked as `chdman verify` does, and the
+  installation then uses that ISO; an ISO converted earlier is used again instead of converting twice. The CHD is only
+  read. Both `chdman createcd` CHDs (`cdlz`, `cdzl`, `cdfl`, `cdzs`) and `createdvd` / `createhd` ones (`lzma`, `zlib`,
+  `huff`, `flac`, `zstd`) work; CHDs older than version 5 and delta CHDs that need a parent CHD do not (`chdman copy`
+  turns them into a complete version 5 one). From the command line, `install.cmd -Iso "D:\God of War.chd"` (or
+  `./install.sh "God of War.chd"`) converts it to a temporary ISO in the install folder and deletes it once the disc is
+  extracted; the converter alone is:
+
+  ```
+  bin\ps2-tools.exe chd-extract "God of War.chd" "God of War.iso"
   ```
 - **Other regions and demos** (Japan `SLPM-67010`, Europe `SCES-53133`/`SCES-51533`, Asia `SCAJ-30010`, the USA and
   Europe demos) are recognised and named, but not supported yet: their code is different from the USA disc's.
@@ -122,7 +137,7 @@ install.cmd -Destination "D:\GodOfWar"               # keep the game data and th
 
 | Option | Meaning |
 |---|---|
-| `-Iso <file>` | The disc image. Without it, the first `.iso` in `game\` and then in the repository root is used |
+| `-Iso <file>` | The disc image (`.iso`, or a `.chd`: converted to a temporary ISO that is deleted after the extraction). Without it, the first `.iso` (then `.chd`) in `game\` and then in the repository root is used |
 | `-Destination <folder>` | Where `game\`, `build\`, `build-gen\` and `vu1_captures\` go. The generated C++ still lands in the repository |
 | `-Compiler clang\|msvc` | `clang` (default since 0.3.0): the portable llvm-mingw, downloaded into the install folder; no Visual Studio is needed when prebuilt `ps2_recomp` / `ps2-tools` are available (the launcher's kit, or `-RecompExe` / `-ToolsExe`), otherwise Visual Studio's linker builds them with cargo. `msvc`: the Visual Studio compiler, as before 0.3.0 |
 | `-Pgo auto\|on\|off` | Speed profile (clang only). `auto` (default): use the profile this PC already trained, if any. `on`: train it when missing (the game opens by itself for the optimization run, then a second build uses it). `off`: never. The profile is made on your PC from your game and is never distributed |
@@ -176,7 +191,7 @@ install.cmd -Destination "D:\GodOfWar"               # keep the game data and th
 
 | Option | Meaning |
 |---|---|
-| `<iso>` (positional) | The disc image; otherwise the first `.iso` in `game/` then in the repository root |
+| `<iso>` (positional) | The disc image (`.iso` or `.chd`, as on Windows); otherwise the first `.iso` (then `.chd`) in `game/` then in the repository root |
 | `--destination DIR` | Where `game/`, `build/`, `build-gen/` and `vu1_captures/` go (default: next to the script) |
 | `--install-deps` | Install the missing system packages through `sudo` (otherwise it asks in a terminal, or prints the command) |
 | `--check-deps` | Only report what is missing (`[missing]`, `[packages]` and `[install-command]` lines, exit code 2 if anything is) |

@@ -13,5 +13,11 @@ name = "ps2-tools"
 path = "src/main.rs"
 
 [dependencies]
+lzma-rs = { version = "0.3", features = ["raw_decoder"] }
+miniz_oxide = "0.8"
 ps2-elf.workspace = true
 ps2-parity.workspace = true
+ruzstd = { version = "0.8", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+tempfile = "3"

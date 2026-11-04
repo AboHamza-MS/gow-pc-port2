@@ -25,6 +25,8 @@ pub enum IsoReason {
     Modified,
     /// GOW-Port (decision D4): God of War from another region or a demo: recognised and named, not supported yet.
     OtherEdition,
+    /// GOW-Port (0.3.1): a `.chd` the port cannot read (damaged, a delta of a parent CHD, an old version or codec).
+    Chd,
 }
 
 /// GOW-Port (decision D4): the other God of War boot executables, from PCSX2's GameIndex. They have their own code, so the
@@ -107,22 +109,42 @@ fn boot_executable(system_cnf: &str) -> Option<String> {
     (end > 0).then(|| rest[..end].to_string())
 }
 
-fn read_at(file: &mut File, lba: u64, bytes: u64) -> Vec<u8> {
-    let mut buffer = vec![0u8; bytes as usize];
-    if file.seek(SeekFrom::Start(lba * SECTOR)).is_err() {
-        return Vec::new();
-    }
-    let mut filled = 0;
-    while filled < buffer.len() {
-        match file.read(&mut buffer[filled..]) {
-            Ok(0) | Err(_) => break,
-            Ok(count) => filled += count,
-        }
-    }
-    buffer.truncate(filled);
-    buffer
+/// The 2,048-byte sectors of a disc image: an ISO file, or (GOW-Port 0.3.1) the ISO inside a CHD, read in place.
+trait Sectors {
+    /// `bytes` from sector `lba` on; shorter (or empty) past the end or on a read error.
+    fn read_at(&mut self, lba: u64, bytes: u64) -> Vec<u8>;
 }
 
+impl Sectors for File {
+    fn read_at(&mut self, lba: u64, bytes: u64) -> Vec<u8> {
+        let mut buffer = vec![0u8; bytes as usize];
+        if self.seek(SeekFrom::Start(lba * SECTOR)).is_err() {
+            return Vec::new();
+        }
+        let mut filled = 0;
+        while filled < buffer.len() {
+            match self.read(&mut buffer[filled..]) {
+                Ok(0) | Err(_) => break,
+                Ok(count) => filled += count,
+            }
+        }
+        buffer.truncate(filled);
+        buffer
+    }
+}
+
+impl Sectors for ps2_tools::chd::Disc {
+    fn read_at(&mut self, lba: u64, bytes: u64) -> Vec<u8> {
+        self.read(lba, bytes).unwrap_or_default()
+    }
+}
+
+/// GOW-Port (0.3.1): a CHD disc image (MAME's `chdman` format), by its extension.
+pub fn is_chd(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("chd"))
+}
+
+/// Validates an ISO, or the ISO inside a `.chd` (read in place, without converting it).
 pub fn validate_iso(path: &str) -> IsoValidation {
     let path = path.trim();
     if path.is_empty() {
@@ -131,18 +153,27 @@ pub fn validate_iso(path: &str) -> IsoValidation {
     if !Path::new(path).is_file() {
         return IsoValidation::failed(IsoReason::NotFound);
     }
+    if is_chd(Path::new(path)) {
+        return match ps2_tools::chd::Disc::open(Path::new(path)) {
+            Ok(mut disc) => validate_sectors(&mut disc),
+            Err(_) => IsoValidation::failed(IsoReason::Chd),
+        };
+    }
     let Ok(mut file) = File::open(path) else {
         return IsoValidation::failed(IsoReason::Unreadable);
     };
+    validate_sectors(&mut file)
+}
 
+fn validate_sectors(file: &mut impl Sectors) -> IsoValidation {
     // Primary volume descriptor: sector 16, type 1, "CD001". Images with 2352-byte sectors are not read here.
-    let descriptor = read_at(&mut file, 16, SECTOR);
+    let descriptor = file.read_at(16, SECTOR);
     if descriptor.len() < SECTOR as usize || descriptor[0] != 1 || &descriptor[1..6] != b"CD001" {
         return IsoValidation::failed(IsoReason::Format);
     }
     let root_lba = le32(&descriptor, 156 + 2);
     let root_size = le32(&descriptor, 156 + 10).min(1 << 20);
-    let root = read_at(&mut file, root_lba, root_size);
+    let root = file.read_at(root_lba, root_size);
     if root.is_empty() {
         return IsoValidation::failed(IsoReason::Format);
     }
@@ -150,7 +181,7 @@ pub fn validate_iso(path: &str) -> IsoValidation {
     let Some(cnf) = find_entry(&root, "SYSTEM.CNF") else {
         return IsoValidation::failed(IsoReason::OtherGame);
     };
-    let text = read_at(&mut file, cnf.lba, cnf.size.min(SECTOR));
+    let text = file.read_at(cnf.lba, cnf.size.min(SECTOR));
     let text: String = text.iter().map(|&b| b as char).collect();
     let boot = boot_executable(&text);
     if let Some(label) = boot.as_deref().and_then(other_edition) {
@@ -163,7 +194,7 @@ pub fn validate_iso(path: &str) -> IsoValidation {
     let Some(exe) = find_entry(&root, &name).filter(|e| e.size > 0 && e.size <= 64 << 20) else {
         return IsoValidation::failed(IsoReason::NoExecutable);
     };
-    let elf = read_at(&mut file, exe.lba, exe.size);
+    let elf = file.read_at(exe.lba, exe.size);
     if elf.len() as u64 != exe.size {
         return IsoValidation::failed(IsoReason::NoExecutable);
     }
@@ -196,16 +227,22 @@ fn scan(directory: &Path, depth: u32, deadline: Instant) -> Option<PathBuf> {
         return None;
     }
     let entries: Vec<_> = std::fs::read_dir(directory).ok()?.filter_map(Result::ok).collect();
-    let mut isos: Vec<PathBuf> = entries
-        .iter()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("iso")))
-        .collect();
-    isos.sort();
-    for iso in isos {
-        let size = std::fs::metadata(&iso).map(|m| m.len()).unwrap_or(0);
-        if size > 3 << 30 && size < 10 << 30 && validate_iso(&iso.to_string_lossy()).ok {
-            return Some(iso);
+    let files = |extension: &str| {
+        let mut found: Vec<PathBuf> = entries
+            .iter()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case(extension)))
+            .collect();
+        found.sort();
+        found
+    };
+    // GOW-Port (0.3.1): an ISO first; then a CHD (a compressed DVD is 1-10 GB), validated in place.
+    let candidates =
+        files("iso").into_iter().map(|iso| (iso, 3u64 << 30)).chain(files("chd").into_iter().map(|chd| (chd, 1 << 30)));
+    for (image, smallest) in candidates {
+        let size = std::fs::metadata(&image).map(|m| m.len()).unwrap_or(0);
+        if size > smallest && size < 10 << 30 && validate_iso(&image.to_string_lossy()).ok {
+            return Some(image);
         }
     }
     if depth == 0 {
@@ -224,7 +261,7 @@ fn scan(directory: &Path, depth: u32, deadline: Instant) -> Option<PathBuf> {
     folders.into_iter().find_map(|folder| scan(&folder, depth - 1, deadline))
 }
 
-/// Looks in the user's folders and on the disks for a DVD ISO (3-10 GB) that is the original God of War USA.
+/// Looks in the user's folders and on the disks for a DVD ISO (3-10 GB) or CHD that is God of War USA.
 /// Gives up after 25 seconds.
 pub fn find_original_iso() -> Option<PathBuf> {
     let deadline = Instant::now() + Duration::from_secs(25);
@@ -333,6 +370,23 @@ mod tests {
         md5.update(b"SCUS_973.99");
         md5.update(b"a patched executable");
         assert_eq!(result.hash, crate::game::hex(&md5.finalize()));
+    }
+
+    #[test]
+    fn the_disc_inside_a_chd_is_validated_in_place() {
+        let directory = tempfile::tempdir().unwrap();
+        let chd = directory.path().join("game.chd");
+        std::fs::write(
+            &chd,
+            crate::iso_chd::tests::uncompressed_chd(&build_iso("SCUS_973.99", b"a patched executable")),
+        )
+        .unwrap();
+        let result = validate_iso(&chd.to_string_lossy());
+        assert_eq!(result.reason, Some(IsoReason::Modified), "read through the CHD as far as the executable");
+        std::fs::write(&chd, crate::iso_chd::tests::uncompressed_chd(&build_iso("SLUS_123.45", b"ELF"))).unwrap();
+        assert_eq!(validate_iso(&chd.to_string_lossy()).reason, Some(IsoReason::OtherGame));
+        std::fs::write(&chd, b"MComprHD but nothing more").unwrap();
+        assert_eq!(validate_iso(&chd.to_string_lossy()).reason, Some(IsoReason::Chd));
     }
 
     #[test]

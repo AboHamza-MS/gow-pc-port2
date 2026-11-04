@@ -112,6 +112,7 @@ nativas das bibliotecas que ele chama.
 
 - **Sua própria ISO de *God of War* (EUA, `SCUS-97399`)**, cerca de 8 GB. Um disco modificado sem mudar o código do jogo
   (tradução, redublagem, mod de dados) também funciona, e um patch `.xdelta` pode ser aplicado à original no assistente.
+  Uma imagem `.chd` (do `chdman`) também serve: o assistente a converte para uma ISO ao lado dela.
 - **~20 GB livres** durante a instalação (sua ISO, o disco extraído e a build); ficam uns 11 GB depois de apagar a ISO.
 - **CPU x86 de 64 bits com SSE4.1** (Intel Core 2 "Penryn", 2008, ou mais nova; AMD "Bulldozer", 2011, ou mais nova; o AMD Phenom II não tem), 4 núcleos ou mais recomendado. AVX2 **não** é necessário.
 - **GPU com OpenGL 4.6** (qualquer NVIDIA/AMD recente, ou iGPU recente da Intel/AMD).

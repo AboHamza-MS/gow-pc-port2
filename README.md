@@ -109,6 +109,7 @@ game's own recompiled code and replaces the libraries that code calls with nativ
 
 - **Your own *God of War* (USA, `SCUS-97399`) ISO**, about 8 GB. A disc modified without changing the game's code (a
   translation, an undub, a data mod) also works, and an `.xdelta` patch can be applied to the original in the wizard.
+  A `.chd` image (from `chdman`) works too: the wizard converts it to an ISO next to it.
 - **~20 GB free** while installing (your ISO, the extracted disc and the build); about 11 GB stay once the ISO is gone.
 - **64-bit x86 CPU with SSE4.1** (Intel Core 2 "Penryn", 2008, or newer; AMD "Bulldozer", 2011, or newer; the AMD Phenom II does not have it), 4 cores or more recommended. AVX2 is *not* required.
 - **OpenGL 4.6** GPU (any recent NVIDIA/AMD, or a recent Intel/AMD iGPU).

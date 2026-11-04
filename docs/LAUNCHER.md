@@ -120,7 +120,10 @@ The wizard opens by itself the first time, or from **Files → Setup wizard**.
    code is accepted (RetroAchievements stay off with it); other regions and demos are named but not supported yet, and
    discs with changed code are refused. With the original ISO, **Apply a patch (.xdelta)** (a translation, an undub,
    a data mod) creates a patched copy next to it, with a progress bar and a Stop button, and installs that copy; the
-   original is never written, and **Use the original** returns to it.
+   original is never written, and **Use the original** returns to it. A **`.chd`** image is accepted too (found,
+   dropped or browsed): it is verified in place, then **Convert** writes the ISO in the CHD's folder (progress bar and
+   **Stop**; the CHD is only read) and the installation uses that ISO. The patch option follows the same rule as for an
+   ISO: it appears only after the conversion, and only when the disc inside the CHD is the unmodified original.
 2. **Location**: where the extracted game and the build go. The path must be **ASCII only** and needs **20 GB free**.
    The default is `C:\Users\<you>\GodOfWar-PC`.
 3. **Components**: shown only when something is missing. Since 0.3.0 the launcher's kit compiles the game with a portable

@@ -1,6 +1,6 @@
 # PC Port - Windows installer (PowerShell 5.1 or 7).
 #
-#   install.cmd [-Iso "C:\path\God of War.iso"] [-Destination "D:\GodOfWar"] [-InstallTools] [-NoOptimize] [-Optimize] [-Seconds 240]
+#   install.cmd [-Iso "C:\path\God of War.iso" (or .chd)] [-Destination "D:\GodOfWar"] [-InstallTools] [-NoOptimize] [-Optimize] [-Seconds 240]
 #
 #   -Destination   folder for the extracted disc, the generated code and the build (by default, the repository).
 #
@@ -576,13 +576,26 @@ New-Item -ItemType Directory -Force -Path (Join-Path $DataRoot 'textures\replace
 if (-not (Test-Path (Join-Path $Game 'SCUS_973.99')) -or -not (Test-Path (Join-Path $Game '.disc_layout'))) {
     if (-not $Iso) {
         $c = Get-ChildItem -Path $Game, $Root -Filter *.iso -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        # GOW-Port (0.3.1): a CHD disc image (chdman) is accepted too.
+        if (-not $c) { $c = Get-ChildItem -Path $Game, $Root -Filter *.chd -File -ErrorAction SilentlyContinue | Select-Object -First 1 }
         if ($c) { $Iso = $c.FullName }
     }
     if (-not $Iso -or -not (Test-Path -LiteralPath $Iso)) {
-        Fail 'God of War ISO (USA, SCUS-97399) not found. Put it in game\ or use: install.cmd -Iso "C:\path\God of War.iso"'
+        Fail 'God of War ISO (USA, SCUS-97399) not found. Put it in game\ or use: install.cmd -Iso "C:\path\God of War.iso" (a .chd works too)'
+    }
+    # GOW-Port (0.3.1): a CHD is first converted to a temporary ISO in the destination (every hunk and its SHA-1 checked;
+    # the CHD is only read), which is deleted once the disc is extracted. A leftover from a failed run is replaced.
+    $tempIso = $null
+    if ($Iso -match '\.chd$') {
+        $tempIso = Join-Path $DataRoot 'disc-from-chd.iso'
+        Remove-Item -LiteralPath $tempIso -Force -ErrorAction SilentlyContinue
+        Write-Host "Converting $Iso to a temporary ISO (about 8 GB, deleted after the extraction)..."
+        Run $toolsExe @('chd-extract', $Iso, $tempIso)
+        $Iso = $tempIso
     }
     Write-Host "Extracting $Iso (about 8 GB; the game does not need the ISO afterwards)..."
     Run $toolsExe @('iso-extract', $Iso, $Game, '--layout')
+    if ($tempIso) { Remove-Item -LiteralPath $tempIso -Force -ErrorAction SilentlyContinue }
 }
 $cnf = Join-Path $Game 'SYSTEM.CNF'
 if (-not (Test-Path $cnf) -or -not (Select-String -Path $cnf -Pattern 'SCUS_973.99' -Quiet)) {

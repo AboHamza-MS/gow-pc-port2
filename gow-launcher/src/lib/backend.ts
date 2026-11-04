@@ -3,7 +3,7 @@
 
 import type {
   Bootstrap, DestinationValidation, GameFinished, GameStatus, GamepadCaptured, InstallOutcome,
-  InstallProgress, IsoValidation, LiveState, PatchError, PatchOutcome, OptimizerSnapshot, PadDeviceList, RebuildState, Settings, TexturePackInfo, TexturePackOutcome, TexturePackProgress,
+  ChdOutcome, ChdPlan, InstallProgress, IsoValidation, LiveState, PatchError, PatchOutcome, OptimizerSnapshot, PadDeviceList, RebuildState, Settings, TexturePackInfo, TexturePackOutcome, TexturePackProgress,
   UpdateMode, UpdateState, WizardInfo,
 } from './types';
 
@@ -18,6 +18,9 @@ export interface EventMap {
   /** The translation patch being applied: the fraction done. */
   'iso-patch-progress': number;
   'iso-patch-done': PatchOutcome;
+  /** The CHD being converted to ISO: the fraction done. */
+  'iso-chd-progress': number;
+  'iso-chd-done': ChdOutcome;
   'install-progress': InstallProgress;
   'install-done': InstallOutcome;
   'texture-pack-progress': TexturePackProgress;
@@ -76,6 +79,11 @@ export interface Api {
   /** Applies the patch to the original ISO in the background (`iso-patch-progress`, `iso-patch-done`). */
   isoPatchStart(iso: string, patch: string): Promise<void>;
   isoPatchCancel(): Promise<void>;
+  /** Where the ISO of a `.chd` goes and whether it fits; null when the CHD cannot be read. */
+  isoChdPlan(path: string): Promise<ChdPlan | null>;
+  /** Converts the CHD to an ISO next to it in the background (`iso-chd-progress`, `iso-chd-done`). */
+  isoChdStart(chd: string): Promise<void>;
+  isoChdCancel(): Promise<void>;
   validateDestination(path: string): Promise<DestinationValidation>;
   findIso(): Promise<void>;
   installStart(args: { iso: string; destination: string; installTools: boolean; vu1MemoryLimitGb: number }): Promise<void>;
@@ -147,6 +155,9 @@ async function createTauriApi(): Promise<Api> {
     isoPatchCheck: (path) => call('iso_patch_check', { path }),
     isoPatchStart: (iso, patch) => call('iso_patch_start', { iso, patch }),
     isoPatchCancel: () => call('iso_patch_cancel'),
+    isoChdPlan: (path) => call('iso_chd_plan', { path }),
+    isoChdStart: (chd) => call('iso_chd_start', { chd }),
+    isoChdCancel: () => call('iso_chd_cancel'),
     validateDestination: (path) => call('validate_destination', { path }),
     findIso: () => call('find_iso'),
     installStart: (arguments_) => call('install_start', { arguments: arguments_ }),
@@ -231,6 +242,7 @@ export function createMockApi(
   const ready = options.ready ?? true;
   let update = options.update ?? noUpdate;
   let patchCancelled = false;
+  let chdCancelled = false;
   let rebuild: RebuildState = {
     needed: (options.rebuildNeeded || options.legacyBuild) ?? false, kit: '3fa9c1d20b7e',
     built: options.rebuildNeeded || options.legacyBuild ? '9b1e44c07a52' : '3fa9c1d20b7e', announce: false,
@@ -364,6 +376,24 @@ export function createMockApi(
     },
     isoPatchCancel: async () => {
       patchCancelled = true;
+    },
+    isoChdPlan: async (path) =>
+      later(/god/i.test(path)
+        ? { output: path.replace(/\.chd$/i, '.iso'), isoGb: 7.9, freeGb: 412, enoughSpace: true, existing: false }
+        : null),
+    isoChdStart: async (chd) => {
+      chdCancelled = false;
+      [0.2, 0.45, 0.7, 0.95].forEach((fraction, index) =>
+        setTimeout(() => !chdCancelled && emit('iso-chd-progress', fraction), 300 * (index + 1)));
+      setTimeout(() => emit('iso-chd-done', chdCancelled
+        ? { ok: false, path: '', validation: null, error: 'cancelled', detail: 'cancelled' }
+        : {
+            ok: true, path: chd.replace(/\.chd$/i, '.iso'), error: null, detail: '',
+            validation: { ok: true, reason: null, hash: '33c1808ac082e236188fb887d97b7688' },
+          }), 1500);
+    },
+    isoChdCancel: async () => {
+      chdCancelled = true;
     },
     validateDestination: async (path) =>
       path.trim() === '' ? { ok: false, reason: 'empty', freeGb: 0 }

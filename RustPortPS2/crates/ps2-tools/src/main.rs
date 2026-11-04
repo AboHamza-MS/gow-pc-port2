@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use ps2_tools::{elfcheck, iso, memcard, vu1, xdelta};
+use ps2_tools::{chd, elfcheck, iso, memcard, vu1, xdelta};
 
 const USAGE: &str = "usage:
   ps2-tools verify-elf ELF [--map funcmap.csv] [--allow-modified]
@@ -16,6 +16,8 @@ const USAGE: &str = "usage:
   ps2-tools iop-gen DUMPDIR OUTDIR [--overrides FILE]
   ps2-tools vu1n-gen OUTDIR INPUT... [--heads heads.txt] [--parts N] [--cache FILE | --no-cache]
   ps2-tools xdelta-apply PATCH BASE_ISO OUTPUT_ISO
+  ps2-tools chd-info CHD
+  ps2-tools chd-extract CHD OUTPUT_ISO
   ps2-tools mc-format CARD.ps2
   ps2-tools mc-check CARD.ps2";
 
@@ -119,6 +121,60 @@ fn xdelta_apply(patch: &str, base: &str, output: &str) -> i32 {
     }
 }
 
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn chd_info(path: &str) -> i32 {
+    match chd::info(&PathBuf::from(path)) {
+        Ok(info) => {
+            println!("[chd] {path}");
+            println!("[chd] version {}, {} image, codecs {}", info.version, info.kind(), info.codecs.join(", "));
+            println!(
+                "[chd] {} raw bytes in {} hunks of {} bytes; ISO {} bytes",
+                info.logical_bytes, info.hunks, info.hunk_bytes, info.iso_bytes
+            );
+            if let chd::Layout::Cd { tracks } = &info.layout {
+                for track in tracks {
+                    println!("[chd] track {}: {}, {} frames", track.number, track.kind, track.frames);
+                }
+            }
+            println!("[chd] raw SHA-1 {}", hex(&info.raw_sha1));
+            0
+        }
+        Err(error) => {
+            eprintln!("[chd] {error}");
+            1
+        }
+    }
+}
+
+fn chd_extract(path: &str, output: &str) -> i32 {
+    let mut next_report = 0u64;
+    let started = std::time::Instant::now();
+    let progress = |done: u64, total: u64| {
+        if done >= next_report || done == total {
+            println!("[chd] {} / {} MiB", done >> 20, total >> 20);
+            next_report = done + (512 << 20);
+        }
+        true
+    };
+    match chd::extract_iso(&PathBuf::from(path), &PathBuf::from(output), 0, progress) {
+        Ok(summary) => {
+            println!(
+                "[chd] done: {} bytes written to {output} in {:.0} s, every hunk and the SHA-1 checked",
+                summary.iso_bytes,
+                started.elapsed().as_secs_f64()
+            );
+            0
+        }
+        Err(error) => {
+            eprintln!("[chd] {error}");
+            1
+        }
+    }
+}
+
 fn run(args: &[String]) -> Result<i32, String> {
     let Some((command, rest)) = args.split_first() else {
         return Err(USAGE.to_owned());
@@ -132,6 +188,8 @@ fn run(args: &[String]) -> Result<i32, String> {
         ("verify-elf", rest) => Ok(verify_elf(rest)),
         ("iso-extract", rest) => Ok(iso_extract(rest)),
         ("xdelta-apply", [patch, base, output]) => Ok(xdelta_apply(patch, base, output)),
+        ("chd-info", [path]) => Ok(chd_info(path)),
+        ("chd-extract", [path, output]) => Ok(chd_extract(path, output)),
         ("mc-format", [card]) => {
             memcard::format_file(&PathBuf::from(card))?;
             println!("[mc-format] formatted 8 MB card written to {card}");

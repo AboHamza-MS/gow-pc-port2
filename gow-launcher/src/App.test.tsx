@@ -412,6 +412,73 @@ describe('installation wizard', () => {
     await waitFor(() => expect(install).toHaveBeenCalledWith(expect.objectContaining({ iso: 'D:\\Games\\God of War PT-BR.iso' })));
   });
 
+  it('converts a CHD to an ISO next to it before going on, with progress and Stop', async () => {
+    boot(false);
+    const user = userEvent.setup();
+    const install = vi.spyOn(api, 'installStart').mockResolvedValue(undefined);
+    const start = vi.spyOn(api, 'isoChdStart');
+    vi.spyOn(api, 'pick').mockResolvedValue('D:\\Games\\God of War.chd');
+    const next = () => screen.getByRole('button', { name: 'NEXT' });
+    await waitFor(() => expect(next()).toBeEnabled(), { timeout: 4000 });
+    await user.click(screen.getByRole('button', { name: 'Browse' }));
+    // Validated in place; NEXT waits for the conversion, and the patch option waits for the ISO.
+    expect(await screen.findByText(/CHD image: original disc verified inside it/)).toBeInTheDocument();
+    expect(await screen.findByText(/Writes God of War.iso \(7.9 GB\) in the CHD’s folder/)).toBeInTheDocument();
+    expect(next()).toBeDisabled();
+    expect(screen.queryByText('Apply a patch (.xdelta)')).not.toBeInTheDocument();
+    // Stopped: nothing changes, and it can be started again.
+    await user.click(screen.getByRole('button', { name: 'Convert' }));
+    expect(start).toHaveBeenCalledWith('D:\\Games\\God of War.chd');
+    expect(await screen.findByRole('progressbar', { name: 'Conversion progress' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Stop' }));
+    expect(await screen.findByText('Cancelled. Nothing was created.', {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(next()).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Convert' }));
+    expect(await screen.findByText('Converted from the CHD: God of War.iso', {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(screen.getByText(/Your CHD was not changed/)).toBeInTheDocument();
+    expect(screen.getByText('Apply a patch (.xdelta)')).toBeInTheDocument();
+    await waitFor(() => expect(next()).toBeEnabled());
+    await user.click(next());
+    await user.click(await screen.findByRole('button', { name: 'NEXT' }));
+    await user.click(await screen.findByRole('button', { name: 'NEXT' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'INSTALL' }));
+    await waitFor(() => expect(install).toHaveBeenCalledWith(expect.objectContaining({ iso: 'D:\\Games\\God of War.iso' })));
+  });
+
+  it('never offers a patch for a modified CHD, before or after converting it', async () => {
+    boot(false);
+    const user = userEvent.setup();
+    const translated = { ok: true, reason: null, hash: 'ff2f', translation: true };
+    vi.spyOn(api, 'validateIso').mockResolvedValue(translated);
+    vi.spyOn(api, 'isoChdStart').mockImplementation(async (chd) => {
+      setTimeout(() => api.emit('iso-chd-done', {
+        ok: true, path: chd.replace(/\.chd$/i, '.iso'), validation: translated, error: null, detail: '',
+      }), 50);
+    });
+    const next = () => screen.getByRole('button', { name: 'NEXT' });
+    await waitFor(() => expect(next()).toBeEnabled(), { timeout: 4000 });
+    await user.clear(screen.getByDisplayValue('D:\\Games\\God of War (USA).iso'));
+    await user.type(screen.getByPlaceholderText(/./), 'D:\\Games\\God of War PT-BR.chd');
+    await user.click(await screen.findByRole('button', { name: 'Convert' }));
+    expect(await screen.findByText('Converted from the CHD: God of War PT-BR.iso')).toBeInTheDocument();
+    expect(screen.getByText(/Modified disc recognized/)).toBeInTheDocument();
+    expect(screen.queryByText('Apply a patch (.xdelta)')).not.toBeInTheDocument();
+    await waitFor(() => expect(next()).toBeEnabled());
+  });
+
+  it('names a CHD that cannot be read', async () => {
+    boot(false);
+    const user = userEvent.setup();
+    const next = () => screen.getByRole('button', { name: 'NEXT' });
+    await waitFor(() => expect(next()).toBeEnabled(), { timeout: 4000 });
+    vi.spyOn(api, 'validateIso').mockResolvedValue({ ok: false, reason: 'chd', hash: '' });
+    await user.clear(screen.getByDisplayValue('D:\\Games\\God of War (USA).iso'));
+    await user.type(screen.getByPlaceholderText(/./), 'D:\\Games\\broken.chd');
+    expect(await screen.findByText(/This CHD cannot be read/)).toBeInTheDocument();
+    expect(next()).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Convert' })).not.toBeInTheDocument();
+  });
+
   it('explains a wrong patch, hides the option for a translated ISO and goes back to the original', async () => {
     boot(false);
     const user = userEvent.setup();

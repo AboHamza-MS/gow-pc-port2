@@ -13,6 +13,7 @@ use gow_core::gamepad::{self, Capture, CaptureResult};
 use gow_core::gpu::{self, GraphicsCard};
 use gow_core::installer::{self, InstallRequest, Installation};
 use gow_core::iso::{self, IsoValidation};
+use gow_core::iso_chd::{self, ChdOutcome, ChdPlan};
 use gow_core::iso_patch::{self, PatchError, PatchOutcome};
 use gow_core::launch::LaunchError;
 use gow_core::optimizer::{self, Optimizer, OptimizerSnapshot};
@@ -40,6 +41,8 @@ struct AppState {
     textures_running: AtomicBool,
     /// GOW-Port (0.3.0): the translation patch being applied from the wizard, set to stop it.
     patch_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    /// GOW-Port (0.3.1): the CHD being converted to ISO from the wizard, set to stop it.
+    chd_cancel: Mutex<Option<Arc<AtomicBool>>>,
     updater: updater::Updates,
 }
 
@@ -606,6 +609,50 @@ fn iso_patch_cancel(state: State<'_, AppState>) {
     }
 }
 
+// ------------------------------------------------------------------------------------- CHD disc image in the wizard
+
+/// GOW-Port (0.3.1): where the ISO of a chosen `.chd` goes and whether it fits; `None` when the CHD cannot be read.
+#[tauri::command]
+fn iso_chd_plan(path: String) -> Option<ChdPlan> {
+    iso_chd::plan(Path::new(path.trim())).ok()
+}
+
+/// GOW-Port (0.3.1): converts the CHD to an ISO next to it in the background. Reports `iso-chd-progress` (a fraction)
+/// and `iso-chd-done` (a [`ChdOutcome`]); the CHD is only read.
+#[tauri::command]
+fn iso_chd_start(app: AppHandle, state: State<'_, AppState>, chd: String) -> Result<(), String> {
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut running = state.chd_cancel.lock().unwrap();
+        if running.is_some() {
+            return Err("busy".into());
+        }
+        *running = Some(cancel.clone());
+    }
+    std::thread::spawn(move || {
+        let progress_app = app.clone();
+        let mut last = -1.0f64;
+        let outcome: ChdOutcome = iso_chd::convert(Path::new(chd.trim()), |fraction| {
+            if fraction - last >= 0.005 || fraction >= 1.0 {
+                last = fraction;
+                let _ = progress_app.emit("iso-chd-progress", fraction);
+            }
+            !cancel.load(Ordering::SeqCst)
+        });
+        *app.state::<AppState>().chd_cancel.lock().unwrap() = None;
+        let _ = app.emit("iso-chd-done", outcome);
+    });
+    Ok(())
+}
+
+/// GOW-Port (0.3.1): stops the conversion; `iso-chd-done` then reports `cancelled` and nothing is left behind.
+#[tauri::command]
+fn iso_chd_cancel(state: State<'_, AppState>) {
+    if let Some(cancel) = state.chd_cancel.lock().unwrap().as_ref() {
+        cancel.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Searches the PC for the original ISO in the background; reports through `iso-searching` and `iso-found`.
 #[tauri::command]
 fn find_iso(app: AppHandle, state: State<'_, AppState>) {
@@ -879,6 +926,7 @@ pub fn run() {
                 searching: AtomicBool::new(false),
                 textures_running: AtomicBool::new(false),
                 patch_cancel: Mutex::new(None),
+                chd_cancel: Mutex::new(None),
                 updater: updater::Updates::new(paths_logs.join("update.log")),
             };
             state.optimizer.set_script(install_script(&state));
@@ -942,6 +990,9 @@ pub fn run() {
             iso_patch_check,
             iso_patch_start,
             iso_patch_cancel,
+            iso_chd_plan,
+            iso_chd_start,
+            iso_chd_cancel,
             validate_destination,
             find_iso,
             install_start,

@@ -99,3 +99,124 @@ pub fn blake2b_64_hex(data: &[u8]) -> String {
 
     h[0].to_le_bytes().iter().map(|byte| format!("{byte:02x}")).collect()
 }
+
+/// SHA-1, fed in pieces: the checksum a CHD keeps of its raw data and of its metadata.
+#[derive(Clone)]
+pub struct Sha1 {
+    state: [u32; 5],
+    block: [u8; 64],
+    filled: usize,
+    length: u64,
+}
+
+impl Default for Sha1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Sha1 {
+    pub fn new() -> Self {
+        Self {
+            state: [0x6745_2301, 0xEFCD_AB89, 0x98BA_DCFE, 0x1032_5476, 0xC3D2_E1F0],
+            block: [0; 64],
+            filled: 0,
+            length: 0,
+        }
+    }
+
+    fn compress(state: &mut [u32; 5], block: &[u8]) {
+        let mut w = [0u32; 80];
+        for (word, bytes) in w.iter_mut().zip(block.chunks_exact(4)) {
+            *word = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        }
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e] = *state;
+        for (i, word) in w.iter().enumerate() {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | (!b & d), 0x5A82_7999),
+                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
+                _ => (b ^ c ^ d, 0xCA62_C1D6),
+            };
+            let temp = a.rotate_left(5).wrapping_add(f).wrapping_add(e).wrapping_add(k).wrapping_add(*word);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+        for (value, add) in state.iter_mut().zip([a, b, c, d, e]) {
+            *value = value.wrapping_add(add);
+        }
+    }
+
+    pub fn update(&mut self, mut data: &[u8]) {
+        self.length += data.len() as u64;
+        if self.filled > 0 {
+            let take = (64 - self.filled).min(data.len());
+            self.block[self.filled..self.filled + take].copy_from_slice(&data[..take]);
+            self.filled += take;
+            data = &data[take..];
+            if self.filled < 64 {
+                return;
+            }
+            let block = self.block;
+            Self::compress(&mut self.state, &block);
+            self.filled = 0;
+        }
+        let mut blocks = data.chunks_exact(64);
+        for block in &mut blocks {
+            Self::compress(&mut self.state, block);
+        }
+        let rest = blocks.remainder();
+        self.block[..rest.len()].copy_from_slice(rest);
+        self.filled = rest.len();
+    }
+
+    pub fn finish(mut self) -> [u8; 20] {
+        let bits = self.length.wrapping_mul(8);
+        self.update(&[0x80]);
+        while self.filled != 56 {
+            self.update(&[0]);
+        }
+        self.update(&bits.to_be_bytes());
+        let mut digest = [0u8; 20];
+        for (bytes, value) in digest.chunks_exact_mut(4).zip(self.state) {
+            bytes.copy_from_slice(&value.to_be_bytes());
+        }
+        digest
+    }
+
+    /// The SHA-1 of `data` in one call.
+    pub fn digest(data: &[u8]) -> [u8; 20] {
+        let mut hasher = Self::new();
+        hasher.update(data);
+        hasher.finish()
+    }
+}
+
+#[cfg(test)]
+mod sha1_tests {
+    use super::Sha1;
+
+    fn hex(digest: [u8; 20]) -> String {
+        digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    #[test]
+    fn sha1_matches_the_reference_vectors() {
+        assert_eq!(hex(Sha1::digest(b"")), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+        assert_eq!(hex(Sha1::digest(b"abc")), "a9993e364706816aba3e25717850c26c9cd0d89d");
+        let long = b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+        assert_eq!(hex(Sha1::digest(long)), "84983e441c3bd26ebaae4aa1f95129e5e54670f1");
+        // Fed in uneven pieces, the result is the same.
+        let mut pieces = Sha1::new();
+        for chunk in long.chunks(7) {
+            pieces.update(chunk);
+        }
+        assert_eq!(hex(pieces.finish()), "84983e441c3bd26ebaae4aa1f95129e5e54670f1");
+    }
+}

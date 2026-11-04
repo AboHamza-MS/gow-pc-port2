@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Check, FileDiff, FolderOpen, Languages, Loader2, Sparkles, Trophy } from 'lucide-react';
+import { Check, Disc, FileDiff, FolderOpen, Languages, Loader2, Sparkles, Trophy } from 'lucide-react';
 import { Modal } from '../components/Shell';
 import { CheckDot, PrimaryButton, ProgressBar, SecondaryButton, TextInput } from '../components/ui';
-import type { DestinationValidation, InstallOutcome, InstallProgress, IsoValidation, PatchError, PatchOutcome, WizardInfo } from '../lib/types';
+import type { ChdError, ChdOutcome, ChdPlan, DestinationValidation, InstallOutcome, InstallProgress, IsoValidation, PatchError, PatchOutcome, WizardInfo } from '../lib/types';
 import { useApp } from '../state/app';
-import { destinationMessageKey, fileName, isoMessageKey, overallProgress, stageWeights } from './progress';
+import { destinationMessageKey, fileName, isChd, isoMessageKey, overallProgress, stageWeights } from './progress';
 
 // 0 ISO, 1 location, 2 components (only if something is missing), 3 summary, 4 installing, 5 success, 6 error.
 type Step = 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -69,6 +69,14 @@ export function Wizard() {
   const [patched, setPatched] = useState<{ original: string; path: string } | null>(null);
   const patchingFrom = useRef('');
   const patching = patchFraction >= 0;
+  // GOW-Port (0.3.1): a CHD is validated in place, then converted to an ISO next to it before going on.
+  const [chdPlan, setChdPlan] = useState<ChdPlan | null>(null);
+  const [chdProblem, setChdProblem] = useState<ChdError | null>(null);
+  const [chdFraction, setChdFraction] = useState(-1);
+  const [converted, setConverted] = useState<{ chd: string; path: string } | null>(null);
+  const convertingFrom = useRef('');
+  const converting = chdFraction >= 0;
+  const chosenChd = isChd(iso);
   const outcome = useRef<InstallOutcome | null>(null);
   const live = useRef({ step, isoOk: false, weights: stageWeights(false) });
   live.current = { step, isoOk: isoCheck.ok, weights: stageWeights(info.hasManifest) };
@@ -164,6 +172,20 @@ export function Wizard() {
           setPatchProblem(result.error ?? 'write');
         }
       }),
+      api.on('iso-chd-progress', (fraction: number) => setChdFraction((before) => (before < 0 ? before : Math.max(before, fraction)))),
+      api.on('iso-chd-done', (result: ChdOutcome) => {
+        setChdFraction(-1);
+        if (result.ok && result.validation) {
+          setConverted({ chd: convertingFrom.current, path: result.path });
+          setChdProblem(null);
+          setIso(result.path);
+          setAutomaticIso(false);
+          setIsoCheck(result.validation);
+        } else {
+          setChdProblem(result.error ?? 'write');
+          if (result.validation) setIsoCheck(result.validation);
+        }
+      }),
       api.onFileDrop((paths, over) => {
         setHovering(over && live.current.step === 0);
         if (paths.length > 0 && live.current.step === 0) {
@@ -184,6 +206,31 @@ export function Wizard() {
   patchingNow.current = patching;
   useEffect(() => () => {
     if (patchingNow.current) void api.isoPatchCancel();
+  }, [api]);
+
+  // A valid CHD: where its ISO will go. Another file than the converted ISO drops the conversion's result; closing the
+  // wizard stops a conversion.
+  useEffect(() => {
+    if (converted && iso !== converted.path) setConverted(null);
+  }, [iso, converted]);
+  useEffect(() => setChdProblem(null), [iso]);
+  useEffect(() => {
+    let current = true;
+    if (!chosenChd || !isoCheck.ok) {
+      setChdPlan(null);
+      return;
+    }
+    void api.isoChdPlan(iso).then((plan) => {
+      if (current) setChdPlan(plan);
+    });
+    return () => {
+      current = false;
+    };
+  }, [api, iso, chosenChd, isoCheck.ok]);
+  const convertingNow = useRef(false);
+  convertingNow.current = converting;
+  useEffect(() => () => {
+    if (convertingNow.current) void api.isoChdCancel();
   }, [api]);
 
   useEffect(() => {
@@ -207,7 +254,7 @@ export function Wizard() {
 
   const canAdvance = (() => {
     switch (step) {
-      case 0: return isoCheck.ok && cpuSupported && !patching && !(patchWanted && !patched);
+      case 0: return isoCheck.ok && cpuSupported && !patching && !(patchWanted && !patched) && !chosenChd && !converting;
       case 1: return destinationCheck.ok && environment.installer && environment.kitMissing.length === 0;
       case 2: return componentsReady;
       case 3: case 5: case 6: return true;
@@ -265,14 +312,37 @@ export function Wizard() {
   });
 
   const browseIso = async () => {
-    const chosen = await api.pick({ title: t('wizChooseIso'), filters: [{ name: 'ISO', extensions: ['iso', 'ISO'] }, { name: '*', extensions: ['*'] }] });
+    const chosen = await api.pick({
+      title: t('wizChooseIso'),
+      filters: [{ name: 'ISO / CHD', extensions: ['iso', 'ISO', 'chd', 'CHD'] }, { name: '*', extensions: ['*'] }],
+    });
     if (chosen) {
       setIso(chosen);
       setAutomaticIso(false);
       void validateIso(chosen);
     }
   };
-  const isOriginal = isoCheck.ok && !isoCheck.translation && !patched;
+  const isOriginal = isoCheck.ok && !isoCheck.translation && !patched && !chosenChd;
+  const convertChd = async () => {
+    if (!chdPlan || converting || (!chdPlan.enoughSpace && !chdPlan.existing)) return;
+    convertingFrom.current = iso;
+    setChdProblem(null);
+    setChdFraction(0);
+    try {
+      await api.isoChdStart(iso);
+    } catch {
+      setChdFraction(-1);
+      setChdProblem('write');
+    }
+  };
+  const chdMessage = () => {
+    if (chdProblem) return t(`wizChdError_${chdProblem}`);
+    if (converting) return f('wizChdProgress', Math.min(100, Math.round(chdFraction * 100)));
+    if (!chdPlan) return t('wizChdReading');
+    if (chdPlan.existing) return f('wizChdExisting', fileName(chdPlan.output));
+    if (!chdPlan.enoughSpace) return f('wizChdSpace', (chdPlan.isoGb + 0.25).toFixed(1), chdPlan.freeGb.toFixed(1));
+    return f('wizChdWillCreate', fileName(chdPlan.output), chdPlan.isoGb.toFixed(1));
+  };
   const choosePatch = async () => {
     const chosen = await api.pick({
       title: t('wizPatchChooseTitle'),
@@ -311,6 +381,7 @@ export function Wizard() {
 
   const isoMessage = () => {
     if (isoCheck.ok && isoCheck.translation) return t('wizIsoTranslation');
+    if (isoCheck.ok && chosenChd) return automaticIso ? t('wizChdFound') : t('wizChdOk');
     if (isoCheck.ok) return automaticIso ? t('wizIsoFound') : t('wizIsoOk');
     if (!iso) return searching ? t('wizSearchingHint') : t('wizDragHint');
     const key = isoCheck.reason ? isoMessageKey[isoCheck.reason] : '';
@@ -393,6 +464,42 @@ export function Wizard() {
               <SecondaryButton onClick={() => void browseIso()}>{t('browse')}</SecondaryButton>
             </div>
             <TextInput value={iso} onChange={(event) => typeIso(event.target.value)} placeholder={t('wizIsoPlaceholder')} className="h-[38px]" />
+            {chosenChd && (isoCheck.ok || chdProblem) && (
+              <div className="flex flex-col gap-2.5">
+                <div className="gow-card flex flex-col gap-2.5 py-3 pl-[22px] pr-[18px]">
+                  <div className="flex items-center gap-3">
+                    <Disc size={20} className={`shrink-0 ${chdProblem ? 'text-bad' : 'text-gold-light'}`} />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[14px] font-bold text-ink">{t('wizChdTitle')}</div>
+                      <div className={`text-[13px] font-medium ${chdProblem || (chdPlan && !chdPlan.enoughSpace) ? 'text-bad' : 'text-[#47321f]'}`}>
+                        {chdMessage()}
+                      </div>
+                    </div>
+                    {converting ? (
+                      <SecondaryButton onClick={() => void api.isoChdCancel()}>{t('wizChdCancel')}</SecondaryButton>
+                    ) : (
+                      <PrimaryButton
+                        disabled={!isoCheck.ok || !chdPlan || (!chdPlan.enoughSpace && !chdPlan.existing)}
+                        onClick={() => void convertChd()}
+                      >
+                        {chdPlan?.existing ? t('wizChdUseExisting') : t('wizChdConvert')}
+                      </PrimaryButton>
+                    )}
+                  </div>
+                  {converting && <ProgressBar label={t('wizChdProgressLabel')} fraction={chdFraction} />}
+                </div>
+                {!converting && <p className="text-[13px] text-ink-muted">{t('wizChdPending')}</p>}
+              </div>
+            )}
+            {converted && !patched && (
+              <div role="status" className="gow-card flex items-center gap-3.5 py-3 pl-[22px] pr-[18px]">
+                <Disc size={20} className="shrink-0 text-gold-light" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[14px] font-bold text-ink">{f('wizChdDone', fileName(converted.path))}</div>
+                  <div className="text-[13px] font-medium text-[#47321f]">{t('wizChdKept')}</div>
+                </div>
+              </div>
+            )}
             {patched ? (
               <div role="status" className="gow-card flex items-center gap-3.5 py-3 pl-[22px] pr-[18px]">
                 <Languages size={20} className="shrink-0 text-gold-light" />
