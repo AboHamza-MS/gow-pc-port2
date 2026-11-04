@@ -27,19 +27,21 @@ namespace ps2x::iop::detail
         void reset();
 
         // ---- LIBSD API (entry codes as libsd: (id << 8) | (voice << 1) | core; master volumes have bit 7 set) ----
+        // GOW-Port: every call first mixes the samples already due (flushPending, see advanceTo), so it sees and changes the
+        // same state, after the same samples, as with per-sample mixing; that is why the getters are not const.
         void setParam(uint32_t entry, uint16_t value);   // sceSdSetParam
-        [[nodiscard]] uint16_t getParam(uint32_t entry) const; // sceSdGetParam
+        [[nodiscard]] uint16_t getParam(uint32_t entry); // sceSdGetParam
         void setSwitch(uint32_t entry, uint32_t mask);   // sceSdSetSwitch (KON, KOFF, VMIX*, NON, PMON)
-        [[nodiscard]] uint32_t getSwitch(uint32_t entry) const; // sceSdGetSwitch
+        [[nodiscard]] uint32_t getSwitch(uint32_t entry); // sceSdGetSwitch
         void setAddr(uint32_t entry, uint32_t byteAddress); // sceSdSetAddr (SSA, LSA, NAX, ESA, EEA, ...)
-        [[nodiscard]] uint32_t getAddr(uint32_t entry) const; // sceSdGetAddr (byte address)
+        [[nodiscard]] uint32_t getAddr(uint32_t entry); // sceSdGetAddr (byte address)
         void setCoreAttr(uint32_t entry, uint32_t value);  // sceSdSetCoreAttr
-        [[nodiscard]] uint32_t getCoreAttr(uint32_t entry) const;
+        [[nodiscard]] uint32_t getCoreAttr(uint32_t entry);
         void initCore(uint32_t core);                      // sceSdInit state of one core
 
         // sample RAM transfers (sceSdVoiceTrans): byte address in sample RAM
         void writeSampleRam(uint32_t byteAddress, const uint8_t *source, size_t bytes);
-        void readSampleRam(uint32_t byteAddress, uint8_t *destination, size_t bytes) const;
+        void readSampleRam(uint32_t byteAddress, uint8_t *destination, size_t bytes);
         void clearSampleRam(uint32_t byteAddress, size_t bytes);
 
         // core input stream (sceSdBlockTrans with SD_BLOCK_LOOP): the engine reads 512-byte L / R blocks from the ring in
@@ -54,11 +56,22 @@ namespace ps2x::iop::detail
         };
         void startStream(uint32_t core, const uint8_t *ring, uint32_t size, bool loop);
         void stopStream(uint32_t core);
-        [[nodiscard]] uint32_t streamPosition(uint32_t core) const { return m_stream[core & 1u].position; }
+        [[nodiscard]] uint32_t streamPosition(uint32_t core)
+        {
+            flushPending();
+            return m_stream[core & 1u].position;
+        }
         [[nodiscard]] bool takeStreamHalf(uint32_t core) noexcept; // a half was consumed since the last call
 
-        // time: one stereo sample every CyclesPerSample IOP cycles
+        // time: one stereo sample every CyclesPerSample IOP cycles.
+        // GOW-Port: advanceTo only records the time and mixes once kBatchFrames samples are due (one batch, computed voice
+        // by voice in mixBatch; the state of a voice does not depend on the others within a batch and the dry mix is an
+        // integer sum, so the output is the same). Every LIBSD call mixes what is due first (flushPending). Per-sample
+        // mixing was ~14 % of the game thread with sound on (measured by gow-native-pc, runtime patch 11).
+        // GOW_SND_PERFRAME=1: the former per-sample path. GOW_SND_VERIFY=1: every batch is also mixed per sample from the
+        // same state and both outputs are compared ([snd-verify]); the per-sample result is the one kept.
         void advanceTo(uint64_t iopCycle);
+        void flushPending();
 
         // stereo samples produced so far (producer: IOP thread, consumer: host audio thread)
         [[nodiscard]] size_t pendingFrames() const;
@@ -132,6 +145,15 @@ namespace ps2x::iop::detail
         static uint32_t naxOf(const Voice &v) noexcept;
         void streamSample(uint32_t core, int32_t &left, int32_t &right);
         void step();
+        // GOW-Port: batch mixing (see advanceTo).
+        static constexpr uint32_t kBatchFrames = 64u; // 1.3 ms
+        void mixFrames(uint64_t frames);
+        void mixBatch(uint32_t frames);
+        void verifyBatch(uint32_t frames);
+        // Master volumes, limiter and output of one frame from the two cores' dry mixes [core][side].
+        void finishFrame(const int32_t coreOut[2][2]);
+        std::vector<int16_t> *m_capture = nullptr; // GOW_SND_VERIFY: pushFrame appends here instead of the ring
+        uint64_t m_targetCycle = 0;                // the time advanceTo reached; m_lastCycle is the time mixed so far
 
         std::vector<uint16_t> m_ram;
         std::array<Core, 2> m_cores{};

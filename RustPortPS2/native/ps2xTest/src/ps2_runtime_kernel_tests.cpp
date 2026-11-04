@@ -5,6 +5,7 @@
 #include "ps2_stubs.h"
 #include "runtime/ee_scheduler.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -549,6 +550,26 @@ void register_ps2_runtime_kernel_tests()
 {
     MiniTest::Case("PS2RuntimeKernel", [](TestCase &tc)
     {
+        // GOW-Port: the interrupt / callback stacks stop above the runtime's pools (0x01F00000-0x01F31000: RPC packets,
+        // RPC servers, TLS, boot mode); they used to go down to 0x01F00000 and overwrite them.
+        tc.Run("callback stacks never reach the runtime pools above the guest heap", [](TestCase &t)
+        {
+            TestEnv env;
+            uint32_t reserved = 0;
+            uint32_t lowest = PS2_RAM_SIZE;
+            for (int i = 0; i < 4096; ++i)
+            {
+                const uint32_t top = env.runtime.reserveAsyncCallbackStack(0x4000u, 16u);
+                if (top == 0u)
+                    break;
+                ++reserved;
+                lowest = std::min(lowest, top + 0x10u - 0x4000u);
+            }
+            t.IsTrue(reserved > 0u, "some callback stacks should fit below the top of RAM");
+            t.IsTrue(reserved < 4096u, "the callback stack space should run out");
+            t.IsTrue(lowest >= 0x01F31000u, "no callback stack may overlap the runtime pools");
+        });
+
         tc.Run("unsigned loads and ABI word writes extend independently", [](TestCase &t)
         {
             constexpr uint64_t kUpper = 0x1122334455667788ull;

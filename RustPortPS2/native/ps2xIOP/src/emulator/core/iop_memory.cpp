@@ -300,7 +300,12 @@ namespace ps2x::iop::detail
             return address;
         }
 
-        uint32_t candidate = alignUp(m_heapCursor, alignment);
+        // GOW-Port: first fit from the heap base, as the IOP's own AllocSysMemory (low-memory mode) places blocks, so freed
+        // memory is used again. The search used to start at a cursor that only moved forward: after enough load / unload of
+        // areas the 1.5 MB heap ran out although most of it was free (the Killzone port's sound effects vanished that way;
+        // idea from gow-native-pc runtime patch 11). PS2X_IOP_HEAP_REUSE=0 keeps the former cursor.
+        static const bool reuse = [] { const char *v = std::getenv("PS2X_IOP_HEAP_REUSE"); return !(v && v[0] == '0'); }();
+        uint32_t candidate = alignUp(reuse ? HeapBase : m_heapCursor, alignment);
         for (;;)
         {
             bool overlap = false;
@@ -316,11 +321,31 @@ namespace ps2x::iop::detail
             if (!overlap)
                 break;
         }
+        // GOW_IOP_HEAP_DIAG=1: bytes in use and the peak, every 256 allocations and on every failure.
+        static const bool heapDiag = std::getenv("GOW_IOP_HEAP_DIAG") != nullptr;
         if (candidate > HeapLimit || size > HeapLimit - candidate)
+        {
+            if (heapDiag)
+                std::fprintf(stderr, "[gow-iop-heap] allocation of %u bytes failed (%zu blocks, largest free %u)\n", size,
+                             m_allocations.size(), maxFreeMemory());
             return 0u;
+        }
         m_allocations.push_back({candidate, size});
         markOwned(candidate, size);
         m_heapCursor = std::max(m_heapCursor, candidate + size);
+        if (heapDiag)
+        {
+            static uint32_t peak = 0;
+            static uint64_t count = 0;
+            uint32_t used = 0;
+            for (const auto &block : m_allocations)
+                used += block.size;
+            peak = std::max(peak, used);
+            if (++count % 256u == 0u)
+                std::fprintf(stderr, "[gow-iop-heap] allocations=%llu blocks=%zu used=%u peak=%u high_water=%u limit=%u\n",
+                             static_cast<unsigned long long>(count), m_allocations.size(), used, peak, m_heapCursor - HeapBase,
+                             HeapLimit - HeapBase);
+        }
         return candidate;
     }
 
@@ -340,7 +365,25 @@ namespace ps2x::iop::detail
 
     uint32_t IopMemory::maxFreeMemory() const
     {
-        return m_heapCursor < HeapLimit ? HeapLimit - m_heapCursor : 0u;
+        static const bool reuse = [] { const char *v = std::getenv("PS2X_IOP_HEAP_REUSE"); return !(v && v[0] == '0'); }();
+        if (!reuse)
+            return m_heapCursor < HeapLimit ? HeapLimit - m_heapCursor : 0u;
+        // GOW-Port: with first fit, the largest free gap of the heap (QueryMaxFreeMemSize), freed blocks included.
+        std::vector<Allocation> blocks;
+        for (const auto &block : m_allocations)
+            if (block.address + block.size > HeapBase && block.address < HeapLimit)
+                blocks.push_back(block);
+        std::sort(blocks.begin(), blocks.end(), [](const Allocation &a, const Allocation &b) { return a.address < b.address; });
+        uint32_t largest = 0, at = HeapBase;
+        for (const auto &block : blocks)
+        {
+            if (block.address > at)
+                largest = std::max(largest, block.address - at);
+            at = std::max(at, block.address + block.size);
+        }
+        if (HeapLimit > at)
+            largest = std::max(largest, HeapLimit - at);
+        return largest;
     }
 
     std::optional<IopMemory::Allocation> IopMemory::allocationContaining(uint32_t address) const

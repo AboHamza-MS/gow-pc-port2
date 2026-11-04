@@ -176,6 +176,11 @@ namespace ps2x::iop
         return m_impl->emulator.accrueEeCycles(eeCycles);
     }
 
+    uint64_t IopSubsystem::eeCyclesUntilBatch() const noexcept
+    {
+        return m_impl->emulator.eeCyclesUntilBatch();
+    }
+
     void IopSubsystem::runPendingEeCycles() noexcept
     {
         m_impl->emulator.runPendingEeCycles();

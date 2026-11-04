@@ -1109,6 +1109,101 @@ void register_ps2_memory_tests()
             t.Equals(order[2], static_cast<uint8_t>(0x33u), "PATH3 should be drained third");
         });
 
+        // GOW-Port: a buffer moved in (submitBuffer, the GS worker's GIF DMAs) keeps the path priority and comes back spent.
+        // GOW-Port: early FINISH (planning 4.1): the EE-side scan of VIF1 packets for PATH2 A+D writes to FINISH (0x61).
+        tc.Run("early FINISH scan counts PATH2 FINISH writes and skips UNPACK data, cut DIRECTs and STCYCL", [](TestCase &t)
+        {
+            const auto word = [](std::vector<uint8_t> &out, uint32_t value)
+            {
+                for (int i = 0; i < 4; ++i)
+                    out.push_back(static_cast<uint8_t>(value >> (8 * i)));
+            };
+            const auto qword = [&word](std::vector<uint8_t> &out, uint64_t lo, uint64_t hi)
+            {
+                word(out, static_cast<uint32_t>(lo));
+                word(out, static_cast<uint32_t>(lo >> 32));
+                word(out, static_cast<uint32_t>(hi));
+                word(out, static_cast<uint32_t>(hi >> 32));
+            };
+            // DIRECT of 2 qwords: a PACKED GIF tag (NLOOP 1, EOP, NREG 1, A+D) and the A+D write to FINISH.
+            const auto finishDirect = [&](std::vector<uint8_t> &out)
+            {
+                word(out, 0x50000002u);
+                qword(out, (1ull << 60) | (1ull << 15) | 1u, 0xEull);
+                qword(out, 0u, 0x61u);
+            };
+            uint32_t cycle = 0x0101u, left = 0u;
+
+            std::vector<uint8_t> plain;
+            finishDirect(plain);
+            t.Equals(PS2Memory::countPath2Finish(plain.data(), static_cast<uint32_t>(plain.size()), cycle, left), 1u,
+                     "a DIRECT holding an A+D write to FINISH counts once");
+
+            // UNPACK V4-32 of 3 vectors whose data looks like a FINISH DIRECT: it is data, not a VIF code.
+            std::vector<uint8_t> decoy;
+            word(decoy, 0x6C030000u);
+            std::vector<uint8_t> fake;
+            finishDirect(fake);
+            fake.resize(48u, 0u);
+            decoy.insert(decoy.end(), fake.begin(), fake.end());
+            t.Equals(PS2Memory::countPath2Finish(decoy.data(), static_cast<uint32_t>(decoy.size()), cycle, left), 0u,
+                     "UNPACK data that looks like a FINISH is skipped");
+
+            // STCYCL CL=1 WL=2: an UNPACK of 2 writes reads 1 vector (16 bytes); a FINISH DIRECT right after it counts.
+            std::vector<uint8_t> cycled;
+            word(cycled, 0x01000201u);
+            word(cycled, 0x6C020000u);
+            cycled.resize(cycled.size() + 16u, 0u);
+            finishDirect(cycled);
+            t.Equals(PS2Memory::countPath2Finish(cycled.data(), static_cast<uint32_t>(cycled.size()), cycle, left), 1u,
+                     "STCYCL with CL < WL shortens the UNPACK as processVIF1Data does");
+            cycle = 0x0101u;
+
+            // A DIRECT cut by the packet end: its rest opens the next packet and is skipped, then the next code is read.
+            std::vector<uint8_t> whole;
+            finishDirect(whole);
+            const std::vector<uint8_t> first(whole.begin(), whole.begin() + 20);
+            std::vector<uint8_t> second(whole.begin() + 20, whole.end());
+            finishDirect(second);
+            t.Equals(PS2Memory::countPath2Finish(first.data(), static_cast<uint32_t>(first.size()), cycle, left), 0u,
+                     "a cut DIRECT is not counted in the packet that cuts it");
+            t.Equals(left, 16u, "the bytes still to skip carry over to the next packet");
+            t.Equals(PS2Memory::countPath2Finish(second.data(), static_cast<uint32_t>(second.size()), cycle, left), 1u,
+                     "after the rest of the cut DIRECT, the next FINISH DIRECT counts");
+            t.Equals(left, 0u, "nothing is left to skip");
+        });
+
+        tc.Run("GIF arbiter submitBuffer keeps priority and hands the buffer back after use", [](TestCase &t)
+        {
+            std::vector<uint8_t> order;
+            GifArbiter arbiter([&](const uint8_t *data, uint32_t sizeBytes)
+            {
+                if (data && sizeBytes > 0u)
+                    order.push_back(data[0]);
+            });
+
+            std::vector<uint8_t> p3(32u, 0x33u);
+            p3.reserve(4096u);
+            const uint8_t *const p3Storage = p3.data();
+            const std::vector<uint8_t> p1(16u, 0x11u);
+            arbiter.submitBuffer(GifPathId::Path3, std::move(p3));
+            arbiter.submit(GifPathId::Path1, p1.data(), static_cast<uint32_t>(p1.size()));
+            t.IsTrue(arbiter.takeSpentBuffers().empty(), "nothing is spent before the drain");
+            arbiter.drain();
+
+            t.Equals(order.size(), static_cast<size_t>(2u), "both packets should be drained");
+            t.Equals(order[0], static_cast<uint8_t>(0x11u), "PATH1 should still go before the moved-in PATH3 buffer");
+            t.Equals(order[1], static_cast<uint8_t>(0x33u), "the moved-in PATH3 buffer should be processed");
+            std::vector<std::vector<uint8_t>> spent = arbiter.takeSpentBuffers();
+            t.Equals(spent.size(), static_cast<size_t>(1u), "only the moved-in buffer should come back");
+            if (!spent.empty())
+            {
+                t.IsTrue(spent[0].data() == p3Storage, "the same storage should come back, not a copy");
+                t.IsTrue(spent[0].capacity() >= 4096u, "the buffer should keep its capacity for reuse");
+            }
+            t.IsTrue(arbiter.takeSpentBuffers().empty(), "the spent list should be handed over once");
+        });
+
         tc.Run("VIF DIRECTHL stalls behind queued PATH3 IMAGE packets", [](TestCase &t)
         {
             PS2Memory mem;
@@ -2052,6 +2147,60 @@ void register_ps2_memory_tests()
             t.Equals(causes.size(), static_cast<size_t>(1u), "SPR_FROM should queue one DMAC completion");
             if (!causes.empty())
                 t.Equals(causes[0], 8u, "SPR_FROM completion should use DMAC cause 8");
+        });
+
+        // GOW-Port: interleave (MOD=2): TQWC quadwords per block, SQWC skipped in RDRAM, contiguous in the scratchpad.
+        tc.Run("DMAC SPR interleave mode strides RDRAM by D_SQWC on channels 8 and 9", [](TestCase &t)
+        {
+            constexpr uint32_t kMadr = 0x00030000u;
+            constexpr uint32_t kSadr = 0x00000200u;
+            constexpr uint32_t kQwc = 5u;
+            constexpr uint32_t kSqwc = (2u << 16u) | 1u; // TQWC=2, SQWC=1
+            // RDRAM quadword index of each transferred quadword: blocks [0,1] [3,4] [6].
+            constexpr uint32_t kRamQw[kQwc] = {0u, 1u, 3u, 4u, 6u};
+
+            {
+                PS2Memory mem;
+                t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+                for (uint32_t i = 0; i < kQwc * 16u; ++i)
+                    mem.getScratchpad()[kSadr + i] = static_cast<uint8_t>(0x40u + i);
+                t.IsTrue(mem.writeIORegister(0x1000E030u, kSqwc), "write D_SQWC should succeed");
+                t.IsTrue(mem.writeIORegister(0x1000D010u, kMadr), "write SPR_FROM MADR should succeed");
+                t.IsTrue(mem.writeIORegister(0x1000D020u, kQwc), "write SPR_FROM QWC should succeed");
+                t.IsTrue(mem.writeIORegister(0x1000D080u, kSadr), "write SPR_FROM SADR should succeed");
+                t.IsTrue(mem.writeIORegister(0x1000D000u, 0x108u), "start SPR_FROM interleave should succeed");
+                bool placed = true;
+                for (uint32_t q = 0; q < kQwc; ++q)
+                    for (uint32_t b = 0; b < 16u; ++b)
+                        placed = placed && mem.getRDRAM()[kMadr + kRamQw[q] * 16u + b] == static_cast<uint8_t>(0x40u + q * 16u + b);
+                t.IsTrue(placed, "SPR_FROM interleave should place each block after SQWC skipped quadwords");
+                bool skipped = true;
+                for (uint32_t q : {2u, 5u})
+                    for (uint32_t b = 0; b < 16u; ++b)
+                        skipped = skipped && mem.getRDRAM()[kMadr + q * 16u + b] == 0u;
+                t.IsTrue(skipped, "SPR_FROM interleave should leave the skipped quadwords untouched");
+                t.Equals(mem.readIORegister(0x1000D010u), kMadr + 7u * 16u, "SPR_FROM interleave MADR should include the skips");
+                t.Equals(mem.readIORegister(0x1000D080u), kSadr + kQwc * 16u, "SPR_FROM interleave SADR should advance by QWC");
+                t.Equals(mem.readIORegister(0x1000D020u), 0u, "SPR_FROM interleave should consume QWC");
+            }
+            {
+                PS2Memory mem;
+                t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+                for (uint32_t q = 0; q < kQwc; ++q)
+                    for (uint32_t b = 0; b < 16u; ++b)
+                        mem.getRDRAM()[kMadr + kRamQw[q] * 16u + b] = static_cast<uint8_t>(0x80u + q * 16u + b);
+                t.IsTrue(mem.writeIORegister(0x1000E030u, kSqwc), "write D_SQWC should succeed");
+                t.IsTrue(mem.writeIORegister(0x1000D410u, kMadr), "write SPR_TO MADR should succeed");
+                t.IsTrue(mem.writeIORegister(0x1000D420u, kQwc), "write SPR_TO QWC should succeed");
+                t.IsTrue(mem.writeIORegister(0x1000D480u, kSadr), "write SPR_TO SADR should succeed");
+                t.IsTrue(mem.writeIORegister(0x1000D400u, 0x108u), "start SPR_TO interleave should succeed");
+                bool gathered = true;
+                for (uint32_t i = 0; i < kQwc * 16u; ++i)
+                    gathered = gathered && mem.getScratchpad()[kSadr + i] == static_cast<uint8_t>(0x80u + i);
+                t.IsTrue(gathered, "SPR_TO interleave should gather the blocks contiguously into the scratchpad");
+                const std::vector<uint32_t> causes = mem.consumeCompletedDmacCauses();
+                t.IsTrue(!causes.empty() && causes.back() == 9u, "SPR_TO interleave completion should use DMAC cause 9");
+            }
         });
 
         tc.Run("DMAC SPR_TO copies RDRAM to scratchpad and completes channel 9", [](TestCase &t)

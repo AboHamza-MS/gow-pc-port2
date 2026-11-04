@@ -14,6 +14,14 @@ namespace ps2_gs_display
 
     void setDisplay(PS2Memory &memory, const GSDisplayState &state)
     {
+        if (memory.gsEarlyFinish())
+        {
+            // GOW-Port: early FINISH: the GS stage applies them once everything queued before them is drawn.
+            const uint64_t regs[7] = {state.pmode, state.smode2, state.dispfb1, state.display1, state.dispfb2, state.display2,
+                                      state.bgcolor};
+            memory.gsQueueDisplay(regs);
+            return;
+        }
         memory.syncGsWorkerFor(kDisplaySite);
         GSRegisters &gs = memory.gs();
         gs.pmode = state.pmode;
@@ -27,8 +35,21 @@ namespace ps2_gs_display
 
     GSDisplayState display(const PS2Memory &memory)
     {
-        const GSRegisters &gs = memory.gs();
         GSDisplayState state;
+        uint64_t queued[7];
+        if (memory.gsEarlyFinish() && memory.gsDisplayShadow(queued))
+        {
+            // GOW-Port: what the game wrote last, which the drawing may not have reached yet.
+            state.pmode = queued[0];
+            state.smode2 = queued[1];
+            state.dispfb1 = queued[2];
+            state.display1 = queued[3];
+            state.dispfb2 = queued[4];
+            state.display2 = queued[5];
+            state.bgcolor = queued[6];
+            return state;
+        }
+        const GSRegisters &gs = memory.gs();
         state.pmode = gs.pmode;
         state.smode2 = gs.smode2;
         state.dispfb1 = gs.dispfb1;

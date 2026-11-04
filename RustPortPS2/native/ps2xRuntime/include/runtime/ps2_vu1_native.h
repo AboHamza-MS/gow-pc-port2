@@ -338,13 +338,14 @@ namespace vu1n
     VU1N_INLINE __m128 ld(const VU1State &s, int r) { return _mm_loadu_ps(s.vf[r]); }
     // Operand view of a register: Inf/NaN (exponent 255) act as +-FLT_MAX, as in the exact engine's normalizeOperand. The register
     // itself keeps its raw bits (integer data travels through VF registers).
+    // GOW-Port (planning 3.2): the magnitude's unsigned minimum with FLT_MAX's bits, then the sign back: 4 operations instead of 6.
+    // Every finite magnitude is <= 0x7F7FFFFF and every Inf / NaN is above it, so the result is the same in every case.
     VU1N_INLINE __m128 nrm(__m128 v)
     {
         const __m128i b = _mm_castps_si128(v);
-        const __m128i expMask = _mm_set1_epi32(0x7F800000);
-        const __m128i bad = _mm_cmpeq_epi32(_mm_and_si128(b, expMask), expMask);
-        const __m128i fixed = _mm_or_si128(_mm_and_si128(b, _mm_set1_epi32(static_cast<int>(0x80000000u))), _mm_set1_epi32(0x7F7FFFFF));
-        return _mm_castsi128_ps(_mm_blendv_epi8(b, fixed, bad));
+        const __m128i sign = _mm_set1_epi32(static_cast<int>(0x80000000u));
+        const __m128i magnitude = _mm_min_epu32(_mm_andnot_si128(sign, b), _mm_set1_epi32(0x7F7FFFFF));
+        return _mm_castsi128_ps(_mm_or_si128(magnitude, _mm_and_si128(b, sign)));
     }
     VU1N_INLINE __m128 ldn(const VU1State &s, int r) { return nrm(_mm_loadu_ps(s.vf[r])); }
     VU1N_INLINE __m128 ldAcc(const VU1State &s) { return _mm_loadu_ps(s.acc); }

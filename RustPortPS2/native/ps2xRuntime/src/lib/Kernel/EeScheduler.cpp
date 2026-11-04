@@ -2,6 +2,7 @@
 
 #include "ps2_log.h"
 #include "runtime/ps2_perf.h"
+#include "../gow_frame_metrics.h" // GOW-Port: GOW_FRAME_DIAG
 #include "ps2_runtime_macros.h"
 
 #include <algorithm>
@@ -77,7 +78,7 @@ namespace
 }
 
 EeScheduler::EeScheduler(PS2Runtime &runtime)
-    : m_runtime(runtime)
+    : m_runtime(runtime), m_clock(runtime.m_eeClock), m_eeCycle(m_clock.eeCycle), m_checkpointPending(m_clock.checkpointPending)
 {
 }
 
@@ -118,6 +119,9 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
     m_pendingEeTimerInterrupts = 0u;
     m_eeCycle = 0u;
     m_sliceEndCycle = kDefaultTimeSliceCycles;
+    m_clock.quietCycles = 0u;
+    m_clock.deferredCycles = 0u;
+    m_clock.limitsChanged.store(true, std::memory_order_seq_cst);
     m_stopRequested.store(false, std::memory_order_release);
     m_checkpointPending.store(false, std::memory_order_release);
     m_debugPublishCountdown = 0u;
@@ -303,6 +307,9 @@ void EeScheduler::run()
             m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
             m_guestExecuting.store(true, std::memory_order_release);
             ps2_perf::guestEntry(context.pc, m_rdram);
+            static const bool frameDiag = gow_frame_metrics::enabled(); // GOW-Port: GOW_FRAME_DIAG
+            if (frameDiag)
+                gow_frame_metrics::onGuestEntry(context.pc);
             loadSharedVu0Random(context);
             function(m_rdram, &context, &m_runtime);
             saveSharedVu0Random(context);
@@ -366,6 +373,48 @@ void EeScheduler::postEvent(EeEvent event)
 
 bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
 {
+    // GOW-Port: seq_cst: a limit another thread moved before this exchange is seen by quietCycles() below; one moved after
+    // it leaves the flag set, so the next checkpoint is a full one again.
+    m_clock.limitsChanged.exchange(false, std::memory_order_seq_cst);
+    const bool due = checkpointDueFull(cycles);
+    m_clock.quietCycles = due ? 0u : quietCycles();
+    return due;
+}
+
+uint64_t EeScheduler::quietCycles() const noexcept
+{
+    // GOW-Port: GOW_EE_CHECKPOINT_FAST=0: no quiet cycles, every checkpoint is a full one (the former behaviour, for A/B).
+    static const bool fast = [] {
+        const char *value = std::getenv("GOW_EE_CHECKPOINT_FAST");
+        return !(value && value[0] == '0');
+    }();
+    if (!fast || m_pendingEeTimerInterrupts != 0u || m_eeCycle >= m_sliceEndCycle)
+        return 0u;
+    uint64_t quiet = m_sliceEndCycle - m_eeCycle;
+    const uint64_t nextEventCycle = m_nextDeadlineCycle.load(std::memory_order_acquire);
+    if (nextEventCycle != 0u)
+        quiet = nextEventCycle > m_eeCycle ? std::min(quiet, nextEventCycle - m_eeCycle) : 0u;
+    quiet = std::min(quiet, m_runtime.memory().eeTimerQuietCycles());
+    return std::min(quiet, m_runtime.iopEeCyclesUntilBatch());
+}
+
+void EeScheduler::syncDeferredCycles(bool limitsChanged) noexcept
+{
+    if (m_clock.deferredCycles != 0u)
+    {
+        const uint64_t deferred = m_clock.deferredCycles;
+        m_clock.deferredCycles = 0u;
+        m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(deferred);
+        m_runtime.advanceIopEeCycles(deferred);
+        if (m_pendingEeTimerInterrupts != 0u)
+            m_checkpointPending.store(true, std::memory_order_release);
+    }
+    if (limitsChanged)
+        m_clock.quietCycles = 0u;
+}
+
+bool EeScheduler::checkpointDueFull(uint32_t cycles) noexcept
+{
     accountCycles(cycles);
 
     if (m_checkpointPending.load(std::memory_order_acquire) ||
@@ -402,8 +451,12 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
 {
     const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
     m_eeCycle += elapsed;
-    m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
-    m_runtime.advanceIopEeCycles(elapsed);
+    // GOW-Port: the cycles EeCheckpointClock::advanceQuiet deferred are already in m_eeCycle; hand them over with these.
+    const uint64_t accrued = elapsed + m_clock.deferredCycles;
+    m_clock.deferredCycles = 0u;
+    m_clock.quietCycles = 0u; // recomputed by the next full checkpoint
+    m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(accrued);
+    m_runtime.advanceIopEeCycles(accrued);
     if (m_pendingEeTimerInterrupts != 0u)
     {
         m_checkpointPending.store(true, std::memory_order_release);
@@ -507,6 +560,7 @@ int EeScheduler::deleteThread(int id, uint32_t &ownedStack)
     {
         ownedStack = it->second.stack;
     }
+    releaseInvocationStacks(id);
     m_threads.erase(it);
     publishSnapshot();
     return KE_OK;
@@ -555,6 +609,7 @@ int EeScheduler::startThread(int id, uint32_t arg, const R5900Context &caller, b
     m_currentThreadId = 0;
     if (deleteThreadRecord && id != kMainThreadId)
     {
+        releaseInvocationStacks(id);
         m_threads.erase(id);
     }
     if (ownedStack != 0u)
@@ -1203,6 +1258,22 @@ bool EeScheduler::hasInvocation(GuestInvocationKind kind, uint64_t tag) const
                        });
 }
 
+void EeScheduler::releaseInvocationStacks(int id)
+{
+    for (auto it = m_invocationStackTops.begin(); it != m_invocationStackTops.end();)
+    {
+        if (static_cast<int>(static_cast<uint32_t>(it->first >> 32u)) == id)
+        {
+            m_freeInvocationStacks.push_back(it->second);
+            it = m_invocationStackTops.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+}
+
 uint32_t EeScheduler::invocationStackTop()
 {
     assertExecutor();
@@ -1220,7 +1291,18 @@ uint32_t EeScheduler::invocationStackTop()
         return existing->second;
     }
     constexpr uint32_t kInvocationStackSize = 0x4000u;
-    const uint32_t top = m_runtime.reserveAsyncCallbackStack(kInvocationStackSize, 16u);
+    // GOW-Port: a stack a deleted thread left is used again first. They were never freed, so a session that creates and
+    // deletes threads ran out of the space above the runtime's pools (see ps2_runtime.cpp, kRuntimePoolsEnd).
+    uint32_t top = 0u;
+    if (!m_freeInvocationStacks.empty())
+    {
+        top = m_freeInvocationStacks.back();
+        m_freeInvocationStacks.pop_back();
+    }
+    else
+    {
+        top = m_runtime.reserveAsyncCallbackStack(kInvocationStackSize, 16u);
+    }
     if (top == 0u)
     {
         throw std::runtime_error("EE invocation stack space exhausted");
@@ -2160,6 +2242,8 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
 void EeScheduler::waitForEvent()
 {
     ps2_perf::Scope perf(ps2_perf::Bucket::GuestWait);
+    // GOW-Port: the timer deadline below reads the EE timers: hand them the cycles the checkpoint fast path deferred first.
+    syncDeferredCycles(false);
     std::unique_lock lock(m_eventMutex);
     if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
     {
@@ -2235,6 +2319,7 @@ void EeScheduler::updateNextDeadline()
     if (m_deadlines.empty())
     {
         m_nextDeadlineCycle.store(0u, std::memory_order_release);
+        m_clock.limitsChanged.store(true, std::memory_order_seq_cst); // GOW-Port: recompute the quiet cycles
         return;
     }
     const auto it = std::min_element(m_deadlines.begin(), m_deadlines.end(),
@@ -2247,6 +2332,7 @@ void EeScheduler::updateNextDeadline()
                                          return left.sequence < right.sequence;
                                      });
     m_nextDeadlineCycle.store(it->deadlineCycle, std::memory_order_release);
+    m_clock.limitsChanged.store(true, std::memory_order_seq_cst); // GOW-Port: an event may now come sooner
 }
 
 bool EeScheduler::hasReadyAtOrAbovePriority(int priority) const
@@ -2266,6 +2352,7 @@ void EeScheduler::renewTimeSlice()
 {
     m_sliceEndCycle = m_eeCycle + kDefaultTimeSliceCycles;
     m_timeSliceExpired = false;
+    m_clock.limitsChanged.store(true, std::memory_order_seq_cst); // GOW-Port: recompute the quiet cycles
 }
 
 void EeScheduler::copyMainContextToRuntime()

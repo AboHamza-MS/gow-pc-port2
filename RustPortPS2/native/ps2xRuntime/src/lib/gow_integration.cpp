@@ -35,6 +35,92 @@
 #include <mutex>
 #include <vector>
 #include "gow_osd.inl" // GOW-Port: MSI Afterburner-style performance OSD (GS FPS, GPU, CPU, RAM)
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#endif
+
+namespace
+{
+    // GOW-Port: the log through a pipe and a writer thread. Writing a line straight to the log file cost the game 50-100 ms
+    // in the clang build (the [gow-perf] line every 5 s was a hitch every 5 s, longer as the file grew, likely the
+    // antivirus examining the file on each write; the MSVC build did not show it). The game threads now write into a 1 MB
+    // pipe and only this thread waits for the file. At exit it drains the pipe, so the last lines are kept.
+    // GOW_LOG_DIRECT=1 writes straight to the file as before.
+    struct LogWriter
+    {
+        int original[2] = {-1, -1}; // stdout, stderr as they were (the files the launcher opened)
+        std::thread threads[2];
+    };
+    LogWriter g_logWriter;
+
+    void stopLogWriter()
+    {
+#if defined(_WIN32)
+        for (int i = 0; i < 2; ++i)
+        {
+            if (g_logWriter.original[i] < 0)
+                continue;
+            std::fflush(i == 0 ? stdout : stderr);
+            _dup2(g_logWriter.original[i], i + 1); // closes the pipe's write end: the writer reads to the end and stops
+            if (g_logWriter.threads[i].joinable())
+                g_logWriter.threads[i].join();
+        }
+#endif
+    }
+
+    void startLogWriter()
+    {
+#if defined(_WIN32)
+        const char *direct = std::getenv("GOW_LOG_DIRECT");
+        if (direct && direct[0] == '1')
+            return;
+        for (int i = 0; i < 2; ++i)
+        {
+            std::FILE *stream = i == 0 ? stdout : stderr;
+            const int fd = _fileno(stream);
+            if (fd < 0)
+                continue; // no stream (a GUI start without redirection)
+            std::fflush(stream);
+            const int original = _dup(fd);
+            int ends[2];
+            if (original < 0 || _pipe(ends, 1u << 20, _O_BINARY) != 0)
+            {
+                if (original >= 0)
+                    _close(original);
+                continue;
+            }
+            if (_dup2(ends[1], fd) != 0)
+            {
+                _close(ends[0]);
+                _close(ends[1]);
+                _close(original);
+                continue;
+            }
+            _close(ends[1]);
+            g_logWriter.original[i] = original;
+            g_logWriter.threads[i] = std::thread([reader = ends[0], original] {
+                char buffer[16384];
+                for (;;)
+                {
+                    const int read = _read(reader, buffer, sizeof(buffer));
+                    if (read <= 0)
+                        break;
+                    for (int done = 0; done < read;)
+                    {
+                        const int wrote = _write(original, buffer + done, static_cast<unsigned>(read - done));
+                        if (wrote <= 0)
+                            break;
+                        done += wrote;
+                    }
+                }
+                _close(reader);
+            });
+        }
+        std::atexit(stopLogWriter);
+#endif
+    }
+}
 
 namespace ps2_stubs
 {
@@ -154,7 +240,9 @@ namespace
             // GOW-Port: [gow-frames] (GOW_FRAMES_DIAG=1): distribution of the period between game frames, per 5 s window,
             // and every long hitch (> 100 ms) as it happens. The [gow-perf] windows hide one-second hitches.
             static const bool framesDiag = envFlag("GOW_FRAMES_DIAG", envFlag("GOW_PERF_DIAG", false)); // el lanzador define GOW_PERF_DIAG=1
-            if (framesDiag)
+            // GOW-Port: GOW_FRAMES_HITCH_LOG=1 alone logs the hitches without the 5 s report (to rule the report out).
+            static const bool hitchOnly = !framesDiag && envFlag("GOW_FRAMES_HITCH_LOG", false);
+            if (framesDiag || hitchOnly)
             {
                 using Clock = std::chrono::steady_clock;
                 static const Clock::time_point start = Clock::now();
@@ -171,15 +259,18 @@ namespace
                     over33 += ms > 33.4;
                     over50 += ms > 50.0;
                     over100 += ms > 100.0;
-                    if (ms > 100.0)
-                        std::fprintf(stderr, "[gow-frames] stutter of %.0f ms at t=%.2f\n", ms, std::chrono::duration<double>(now - start).count());
+                    // GOW-Port: GOW_FRAMES_HITCH_LOG=1 also logs every frame over 50 ms, with the time, to find what they line up with.
+                    static const bool hitchLog = envFlag("GOW_FRAMES_HITCH_LOG", false);
+                    if (ms > 100.0 || (hitchLog && ms > 50.0))
+                        std::fprintf(stderr, "[gow-frames] stutter of %.0f ms at t=%.3f\n", ms, std::chrono::duration<double>(now - start).count());
                     if (ms > 1000.0)
                         ps2_stubs::logMemoryCardDebugSnapshot();
                 }
                 lastFrame = now;
                 if (now - lastReport >= std::chrono::seconds(5))
                 {
-                    std::fprintf(stderr, "[gow-frames] t=%.1f frames=%u max_ms=%.1f >25ms=%u >33ms=%u >50ms=%u >100ms=%u\n",
+                    if (framesDiag)
+                        std::fprintf(stderr, "[gow-frames] t=%.1f frames=%u max_ms=%.1f >25ms=%u >33ms=%u >50ms=%u >100ms=%u\n",
                                  std::chrono::duration<double>(now - start).count(), frames, maxMs, over25, over33, over50, over100);
                     lastReport = now;
                     maxMs = 0.0;
@@ -524,6 +615,7 @@ static void gowHangReport(PS2Runtime &runtime, uint64_t vsyncStep, uint64_t fram
 // previous one.
 void gowIntegrationInstall(PS2Runtime &runtime, const std::string &elfPath)
 {
+    startLogWriter(); // GOW-Port: the log through a writer thread (see LogWriter)
     gowSamplingStart(); // optional sampling profiler (GOW_SAMPLING=<file>)
     if (runtime.hasFunction(kGowPad2Read))
     {

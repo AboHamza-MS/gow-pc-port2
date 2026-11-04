@@ -794,6 +794,22 @@ bool VU1Interpreter::runNative(StepContext &context)
             ++ns.missBlocks;
             if (ns.diag)
                 ++ns.missHits[pc];
+            // GOW-Port: GOW_VU1_CAPTURE (default mode): record this micro memory and pc for the next native build. A missing
+            // block can be reached millions of times before that build, so the check here is a static bool when capture is
+            // off and a small per-generation set of pcs when it is on; captureVu1Miss deduplicates across generations.
+            static const bool captureMisses = vu1CaptureMode() == Vu1CaptureMode::Misses;
+            if (captureMisses)
+            {
+                static thread_local uint64_t s_missGeneration = ~0ull;
+                static thread_local std::unordered_set<uint32_t> s_missPcs;
+                if (s_missGeneration != ns.generation)
+                {
+                    s_missGeneration = ns.generation;
+                    s_missPcs.clear();
+                }
+                if (s_missPcs.insert(pc).second)
+                    captureVu1Miss(context.vuCode, context.codeSize, pc);
+            }
             break;
         }
         if (!armed)
@@ -973,6 +989,13 @@ void VU1NativeAccess::recordReplay(VU1Interpreter &vu, void *contextPtr, uint32_
     static const char *repPath = std::getenv("GOW_VU1N_REPLAY");
     if ((!recPath && !repPath) || context.dataSize != 16384u || context.codeSize != PS2_VU1_CODE_SIZE)
         return;
+    // GOW-Port: recording / replay in their own frame (copies of the interpreter): called for every VU1 program, this function
+    // would otherwise probe that frame's stack pages on every call with both off (idea from gow-native-pc runtime patch 50).
+    [&]()
+#if defined(__clang__) || defined(__GNUC__)
+        __attribute__((noinline, cold))
+#endif
+    {
     if (repPath)
     {
         static bool done = false;
@@ -995,6 +1018,9 @@ void VU1NativeAccess::recordReplay(VU1Interpreter &vu, void *contextPtr, uint32_
         static const unsigned reps = std::getenv("GOW_VU1N_REPLAY_REPS") ? static_cast<unsigned>(std::atoi(std::getenv("GOW_VU1N_REPLAY_REPS"))) : 1u;
         auto scratch = std::make_unique<Vu1nRecord>();
         uint64_t timedNs = 0;
+        // GOW-Port: time of each warm round (all records once) kept apart, so the median and the spread of a run can be
+        // printed: one total hid how noisy a measurement was (idea from gow-native-pc docs/research/roteiro-60fps).
+        std::vector<uint64_t> roundNs(std::max(reps, 1u), 0u);
         while (std::fread(rec.get(), sizeof(Vu1nRecord), 1, f) == 1)
         {
             ++total;
@@ -1015,7 +1041,10 @@ void VU1NativeAccess::recordReplay(VU1Interpreter &vu, void *contextPtr, uint32_
                 g_vu1nReplayNs = 0;
                 const uint64_t h = silentNativeHash(vu, &c);
                 if (rep != 0u)
+                {
                     timedNs += g_vu1nReplayNs; // warm block cache only
+                    roundNs[rep] += g_vu1nReplayNs;
+                }
                 else
                 {
                     if (hashesOut)
@@ -1026,7 +1055,23 @@ void VU1NativeAccess::recordReplay(VU1Interpreter &vu, void *contextPtr, uint32_
             }
         }
         if (reps > 1u)
+        {
             std::fprintf(stderr, "[vu1n-replay] timing: %.3f ms for %u warm runs\n", timedNs / 1e6, total * (reps - 1u));
+            // GOW-Port: one line a script can parse: every warm round, then median / min / max of a round, in ms.
+            std::vector<uint64_t> rounds(roundNs.begin() + 1, roundNs.end());
+            std::string line;
+            for (const uint64_t ns : rounds)
+            {
+                char item[32];
+                std::snprintf(item, sizeof(item), " %.3f", ns / 1e6);
+                line += item;
+            }
+            std::sort(rounds.begin(), rounds.end());
+            const size_t n = rounds.size();
+            const double median = (n % 2u) ? rounds[n / 2u] / 1e6 : (rounds[n / 2u - 1u] + rounds[n / 2u]) / 2e6;
+            std::fprintf(stderr, "[vu1n-replay] rounds_ms=%s median_ms=%.3f min_ms=%.3f max_ms=%.3f records=%u\n", line.c_str(), median,
+                         rounds.front() / 1e6, rounds.back() / 1e6, total);
+        }
         std::fclose(f);
         if (hashesOut)
             if (FILE *o = std::fopen(hashesOut, "wb"))
@@ -1074,4 +1119,5 @@ void VU1NativeAccess::recordReplay(VU1Interpreter &vu, void *contextPtr, uint32_
         std::fclose(f), std::fprintf(stderr, "[vu1n-record] %u records written\n", written);
     else if (written % 500u == 0u)
         std::fflush(f);
+    }();
 }

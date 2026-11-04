@@ -77,6 +77,28 @@ void GifArbiter::submit(GifPathId pathId, const uint8_t *data, uint32_t sizeByte
     m_queue.push_back(std::move(pkt));
 }
 
+void GifArbiter::submitBuffer(GifPathId pathId, std::vector<uint8_t> &&data, bool path2DirectHl)
+{
+    const uint32_t sizeBytes = static_cast<uint32_t>(data.size());
+    if (sizeBytes < 16 || !m_processFn || pathId < GifPathId::Path1 || pathId > GifPathId::Path3)
+        return;
+
+    GifArbiterPacket pkt;
+    pkt.pathId = pathId;
+    pkt.path2DirectHl = (pathId == GifPathId::Path2) && path2DirectHl;
+    pkt.path3Image = (pathId == GifPathId::Path3) && trackPath3Packet(data.data(), sizeBytes);
+    pkt.spent = true;
+    pkt.data = std::move(data);
+    m_queue.push_back(std::move(pkt));
+}
+
+std::vector<std::vector<uint8_t>> GifArbiter::takeSpentBuffers()
+{
+    std::vector<std::vector<uint8_t>> out;
+    out.swap(m_spent);
+    return out;
+}
+
 // GOW-Port: submit + drain. With nothing queued the packet is the whole batch, so it goes to the callback in place without the
 // queue's copy (every XGKICK takes this path). Idea from Waffle565/God-Of-War-Native-Port (docs/dev/PERFORMANCE.md, ATHN01D).
 void GifArbiter::submitAndDrain(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool path2DirectHl)
@@ -132,6 +154,10 @@ void GifArbiter::drain()
             if (!pkt.data.empty())
                 m_processFn(pkt.pathId, pkt.data.data(), static_cast<uint32_t>(pkt.data.size()));
         }
+        // GOW-Port: buffers moved in by submitBuffer wait for their owner (a few at most; the rest is freed).
+        for (size_t i = 0u; i < count; ++i)
+            if (m_queue[i].spent && m_spent.size() < 8u)
+                m_spent.push_back(std::move(m_queue[i].data));
         // GOW-Port: keep the packets the callback added; they are processed in another batch.
         m_queue.erase(m_queue.begin(), m_queue.begin() + count);
     }

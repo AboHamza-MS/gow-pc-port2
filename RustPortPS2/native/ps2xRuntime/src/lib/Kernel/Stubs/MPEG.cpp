@@ -1500,7 +1500,13 @@ namespace ps2_stubs
                         // n, otherwise ADPCM) that the game's callback skips. The PCM runs on across packets of odd
                         // lengths (God of War: 4073 / 4059 data bytes).
                         const uint8_t subStream = payloadStart + 1u < packetEnd ? buffer[payloadStart + 1u] : 0u;
-                        const bool pcm = streamId == kMpegPrivateStream1 && (subStream & 0xF0u) == 0xA0u;
+                        bool pcm = streamId == kMpegPrivateStream1 && (subStream & 0xF0u) == 0xA0u;
+                        // GOW-Port: the 0xAn sub-stream alone does not tell PCM from ADPCM (GoW II's movies carry ADPCM in
+                        // 0xA1 packets, found by the GoW II port). When the game registered a callback for only the other
+                        // audio type, the packet goes there instead of to nobody; God of War's PCM movies are unchanged.
+                        if (matchingStreamCallbacks(mpegAddr, pcm ? kMpegStrPCM : kMpegStrADPCM).empty() &&
+                            !matchingStreamCallbacks(mpegAddr, pcm ? kMpegStrADPCM : kMpegStrPCM).empty())
+                            pcm = !pcm;
                         // A/V check (GOW_MPEG_DIAG): the PTS of each stream's first audio packet
                         static const bool s_audioPtsDiag = std::getenv("GOW_MPEG_DIAG") != nullptr;
                         static std::map<uint32_t, bool> s_audioPtsSeen;

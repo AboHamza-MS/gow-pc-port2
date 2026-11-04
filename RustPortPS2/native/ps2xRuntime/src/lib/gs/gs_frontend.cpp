@@ -915,10 +915,44 @@ bool GS::hasPendingGIFPacket(GifPathId path) const
     return index == 0u || index >= m_gifInput.size() || m_gifInput[index].pending();
 }
 
+// GOW-Port: early FINISH markers, queued by the GS worker between GIF packets (ps2_memory.cpp, pushStageMarker): kind 1
+// carries the display registers the game wrote, applied now that everything before them is drawn; kind 2 how many of the
+// current job's PATH2 FINISH writes the game already received.
+void GS::stageMarker(const uint8_t *data, uint32_t sizeBytes)
+{
+    uint32_t kind = 0u;
+    if (!data || sizeBytes < 8u)
+        return;
+    std::memcpy(&kind, data, sizeof(kind));
+    if (kind == 2u)
+    {
+        std::memcpy(&m_finishGiven, data + 8u, sizeof(m_finishGiven));
+        return;
+    }
+    if (kind == 1u && m_privRegs && sizeBytes >= 8u + 7u * sizeof(uint64_t))
+    {
+        uint64_t regs[7];
+        std::memcpy(regs, data + 8u, sizeof(regs));
+        m_privRegs->pmode = regs[0];
+        m_privRegs->smode2 = regs[1];
+        m_privRegs->dispfb1 = regs[2];
+        m_privRegs->display1 = regs[3];
+        m_privRegs->dispfb2 = regs[4];
+        m_privRegs->display2 = regs[5];
+        m_privRegs->bgcolor = regs[6];
+    }
+}
+
 void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes, GifPathId path)
 {
     ps2_perf::Scope perf(ps2_perf::Bucket::Gs); // GOW-Port: includes rasterization and GIF transfers.
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    if (path == static_cast<GifPathId>(0))
+    {
+        stageMarker(data, sizeBytes); // GOW-Port: an early FINISH marker, not GIF data
+        return;
+    }
+    m_currentPath = path;
     const size_t pathIndex = static_cast<size_t>(path);
     if (!data || !sizeBytes || !m_backend || pathIndex == 0u || pathIndex >= m_gifInput.size())
         return;
@@ -1797,6 +1831,14 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
     }
     case GS_REG_FINISH:
     {
+        // GOW-Port: early FINISH: the game received this one when the packet was queued; the backend still syncs here.
+        if (m_finishGiven != 0u && m_currentPath == GifPathId::Path2)
+        {
+            --m_finishGiven;
+            if (m_backend)
+                m_backend->Sync(GSSyncReason::Finish);
+            break;
+        }
         if (m_backend)
         {
             static const bool finishAsync = [] { const char *v = std::getenv("GOW_GS_FINISH_ASYNC"); return v && v[0] == '1'; }();

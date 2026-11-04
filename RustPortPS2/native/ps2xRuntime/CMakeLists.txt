@@ -50,6 +50,9 @@ FetchContent_Declare(
     raylib
     GIT_REPOSITORY "https://github.com/raysan5/raylib.git"
     GIT_TAG "5.5" # we will migrate to 4.2.0 later, trust me it will be better
+    # GOW-Port: only the tag, not ~500 MB of history (minutes of a first install on a slow link; idea from gow-native-pc
+    # runtime patch 42). An existing checkout is kept as it is.
+    GIT_SHALLOW TRUE
     GIT_PROGRESS TRUE
 )
 FetchContent_MakeAvailable(raylib)
@@ -306,6 +309,7 @@ src/lib/gs/gpu/gs_texture_store.cpp
     src/lib/gow_retro_achievements.cpp
     src/lib/gow_retro_achievements_http.cpp
     src/lib/gow_sampling.cpp
+    src/lib/gow_frame_metrics.cpp # GOW-Port: GOW_FRAME_DIAG guest-frame interval distribution
     src/lib/gow_cheats.cpp
     src/lib/gow_video.cpp
     src/lib/gow_targeting.cpp
@@ -402,6 +406,23 @@ file(GLOB GAME_SRC_FILES CONFIGURE_DEPENDS
 )
 set_source_files_properties(${GAME_SRC_FILES} PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 list(APPEND RUNNER_SRC_FILES ${GAME_SRC_FILES})
+
+# GOW-Port: register_functions.cpp (generated) is one constructor with a store per game function (~155,000, 12.8 MB) that
+# runs once at start-up. Optimized inside a unity batch it was the longest unit of the build (clang -O3: 331 s; idea from
+# gow-native-pc runtime patch 41, where -O1 alone took 9.8 s). It is built on its own, without the precompiled header
+# (clang rejects a PCH made at another optimization level) and at a low level: nothing in it is hot.
+set(PS2X_RUNNER_REGISTER_FILE "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/register_functions.cpp")
+if(EXISTS "${PS2X_RUNNER_REGISTER_FILE}")
+    if(MSVC)
+        set(PS2X_RUNNER_REGISTER_OPTIONS "/Od")
+    else()
+        set(PS2X_RUNNER_REGISTER_OPTIONS "-O1")
+    endif()
+    set_source_files_properties("${PS2X_RUNNER_REGISTER_FILE}" PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION ON
+        SKIP_PRECOMPILE_HEADERS ON
+        COMPILE_OPTIONS "${PS2X_RUNNER_REGISTER_OPTIONS}")
+endif()
 
 add_executable(ps2EntryRunner
     ${RUNNER_SRC_FILES}

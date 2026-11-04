@@ -8,6 +8,7 @@
 #include "MTVU.h"
 
 #include <cmath>
+#include <cstdlib> // GOW-Port: std::getenv / std::strtol (MSVC brought it in through another header; clang does not)
 
 #if !defined(_MSC_VER)
 // GOW-Port (Linux): _vuTestPipes is called from other files (VUops.h declares it extern). With GCC/Clang an

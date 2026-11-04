@@ -50,13 +50,17 @@ function(EnableFastReleaseMode TargetName)
         endif()
     endif()
 
-    # On MSVC cross-unit optimization (IPO) is /GL + /LTCG: only with PS2X_ENABLE_LTCG.
-    if(IPO_SUPPORTED AND (NOT MSVC OR PS2X_ENABLE_LTCG))
+    # On MSVC cross-unit optimization (IPO) is /GL + /LTCG: only with PS2X_ENABLE_LTCG. GOW-Port: on Windows with clang
+    # (llvm-mingw) too: LTO over ~6,400 files multiplies the link time and memory and was never measured faster (gow-native-pc
+    # keeps its ThinLTO opt-in for that reason). Linux keeps its LTO (with PS2X_LTO_JOBS).
+    if(IPO_SUPPORTED AND ((NOT MSVC AND NOT WIN32) OR PS2X_ENABLE_LTCG))
         set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
         if(NOT MSVC AND PS2X_LTO_JOBS)
             target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=${PS2X_LTO_JOBS}>)
         endif()
+    elseif(NOT IPO_SUPPORTED)
+        message(WARNING "Interprocedural optimization not supported: ${IPO_ERROR}")
     else()
-        message(WARNING "Interprocedural optimization not supported: ${ipo_error}")
+        message(STATUS "Interprocedural optimization off for ${TargetName} (PS2X_ENABLE_LTCG=ON enables it)")
     endif()
 endfunction()

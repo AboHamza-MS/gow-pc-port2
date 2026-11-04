@@ -1,10 +1,13 @@
 #include "memory_card.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <mutex>
+#include <set>
+#include <system_error>
 
 namespace ps2x::iop::detail
 {
@@ -30,6 +33,44 @@ namespace ps2x::iop::detail
         {
             std::lock_guard<std::mutex> lock(openCardFilesMutex());
             openCardFiles().erase(path);
+        }
+
+        // GOW-Port (R3): cards already copied to <card>.bak in this session (guarded by openCardFilesMutex).
+        std::set<std::string> &backedUpCards()
+        {
+            static std::set<std::string> cards;
+            return cards;
+        }
+
+        // GOW-Port (R3): copies through a temporary file and a rename, so a crash never leaves a half-written copy.
+        bool copyThroughTemporary(const std::filesystem::path &from, const std::filesystem::path &to)
+        {
+            std::error_code error;
+            std::filesystem::path temporary = to;
+            temporary += ".tmp";
+            std::filesystem::copy_file(from, temporary, std::filesystem::copy_options::overwrite_existing, error);
+            if (!error)
+                std::filesystem::rename(temporary, to, error);
+            if (error)
+            {
+                std::filesystem::remove(temporary, error);
+                return false;
+            }
+            return true;
+        }
+
+        // GOW-Port (R3): a card file of the wrong size (cut, empty, or another card format) is never written over: it is
+        // moved aside as <card>.unusable[N] and the game sees a blank card it can format.
+        void moveUnusableCardAside(const std::string &path, uintmax_t size)
+        {
+            std::error_code error;
+            std::filesystem::path aside = path + ".unusable";
+            for (int n = 2; std::filesystem::exists(aside, error) && n < 100; ++n)
+                aside = path + ".unusable" + std::to_string(n);
+            std::filesystem::rename(path, aside, error);
+            std::cerr << "[memory card] " << path << " has " << size << " bytes instead of " << MemoryCard::ImageSize
+                      << ": " << (error ? "left untouched" : "moved to " + aside.string())
+                      << "; the game gets a blank card" << std::endl;
         }
     }
 
@@ -61,6 +102,13 @@ namespace ps2x::iop::detail
         m_image.assign(ImageSize, 0xFFu); // unformatted
         if (m_path.empty())
             return;
+        std::error_code sizeError;
+        const uintmax_t size = std::filesystem::file_size(m_path, sizeError);
+        if (!sizeError && size != ImageSize)
+        {
+            moveUnusableCardAside(m_path, size);
+            return;
+        }
         std::ifstream file(m_path, std::ios::binary);
         if (!file)
             return;
@@ -82,24 +130,40 @@ namespace ps2x::iop::detail
         {
             // First write: the file is created with the whole image
             closeCardFile(m_path);
-            std::ofstream file(m_path, std::ios::binary | std::ios::trunc);
+            // GOW-Port (R3): written to <card>.tmp and renamed, so a crash while creating it leaves no cut card.
+            const std::string temporary = m_path + ".tmp";
+            std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
             if (!file)
             {
-                std::cerr << "[SIO2] cannot create the memory card" << m_path << std::endl;
+                std::cerr << "[SIO2] cannot create the memory card " << m_path << std::endl;
                 return;
             }
             file.write(reinterpret_cast<const char *>(m_image.data()), static_cast<std::streamsize>(m_image.size()));
-            m_fileExists = static_cast<bool>(file);
-            std::cerr << "[SIO2] memory card created at" << m_path << std::endl;
-            if (m_fileExists)
+            file.close();
+            std::error_code error;
+            if (file)
+                std::filesystem::rename(temporary, m_path, error);
+            m_fileExists = file && !error;
+            if (!m_fileExists)
+                std::filesystem::remove(temporary, error);
+            std::cerr << "[SIO2] memory card " << (m_fileExists ? "created at " : "could not be created at ") << m_path
+                      << std::endl;
             {
-                // GOW-Port: leaves the card in the same persistent state as later writes.
-                // That way a concurrent creation does not leave the first fstream with a stale descriptor.
-                file.close();
+                std::lock_guard<std::mutex> lock(openCardFilesMutex());
+                backedUpCards().insert(m_path); // nothing older to keep
             }
             return;
         }
         std::lock_guard<std::mutex> lock(openCardFilesMutex());
+        // GOW-Port (R3): before the first write of a session, the card as it was is kept in <card>.bak, so a save cut by
+        // a crash or a power loss can be undone by hand. Once per card per session: ~9 MB, a few milliseconds.
+        if (backedUpCards().insert(m_path).second)
+        {
+            openCardFiles().erase(m_path);
+            const bool copied = copyThroughTemporary(m_path, m_path + ".bak");
+            std::cerr << "[memory card] " << (copied ? "backup kept in " : "could not write the backup ") << m_path
+                      << ".bak" << std::endl;
+        }
         std::fstream &file = openCardFiles()[m_path];
         if (!file.is_open())
         {

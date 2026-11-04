@@ -115,6 +115,13 @@ layout(location = 15) uniform float uZMax;
 )";
 
     // Shared by the draw shader and the CLUT fetch: a texel of a texture format read from a render target's memory.
+    // GOW-Port: GOW_GS_RT_SHIFT=0 leaves filtered reads of scaled targets unshifted (see GOW_RT_FILTER_SHIFT in kFsTail).
+    const char *rtFilterShiftDefine()
+    {
+        static const bool shift = [] { const char *v = std::getenv("GOW_GS_RT_SHIFT"); return !(v && v[0] == '0'); }();
+        return shift ? "\n#define GOW_RT_FILTER_SHIFT 1\n" : "\n";
+    }
+
     const char *kReinterpretSource = R"(
 #ifndef GOW_FAST
 layout(location = 16) uniform usampler2D uTables;
@@ -302,7 +309,19 @@ void main()
             t = texture(uTex, (floor(uv * host / uTexSize + 0.001) + 0.5) / host) * 255.0;
         }
         else
+        {
+#ifdef GOW_RT_FILTER_SHIFT
+            // GOW-Port (planning 1.11, GoW II port notes): a target drawn at scale k keeps in host texel j what the GS drew
+            // at pixel j / k, read back at u = j / k + 0.5, while GL filtering puts texel j at (j + 0.5) / k. Moving u by
+            // 0.5 - 0.5 / k makes the filter blend the texels the GS blends; without it each filtered read of a scaled target
+            // shifted its picture, and a chain of them (halve, blur, enlarge) moved glows away from what casts them.
+            // Uploaded textures (k = 1) do not change.
+            vec2 k = vec2(textureSize(uTex, 0)) / uTexSize;
+            t = texture(uTex, (uv - 0.5 + 0.5 / k) / uTexSize) * 255.0;
+#else
             t = texture(uTex, uv / uTexSize) * 255.0;
+#endif
+        }
         t = floor(t + 0.5);
         if (uRtTex24 == 1)
             t.a = (uAem != 0 && t.r + t.g + t.b == 0.0) ? 0.0 : uTa0;
@@ -760,7 +779,7 @@ struct GSHwBackend::Impl
         }
         const Api &g = gl();
         const GLuint v = compile(GSGL::kVertexShader, kVsSource);
-        const GLuint f = compile(GSGL::kFragmentShader, {kFsSource, kReinterpretSource, kFsTail});
+        const GLuint f = compile(GSGL::kFragmentShader, {kFsSource, rtFilterShiftDefine(), kReinterpretSource, kFsTail});
         if (!v || !f)
         {
             GSSharedPresent::SetRendererFailure(GSSharedPresent::RendererFailure::Shaders);
@@ -797,7 +816,7 @@ struct GSHwBackend::Impl
         activeProgram = program;
         if (fastShaderEnabled)
         {
-            const GLuint ff = compile(GSGL::kFragmentShader, {kFsSource, "\n#define GOW_FAST 1\n", kReinterpretSource, kFsTail});
+            const GLuint ff = compile(GSGL::kFragmentShader, {kFsSource, "\n#define GOW_FAST 1\n", rtFilterShiftDefine(), kReinterpretSource, kFsTail});
             if (ff)
             {
                 const GLuint fp = g.CreateProgram();
@@ -1671,7 +1690,10 @@ struct GSHwBackend::Impl
     // ---- drawing --------------------------------------------------------------------------------------------------
     static bool sameState(const GSDrawState &a, const GSDrawState &b)
     {
-        return std::memcmp(&a, &b, sizeof(GSDrawState)) == 0;
+        // GOW-Port: field by field (gs_types.h operator==). memcmp also compared the padding bytes between the fields, which
+        // the language leaves unspecified: MSVC happened to keep them equal most of the time, clang does not, and then no two
+        // states compared equal (every primitive its own batch: ~2 fps in 3D; gow-native-pc runtime patch 12).
+        return a == b;
     }
 
     void addVertex(const GSDrawState &s, const GSVertex &v, float u, float tv, float zmax)
@@ -2059,8 +2081,39 @@ struct GSHwBackend::Impl
             GSDrawState sp = s; // sprites carry texel UVs, never STQ
             (void)sp;
             GSVertex corner[4] = {a, a, a, a};
-            const float xs[2] = {a.x, c.x}, ys[2] = {a.y, c.y};
-            const float us[2] = {u0, u1}, vs[2] = {v0, v1};
+            float xs[2] = {a.x, c.x}, ys[2] = {a.y, c.y};
+            float us[2] = {u0, u1}, vs[2] = {v0, v1};
+            // GOW-Port (planning 1.11, from the GoW II port's renderer notes): the GS paints pixel n when x0 <= n < x1, so a
+            // sprite edge between two pixels paints what the next whole pixel would. Kept fractional, at the internal scale
+            // it painted part of a PS2 pixel: frame copies done in strips that end at x + 0.5 while the next starts at x + 1
+            // left a column of host pixels unpainted at each seam (thin dark lines over water and distortion). Both edges
+            // move to the first pixel the GS does not reach, in window space, the texel coordinates follow at the same rate,
+            // and a sprite that paints no pixel on the GS is skipped. At scale 1 the image does not change.
+            // GOW_GS_SPRITE_SNAP=0 keeps the old edges, to compare.
+            static const bool snapEdges = [] { const char *v = std::getenv("GOW_GS_SPRITE_SNAP"); return !(v && v[0] == '0'); }();
+            if (snapEdges)
+            {
+                bool paints = true;
+                const auto toGsPixels = [&paints](float (&pos)[2], float (&tex)[2], float offset)
+                {
+                    const float from = pos[0] - offset, to = pos[1] - offset;
+                    const float first = std::ceil(from), end = std::ceil(to);
+                    if (from == to || first == end)
+                    {
+                        paints = false;
+                        return;
+                    }
+                    const float texelsPerPixel = (tex[1] - tex[0]) / (to - from);
+                    tex[0] += (first - from) * texelsPerPixel;
+                    tex[1] += (end - to) * texelsPerPixel;
+                    pos[0] = first + offset;
+                    pos[1] = end + offset;
+                };
+                toGsPixels(xs, us, s.context.xyoffset.ofx / 16.0f);
+                toGsPixels(ys, vs, s.context.xyoffset.ofy / 16.0f);
+                if (!paints)
+                    return;
+            }
             // the texel coordinates of the first and last pixel the GS covers (pixel n is covered when lo <= n < hi);
             // a sprite covering no pixel on the GS keeps its whole range
             const auto sampled = [](float p0, float p1, float t0, float t1, float &lo, float &hi)
@@ -2084,6 +2137,16 @@ struct GSHwBackend::Impl
             SpriteEdges cur{{xs[0], xs[1]}, {ys[0], ys[1]}, {us[0], us[1]}, {vs[0], vs[1]}};
             if (lastSprite.batch == batchSerial && lastSprite.end == pending.size() && lastSprite.end >= 6)
                 openSharedSide(lastSprite.edges, cur, &pending[lastSprite.end - 6], cu0, cu1, cv0, cv1);
+            // GOW-Port (planning 1.11, GoW II port notes): a sprite that shrinks its texture a lot (a particle a few pixels
+            // wide drawn from a 32-texel picture) is sampled by the GS at one or two texels; clamped to those, at the internal
+            // scale it showed a cut square of the picture. Above 4 texels per pixel it keeps the whole range, as PCSX2 does;
+            // the bloom's halvings (2 texels per pixel) stay clamped. GOW_GS_PARTICLE_UNCLAMP=0 keeps the clamp.
+            static const bool unclampShrunk = [] { const char *v = std::getenv("GOW_GS_PARTICLE_UNCLAMP"); return !(v && v[0] == '0'); }();
+            constexpr float kShrinkUnclamped = 4.0f;
+            if (unclampShrunk && a.x != c.x && std::fabs((u1 - u0) / (c.x - a.x)) > kShrinkUnclamped)
+                cu0 = -1e30f, cu1 = 1e30f;
+            if (unclampShrunk && a.y != c.y && std::fabs((v1 - v0) / (c.y - a.y)) > kShrinkUnclamped)
+                cv0 = -1e30f, cv1 = 1e30f;
             const int order[6][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 0}, {1, 1}, {0, 1}};
             for (const auto &o : order)
             {
@@ -2319,7 +2382,37 @@ struct GSHwBackend::Impl
         return x0 <= c.scissor.x0 + 1.0f && y0 <= c.scissor.y0 + 1.0f && x1 >= c.scissor.x1 && y1 >= c.scissor.y1;
     }
 
+    // GOW-Port: the shadow-volume counting passes (G += 255, then G += 1) share one GS state and differ only in their flat vertex
+    // colour, so one batch can hold both now that states compare field by field (sameState). The fixed-function wrap in drawOne
+    // needs one colour per draw (otherwise every triangle goes through the shader blend with a barrier in between: seconds per
+    // frame in fights), so such a batch is drawn as consecutive runs of one colour, in order. ALPHA A=Cs B=0 C=FIX D=Cd = 0x68.
+    // Idea from gow-native-pc runtime patch 12.
     void draw(const GSDrawState &s, const std::vector<HwVertex> &verts)
+    {
+        const uint64_t al = s.context.alpha;
+        if (verts.size() > 3u && !s.prim.tme && s.prim.abe && (s.colclamp & 1u) == 0u && (al & 0xFFu) == 0x68u)
+        {
+            const auto sameColour = [](const HwVertex &a, const HwVertex &b) { return a.r == b.r && a.g == b.g && a.b == b.b; };
+            size_t runStart = 0;
+            for (size_t i = 3; i + 3 <= verts.size(); i += 3)
+                if (!sameColour(verts[i], verts[runStart]))
+                {
+                    splitRun.assign(verts.begin() + static_cast<std::ptrdiff_t>(runStart), verts.begin() + static_cast<std::ptrdiff_t>(i));
+                    drawOne(s, splitRun);
+                    runStart = i;
+                }
+            if (runStart != 0)
+            {
+                splitRun.assign(verts.begin() + static_cast<std::ptrdiff_t>(runStart), verts.end());
+                drawOne(s, splitRun);
+                return;
+            }
+        }
+        drawOne(s, verts);
+    }
+    std::vector<HwVertex> splitRun;
+
+    void drawOne(const GSDrawState &s, const std::vector<HwVertex> &verts)
     {
         ProfileScope profile(profileEnabled ? &drawNs : nullptr);
         const Api &g = gl();

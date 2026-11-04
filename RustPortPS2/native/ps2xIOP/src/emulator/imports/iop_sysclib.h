@@ -16,5 +16,6 @@ namespace ps2x::iop::detail
 
     private:
         IopMemory &m_memory;
+        uint32_t m_strtokNext = 0u; // GOW-Port: where strtok(NULL, ...) continues; 0 when the string is finished
     };
 }

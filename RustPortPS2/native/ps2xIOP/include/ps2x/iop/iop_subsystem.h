@@ -30,6 +30,8 @@ namespace ps2x::iop
         // runEeCycles split in two so the caller can time only the real IOP work: accrue returns true when a batch
         // is due, then runPendingEeCycles runs it (same result as runEeCycles).
         [[nodiscard]] bool accrueEeCycles(uint64_t eeCycles) noexcept;
+        // GOW-Port: EE cycles that can still accrue before accrueEeCycles reports a batch (0: the next call does).
+        [[nodiscard]] uint64_t eeCyclesUntilBatch() const noexcept;
         void runPendingEeCycles() noexcept;
 
         [[nodiscard]] RpcAbi selectRpcAbi(const RpcAbiRequest &request) const;

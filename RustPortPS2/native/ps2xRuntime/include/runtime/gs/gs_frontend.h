@@ -218,6 +218,11 @@ private:
     uint8_t m_fogR = 0, m_fogG = 0, m_fogB = 0;
 
     bool m_prmodecont = true;
+    // GOW-Port: early FINISH (ps2_memory.h): PATH2 FINISH writes of the current worker job the game already received, and the
+    // path of the packet being processed. Stage thread only.
+    uint32_t m_finishGiven = 0;
+    GifPathId m_currentPath = GifPathId::Path1;
+    void stageMarker(const uint8_t *data, uint32_t sizeBytes);
     bool m_pabe = false;
     uint64_t m_scanmsk = 0;
     uint64_t m_dimx = 0;

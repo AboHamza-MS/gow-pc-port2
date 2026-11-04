@@ -297,6 +297,11 @@ namespace ps2x::iop::detail
         case 41:
             setV0(0);
             return true;
+        case 43: // GetSystemTimeLow
+            // GOW-Port: the low word of GetSystemTime's counter (same units). Unhandled, it fell through to the "unhandled
+            // import" path; the GoW II port found smpd calling it around disc reads.
+            setV0(static_cast<uint32_t>(currentCycle));
+            return true;
         default:
             return false;
         }

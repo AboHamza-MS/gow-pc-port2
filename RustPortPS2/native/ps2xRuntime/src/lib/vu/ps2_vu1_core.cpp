@@ -1813,21 +1813,20 @@ void VU1Interpreter::rebuildDecodedCodeCache(const uint8_t *vuCode, uint32_t cod
         std::memcpy(&lower, vuCode + pair * 8u, sizeof(lower));
         std::memcpy(&upper, vuCode + pair * 8u + sizeof(lower), sizeof(upper));
     };
+    // GOW-Port: one pass for both flags (planning 1.3): this runs on every micro memory change. A status read clears both
+    // (statusQuiet needs statusUnread), an FSSET only statusQuiet; the pass stops once nothing can change.
     m_statusUnread = m_directRegisterWrites;
+    m_statusQuiet = m_statusUnread;
     for (uint32_t i = 0; i < pairCount && m_statusUnread; ++i)
     {
         uint32_t lower, upper;
         rawWords(i, lower, upper);
+        if ((upper & 0x80000000u) != 0u)
+            continue;
         const uint32_t op = lower >> 25;
-        if ((upper & 0x80000000u) == 0u && (op == 0x14u || op == 0x16u || op == 0x17u))
-            m_statusUnread = false;
-    }
-    m_statusQuiet = m_statusUnread;
-    for (uint32_t i = 0; i < pairCount && m_statusQuiet; ++i)
-    {
-        uint32_t lower, upper;
-        rawWords(i, lower, upper);
-        if ((upper & 0x80000000u) == 0u && (lower >> 25) == 0x15u) // FSSET
+        if (op == 0x14u || op == 0x16u || op == 0x17u) // FSEQ, FSAND, FSOR
+            m_statusUnread = m_statusQuiet = false;
+        else if (op == 0x15u) // FSSET
             m_statusQuiet = false;
     }
     // GOW-Port: GOW_VU1C_LIVE_FLAGS=1 always computes the flags of the blocks' "dead" FMACs (diagnostic).
@@ -1919,6 +1918,13 @@ void VU1Interpreter::resume(uint8_t *vuCode, uint32_t codeSize,
     run(vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles);
 }
 
+// GOW-Port: a debug lambda kept out of its caller's stack frame (see run). Idea from gow-native-pc runtime patch 50.
+#if defined(__clang__) || defined(__GNUC__)
+#define VU1_DEBUG_FRAME __attribute__((noinline, cold))
+#else
+#define VU1_DEBUG_FRAME
+#endif
+
 void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                          uint8_t *vuData, uint32_t dataSize,
                          GS &gs, PS2Memory *memory, uint32_t maxCycles)
@@ -1929,21 +1935,36 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     m_activeMemory = memory;
 
     ps2_perf::Scope perf(ps2_perf::Bucket::Vu); // GOW-Port: VU0/VU1; calls to the GS are discounted.
+    // GOW-Port: round toward zero for the run, through the x86 MXCSR directly (the way ps2_vu1_native.inl already does):
+    // std::fegetround / std::fesetround went through the C runtime on every VU program, tens of thousands of times a
+    // second, for the same two bits (idea from gow-native-pc runtime patch 04). x64 float code is SSE only, so MXCSR is
+    // the whole rounding state; other targets keep the C library calls.
+#if defined(__x86_64__) || defined(_M_X64)
+    const unsigned savedCsr = _mm_getcsr();
+    _mm_setcsr((savedCsr & ~0x6000u) | 0x6000u); // RC = 11: toward zero; FTZ/DAZ untouched, as fesetround left them
+    const bool useVuRounding = true;
+    const int previousRoundingMode = 0;
+#else
     const int previousRoundingMode = std::fegetround();
     const bool useVuRounding = std::fesetround(FE_TOWARDZERO) == 0;
+#endif
     StepContext context{vuCode, codeSize, vuData, dataSize, &gs, memory, m_cycle + maxCycles, false};
     m_lastRunHitBudget = false; // GOW-Port: it also works with a compiled dispatcher.
     const uint32_t runStartPc = m_state.pc;
     // GOW_VU1_STARTMAC=1: debug, the MAC and clip flags a startPc 0 program starts with (committed / with pending writes)
     static const bool startMacLog = std::getenv("GOW_VU1_STARTMAC") != nullptr;
     static unsigned startMacShown = 0;
+    // GOW-Port: the debug blocks that copy the whole interpreter (GOW_VU1_STARTMAC, GOW_VU1N_VERIFY) run in their own
+    // out-of-line frames. Inline, those copies gave run() a ~200 KB stack frame, probed page by page (__chkstk) on every VU1
+    // program run, debugging or not: ~2% of the VU1 worker in combat (measured with clang by gow-native-pc, patch 50).
     if (startMacLog && m_unit == Unit::VU1 && m_state.pc == 0u && startMacShown < 4000u && (startMacShown++ % 50u) == 0u)
-    {
-        VU1Interpreter probe(*this);
-        probe.commitEverythingNow();
-        std::fprintf(stderr, "[vu1-startmac] ours mac=%x clip=%x (after committing pending: mac=%x clip=%x)\n", m_state.mac & 0xFFFFu,
-                     m_state.clip & 0xFFFFFFu, probe.m_state.mac & 0xFFFFu, probe.m_state.clip & 0xFFFFFFu);
-    }
+        [this]() VU1_DEBUG_FRAME
+        {
+            VU1Interpreter probe(*this);
+            probe.commitEverythingNow();
+            std::fprintf(stderr, "[vu1-startmac] ours mac=%x clip=%x (after committing pending: mac=%x clip=%x)\n", m_state.mac & 0xFFFFu,
+                         m_state.clip & 0xFFFFFFu, probe.m_state.mac & 0xFFFFu, probe.m_state.clip & 0xFFFFFFu);
+        }();
     // GOW-Port: GOW_VU1_STATS=1 prints, every 5 s, MSCAL runs, VU1 cycles, interpreted steps and host time in run().
     static const bool vuStats = std::getenv("GOW_VU1_STATS") != nullptr;
     const uint64_t statCycle0 = vuStats ? m_cycle : 0u;
@@ -1984,6 +2005,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     if (m_unit == Unit::VU1 && m_native && m_native->enabled && vuData && codeSize == PS2_VU1_CODE_SIZE)
         VU1NativeAccess::recordReplay(*this, &context, maxCycles);
     if (m_unit == Unit::VU1 && m_native && m_native->enabled && m_native->verifyLeft != 0u && vuData && codeSize == PS2_VU1_CODE_SIZE)
+    [&]() VU1_DEBUG_FRAME
     {
         --m_native->verifyLeft;
         const uint32_t startPc = m_state.pc;
@@ -2206,7 +2228,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         }
         else if (checked % 2000u == 0u)
             std::fprintf(stderr, "[vu1n-verify] %u runs checked, %u mismatches\n", checked, bad);
-    }
+    }();
     if (m_unit == Unit::VU1 && m_native && m_native->enabled && vuData && codeSize == PS2_VU1_CODE_SIZE)
     {
         if (!runNativeLoop(context))
@@ -2261,8 +2283,14 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         if (++endMacRuns % 20000u == 0u)
             std::fprintf(stderr, "[vu1-endmac] ours runs=%u mac12=%u mac0=%u other=%u\n", endMacRuns, endMacCount[0], endMacCount[1], endMacCount[2]);
     }
+#if defined(__x86_64__) || defined(_M_X64)
+    (void)useVuRounding;
+    (void)previousRoundingMode;
+    _mm_setcsr(savedCsr);
+#else
     if (useVuRounding && previousRoundingMode != -1)
         std::fesetround(previousRoundingMode);
+#endif
 }
 
 // GOW-Port: GOW_VU1C_VERIFY. Before a compiled block its pairs are run with the interpreter from the
@@ -2432,6 +2460,85 @@ namespace
         h ^= h >> 29;
         return h;
     }
+
+    // GOW-Port: GOW_VU1_CAPTURE=<folder> records micro memories for the native VU1 build (game data: it is not published).
+    // GOW_VU1_CAPTURE_MODE chooses which ones:
+    //   misses (default): a micro memory only when the native engine reached a block it has no code for, once per memory.
+    //     A player's folder held 484,087 images for 2,026 distinct blocks: nearly every capture repeated code the build
+    //     already had, and reading them all made each build ~36 minutes longer. The missed pc also goes to
+    //     <folder>/vu1n_heads_seen.txt, because a pc reached through a register jump is no head the generator finds by
+    //     itself: install.ps1 merges that list into vu1n_heads.txt. (Idea from gow-native-pc runtime patches 19 and 26.)
+    //   all: every distinct micro memory the game uploads, as before.
+    enum class Vu1CaptureMode
+    {
+        Off,
+        All,
+        Misses
+    };
+
+    const char *vu1CaptureDir()
+    {
+        static const char *dir = std::getenv("GOW_VU1_CAPTURE");
+        return dir != nullptr && dir[0] != '\0' ? dir : nullptr;
+    }
+
+    Vu1CaptureMode vu1CaptureMode()
+    {
+        static const Vu1CaptureMode mode = [] {
+            if (vu1CaptureDir() == nullptr)
+                return Vu1CaptureMode::Off;
+            const char *value = std::getenv("GOW_VU1_CAPTURE_MODE");
+            return value != nullptr && std::strcmp(value, "all") == 0 ? Vu1CaptureMode::All : Vu1CaptureMode::Misses;
+        }();
+        return mode;
+    }
+
+    // Writes the micro memory as <folder>/vu1_<FNV-1a of its bytes>.bin unless this run or an earlier one already did.
+    void captureVu1Image(const uint8_t *code, uint32_t size)
+    {
+        const char *dir = vu1CaptureDir();
+        if (dir == nullptr)
+            return;
+        // The game uploads the same microprograms many times per frame. Only the first time a micro memory is seen in this
+        // run is the 16 KB FNV computed and the disk queried; the rest costs ~1 µs.
+        static std::mutex seenMutex;
+        static std::unordered_set<uint64_t> seen;
+        const uint64_t fastHash = fastMicrocodeHash(code, size);
+        {
+            const std::lock_guard<std::mutex> lock(seenMutex);
+            if (!seen.insert(fastHash).second)
+                return;
+        }
+        char name[64];
+        std::snprintf(name, sizeof(name), "/vu1_%016llx.bin", static_cast<unsigned long long>(VU1Interpreter::hashMicrocode(code, size)));
+        const std::string path = std::string(dir) + name;
+        if (std::filesystem::exists(path))
+            return;
+        if (std::FILE *file = std::fopen(path.c_str(), "wb"))
+        {
+            std::fwrite(code, 1, size, file);
+            std::fclose(file);
+        }
+    }
+
+    // A block entry the native engine had no code for: its micro memory and its pc, once each per run.
+    void captureVu1Miss(const uint8_t *code, uint32_t size, uint32_t pc)
+    {
+        if (vu1CaptureMode() != Vu1CaptureMode::Misses)
+            return;
+        captureVu1Image(code, size);
+        static std::mutex headsMutex;
+        static std::unordered_set<uint32_t> heads;
+        const std::lock_guard<std::mutex> lock(headsMutex);
+        if (!heads.insert(pc).second)
+            return;
+        const std::string path = std::string(vu1CaptureDir()) + "/vu1n_heads_seen.txt";
+        if (std::FILE *file = std::fopen(path.c_str(), "a"))
+        {
+            std::fprintf(file, "%x\n", pc);
+            std::fclose(file);
+        }
+    }
 }
 
 VU1Interpreter::CompiledProgramFn VU1Interpreter::compiledProgramFor(uint8_t *vuCode, uint32_t codeSize, PS2Memory *memory)
@@ -2445,37 +2552,10 @@ VU1Interpreter::CompiledProgramFn VU1Interpreter::compiledProgramFor(uint8_t *vu
         m_compiledGeneration = generation;
         // Keep the decode cache (and m_statusUnread) up to date even when the compiled code is used.
         (void)getDecodedInstructionPairForPc(vuCode, codeSize, memory, 0u);
-        // GOW_VU1_CAPTURE=<folder>: saves each distinct micro memory (input of generate_vu1). It is game
-        // data: it is not published.
-        static const char *captureDir = std::getenv("GOW_VU1_CAPTURE");
-        if (captureDir != nullptr)
-        {
-            // GOW-Port: the game uploads the same microprograms many times per frame. Only the first time a micro memory is seen
-            // in this run is the 16 KB FNV computed and the disk queried; the rest costs ~1 µs.
-            static std::mutex seenMutex;
-            static std::unordered_set<uint64_t> seen;
-            const uint64_t fastHash = fastMicrocodeHash(vuCode, codeSize);
-            bool isNew;
-            {
-                const std::lock_guard<std::mutex> lock(seenMutex);
-                isNew = seen.insert(fastHash).second;
-            }
-            if (isNew)
-            {
-                char name[64];
-                std::snprintf(name, sizeof(name), "/vu1_%016llx.bin", static_cast<unsigned long long>(hashMicrocode(vuCode, codeSize)));
-                const std::string path = std::string(captureDir) + name;
-                if (!std::filesystem::exists(path))
-                {
-                    std::FILE *file = std::fopen(path.c_str(), "wb");
-                    if (file != nullptr)
-                    {
-                        std::fwrite(vuCode, 1, codeSize, file);
-                        std::fclose(file);
-                    }
-                }
-            }
-        }
+        // GOW_VU1_CAPTURE=<folder> with GOW_VU1_CAPTURE_MODE=all: every distinct micro memory (see captureVu1Image above;
+        // the default mode records only memories with a missing native block, from runNative).
+        if (vu1CaptureMode() == Vu1CaptureMode::All)
+            captureVu1Image(vuCode, codeSize);
     }
     return m_compiledEnabled ? g_compiledProgram.load(std::memory_order_acquire) : nullptr;
 }

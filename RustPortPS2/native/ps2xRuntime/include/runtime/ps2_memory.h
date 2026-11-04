@@ -313,6 +313,19 @@ public:
     // EE timers advance from the scheduler's emulated EE-cycle clock. The
     // returned mask uses bits 0..3 for newly raised TIM0..TIM3 interrupts.
     uint32_t advanceEeTimers(uint64_t eeCycles) noexcept;
+    // GOW-Port: EE cycles advanceEeTimers can still take without stepping the timers (0: the next call steps them), a
+    // limit of the EE checkpoint fast path (EeCheckpointClock, idea from gow-native-pc runtime patch 04).
+    uint64_t eeTimerQuietCycles() const noexcept
+    {
+        return m_eeTimerPendingCycles < m_eeTimerBudget ? m_eeTimerBudget - m_eeTimerPendingCycles : 0u;
+    }
+    // GOW-Port: called before every EE timer register access: the scheduler's checkpoint fast path defers the timer cycles
+    // and hands them over here (limitsChanged = a write, which can move the next timer event).
+    void setEeCycleSync(void (*sync)(void *, bool), void *context) noexcept
+    {
+        m_eeCycleSync = sync;
+        m_eeCycleSyncContext = context;
+    }
     // GOW-Port: native EE clock. A timer without compare/overflow events (no CMPE/OVFE/ZRET, e.g. the game's
     // T0 = BUSCLK/256 and T1 = H-BLNK counters) is not stepped: its count is computed when read, from the guest
     // EE cycle count since its epoch (the last COUNT write or clock change). Timers with events keep the stepping
@@ -339,6 +352,18 @@ public:
     static bool isGsStatusRegister(uint32_t address) noexcept;
     void gsDisplayStore(uint32_t address, uint64_t value);
     uint64_t gsStatusLoad();
+    // GOW-Port: early FINISH (planning 4.1, idea from gow-native-pc patch 40; opt-in, GOW_GS_EARLY_FINISH=1). God of War
+    // ends every frame's VIF1 chain with a PATH2 write to FINISH and the EE waits for it before preparing the next frame, so
+    // the GS worker sat idle between jobs. The FINISH is raised when the packet is queued (when the worker starts it, if
+    // another job is waiting), so the EE runs at most one job ahead; the GS skips that job's own FINISH writes. CSR is then
+    // read without waiting for the worker, and the display registers go through the worker queue in drawing order, with a
+    // copy of the last values written for the game's read-modify-write.
+    bool gsEarlyFinish() const { return m_gsEarlyFinish; }
+    void gsQueueDisplay(const uint64_t (&regs)[7]);
+    bool gsDisplayShadow(uint64_t (&regs)[7]) const;
+    // PATH2 A+D writes to FINISH in a VIF1 packet. `cycle` (STCYCL) and `directLeft` (DIRECT bytes cut by the previous
+    // packet's end) carry over between packets of one chain, as processVIF1Data's state does.
+    static uint32_t countPath2Finish(const uint8_t *data, uint32_t sizeBytes, uint32_t &cycle, uint32_t &directLeft);
     [[nodiscard]] uint64_t cyclesUntilNextEeTimerInterrupt() const noexcept;
     void resetEeTimers() noexcept;
 
@@ -464,13 +489,23 @@ public:
     struct GsWorkerItem
     {
         bool vif1 = false; // false: GIF PATH3
+        bool display = false; // GOW-Port: early FINISH: `data` holds the 7 display registers, applied in drawing order
         std::vector<uint8_t> data;
     };
     struct GsWorkerJob
     {
         std::vector<GsWorkerItem> items;
         uint32_t fbrst = 0;
+        uint32_t earlyFinish = 0;  // GOW-Port: PATH2 FINISH writes this job holds, already given to the game (or at its start)
+        bool raiseAtStart = false; // GOW-Port: another job was waiting when it was queued: raise FINISH when the worker starts it
     };
+    bool m_gsEarlyFinish = false;           // GOW-Port: GOW_GS_EARLY_FINISH=1 (opt-in, with the worker)
+    uint32_t m_finishScanCycle = 0x0101u;   // STCYCL as the FINISH scan last saw it
+    uint32_t m_finishScanDirectLeft = 0u;   // DIRECT payload the scan still has to skip
+    mutable std::mutex m_displayShadowMutex;
+    uint64_t m_displayShadow[7]{};
+    bool m_displayShadowValid = false;
+    void raiseEarlyFinish();
     bool needsGsWorkerSync(uint32_t address) const;
     void syncGsWorkerFor(uint32_t address);
     void syncGsWorkerIfOtherThread(const char *site);
@@ -527,6 +562,8 @@ public:
     // counts and interrupts as with per-call advancing (the tick math carries its remainder exactly).
     uint64_t m_eeTimerPendingCycles = 0;
     uint64_t m_eeTimerBudget = 0;
+    void (*m_eeCycleSync)(void *, bool) = nullptr; // GOW-Port: see setEeCycleSync
+    void *m_eeCycleSyncContext = nullptr;
     uint64_t m_eeCycleTotal = 0; // guest EE cycles seen by advanceEeTimers (the scheduler's EE cycle count)
     uint32_t eeTimerCount(const EeTimer &timer) const noexcept;
     uint32_t stepEeTimers(uint64_t eeCycles) noexcept;

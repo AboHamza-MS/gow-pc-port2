@@ -54,10 +54,12 @@ namespace ps2x::iop::detail
         m_streamHalf = {};
         m_flush.store(true, std::memory_order_release); // the audio thread drops what is buffered on its next call
         m_lastCycle = 0;
+        m_targetCycle = 0; // GOW-Port: nothing left to mix
     }
 
     void SoundEngine::initCore(uint32_t core)
     {
+        flushPending();
         Core &c = m_cores[core & 1u];
         const std::array<Voice, VoicesPerCore> voices{};
         c = Core{};
@@ -69,6 +71,7 @@ namespace ps2x::iop::detail
 
     void SoundEngine::setParam(uint32_t entry, uint16_t value)
     {
+        flushPending();
         Core &c = m_cores[coreOf(entry)];
         const uint32_t voice = voiceOf(entry);
         // GOW_SND_REGLOG=1: core-level writes (MMIX, master/effect/input volumes) as the driver sets them
@@ -104,8 +107,9 @@ namespace ps2x::iop::detail
         }
     }
 
-    uint16_t SoundEngine::getParam(uint32_t entry) const
+    uint16_t SoundEngine::getParam(uint32_t entry)
     {
+        flushPending();
         const Core &c = m_cores[coreOf(entry)];
         const uint32_t voice = std::min(voiceOf(entry), VoicesPerCore - 1u);
         const Voice &v = c.voices[voice];
@@ -138,6 +142,7 @@ namespace ps2x::iop::detail
 
     void SoundEngine::setSwitch(uint32_t entry, uint32_t mask)
     {
+        flushPending();
         Core &c = m_cores[coreOf(entry)];
         mask &= 0xFFFFFFu;
         static const bool callLog = std::getenv("GOW_SND_CALLLOG") != nullptr;
@@ -158,8 +163,9 @@ namespace ps2x::iop::detail
         }
     }
 
-    uint32_t SoundEngine::getSwitch(uint32_t entry) const
+    uint32_t SoundEngine::getSwitch(uint32_t entry)
     {
+        flushPending();
         const Core &c = m_cores[coreOf(entry)];
         switch (idOf(entry))
         {
@@ -178,6 +184,7 @@ namespace ps2x::iop::detail
 
     void SoundEngine::setAddr(uint32_t entry, uint32_t byteAddress)
     {
+        flushPending();
         Core &c = m_cores[coreOf(entry)];
         const uint32_t halfwords = (byteAddress >> 1u) & (RamHalfwords - 1u) & ~7u;
         const uint32_t voice = voiceOf(entry);
@@ -211,8 +218,9 @@ namespace ps2x::iop::detail
         }
     }
 
-    uint32_t SoundEngine::getAddr(uint32_t entry) const
+    uint32_t SoundEngine::getAddr(uint32_t entry)
     {
+        flushPending();
         const Core &c = m_cores[coreOf(entry)];
         const Voice &v = c.voices[std::min(voiceOf(entry), VoicesPerCore - 1u)];
         uint32_t halfwords = 0;
@@ -244,6 +252,7 @@ namespace ps2x::iop::detail
     // sceSdSetCoreAttr ids (entry & ~1): 2 effect enable, 4 IRQ enable, 6 mute, 8 noise clock, 0xA SPDIF mode
     void SoundEngine::setCoreAttr(uint32_t entry, uint32_t value)
     {
+        flushPending();
         Core &c = m_cores[coreOf(entry)];
         switch (entry & ~1u)
         {
@@ -255,8 +264,9 @@ namespace ps2x::iop::detail
         }
     }
 
-    uint32_t SoundEngine::getCoreAttr(uint32_t entry) const
+    uint32_t SoundEngine::getCoreAttr(uint32_t entry)
     {
+        flushPending();
         const Core &c = m_cores[coreOf(entry)];
         switch (entry & ~1u)
         {
@@ -272,13 +282,15 @@ namespace ps2x::iop::detail
 
     void SoundEngine::writeSampleRam(uint32_t byteAddress, const uint8_t *source, size_t bytes)
     {
+        flushPending();
         uint32_t halfword = byteAddress >> 1u;
         for (size_t i = 0; i + 1u < bytes; i += 2u)
             m_ram[halfword++ & (RamHalfwords - 1u)] = static_cast<uint16_t>(source[i] | (source[i + 1u] << 8u));
     }
 
-    void SoundEngine::readSampleRam(uint32_t byteAddress, uint8_t *destination, size_t bytes) const
+    void SoundEngine::readSampleRam(uint32_t byteAddress, uint8_t *destination, size_t bytes)
     {
+        flushPending();
         uint32_t halfword = byteAddress >> 1u;
         for (size_t i = 0; i + 1u < bytes; i += 2u)
         {
@@ -290,6 +302,7 @@ namespace ps2x::iop::detail
 
     void SoundEngine::clearSampleRam(uint32_t byteAddress, size_t bytes)
     {
+        flushPending();
         uint32_t halfword = byteAddress >> 1u;
         for (size_t i = 0; i + 1u < bytes; i += 2u)
             m_ram[halfword++ & (RamHalfwords - 1u)] = 0u;
@@ -299,6 +312,7 @@ namespace ps2x::iop::detail
 
     void SoundEngine::startStream(uint32_t core, const uint8_t *ring, uint32_t size, bool loop)
     {
+        flushPending();
         StreamRing &s = m_stream[core & 1u];
         s.loop = loop;
         s.base = ring;
@@ -310,11 +324,13 @@ namespace ps2x::iop::detail
 
     void SoundEngine::stopStream(uint32_t core)
     {
+        flushPending();
         m_stream[core & 1u].active = false;
     }
 
     bool SoundEngine::takeStreamHalf(uint32_t core) noexcept
     {
+        flushPending();
         const bool half = m_streamHalf[core & 1u];
         m_streamHalf[core & 1u] = false;
         return half;
@@ -565,6 +581,34 @@ namespace ps2x::iop::detail
             coreOut[core][0] = left;
             coreOut[core][1] = right;
         }
+        finishFrame(coreOut);
+        // GOW_SND_VOICEDUMP=1: while a core input stream (a movie) plays, once per second for its first 10 seconds, every
+        // voice that is still sounding (active, pitch and envelope non-zero) with its volumes and sample addresses
+        static const bool voiceDump = std::getenv("GOW_SND_VOICEDUMP") != nullptr;
+        if (voiceDump)
+        {
+            static uint64_t streamSamples = 0;
+            const bool streaming = m_stream[0].active || m_stream[1].active;
+            streamSamples = streaming ? streamSamples + 1u : 0u;
+            if (streaming && streamSamples % 48000u == 1u && streamSamples < 48000u * 10u)
+            {
+                std::fprintf(stderr, "[snd-voices] t=%llus mvol0=%04x/%04x mvol1=%04x/%04x\n",
+                             static_cast<unsigned long long>(streamSamples / 48000u), m_cores[0].mvolL, m_cores[0].mvolR,
+                             m_cores[1].mvolL, m_cores[1].mvolR);
+                for (uint32_t core = 0; core < 2u; ++core)
+                    for (uint32_t index = 0; index < VoicesPerCore; ++index)
+                    {
+                        const Voice &v = m_cores[core].voices[index];
+                        if (v.active && v.pitch != 0u && v.envelope != 0)
+                            std::fprintf(stderr, "[snd-voices]   core=%u voice=%u pitch=%04x vol=%04x/%04x env=%d ssa=%x lsa=%x nax=%x\n",
+                                         core, index, v.pitch, v.volL, v.volR, v.envelope, v.ssa * 2u, v.lsa * 2u, v.nax * 2u);
+                    }
+            }
+        }
+    }
+
+    void SoundEngine::finishFrame(const int32_t coreOut[2][2])
+    {
         // core 0 through its master volume, added to core 1's dry output, all through core 1's master volume
         // (simplified MMIX routing)
         const int32_t master[2][2] = {{volumeOf(m_cores[0].mvolL), volumeOf(m_cores[0].mvolR)},
@@ -577,6 +621,17 @@ namespace ps2x::iop::detail
             const int32_t core0 = static_cast<int32_t>((static_cast<int64_t>(coreOut[0][side]) * master[0][side]) >> 14);
             sums[side] = static_cast<int32_t>((static_cast<int64_t>(core0 + coreOut[1][side]) * master[1][side]) >> 14);
         }
+        // GOW-Port: output headroom. In a fight the mix exceeds full scale by up to ~6 dB in every build, and the limiter then
+        // halves the gain for whole passages, which is heard as a blown-out, pumping sound. The output is lowered by 4 dB:
+        // the limiter then only trims the loudest peaks a little (at most ~25 %), which is not heard. GOW_AUDIO_GAIN_DB=<dB> sets another level (0 = the previous loudness).
+        static const int32_t outputGain = []
+        {
+            const char *v = std::getenv("GOW_AUDIO_GAIN_DB");
+            const double db = v && *v ? std::clamp(std::atof(v), -30.0, 12.0) : -4.0;
+            return static_cast<int32_t>(std::lround(16384.0 * std::pow(10.0, db / 20.0)));
+        }();
+        for (int32_t &sum : sums)
+            sum = static_cast<int32_t>((static_cast<int64_t>(sum) * outputGain) >> 14);
         // GOW-Port: in a fight the mix often exceeds full scale (up to 3 % of the samples) and the hard clip is heard as a
         // blown-out sound. A peak limiter takes over only then: the gain drops at once to keep the peak at full scale and
         // returns to 1.0 in ~80 ms (stereo linked); below full scale the samples are untouched. GOW_AUDIO_LIMIT=0 restores
@@ -607,33 +662,11 @@ namespace ps2x::iop::detail
                               ? clamp16(static_cast<int32_t>(std::lround(static_cast<float>(sums[side]) * m_limiterGain)))
                               : clamp16(sums[side]);
         pushFrame(mixed[0], mixed[1]);
-        // GOW_SND_VOICEDUMP=1: while a core input stream (a movie) plays, once per second for its first 10 seconds, every
-        // voice that is still sounding (active, pitch and envelope non-zero) with its volumes and sample addresses
-        static const bool voiceDump = std::getenv("GOW_SND_VOICEDUMP") != nullptr;
-        if (voiceDump)
-        {
-            static uint64_t streamSamples = 0;
-            const bool streaming = m_stream[0].active || m_stream[1].active;
-            streamSamples = streaming ? streamSamples + 1u : 0u;
-            if (streaming && streamSamples % 48000u == 1u && streamSamples < 48000u * 10u)
-            {
-                std::fprintf(stderr, "[snd-voices] t=%llus mvol0=%04x/%04x mvol1=%04x/%04x\n",
-                             static_cast<unsigned long long>(streamSamples / 48000u), m_cores[0].mvolL, m_cores[0].mvolR,
-                             m_cores[1].mvolL, m_cores[1].mvolR);
-                for (uint32_t core = 0; core < 2u; ++core)
-                    for (uint32_t index = 0; index < VoicesPerCore; ++index)
-                    {
-                        const Voice &v = m_cores[core].voices[index];
-                        if (v.active && v.pitch != 0u && v.envelope != 0)
-                            std::fprintf(stderr, "[snd-voices]   core=%u voice=%u pitch=%04x vol=%04x/%04x env=%d ssa=%x lsa=%x nax=%x\n",
-                                         core, index, v.pitch, v.volL, v.volR, v.envelope, v.ssa * 2u, v.lsa * 2u, v.nax * 2u);
-                    }
-            }
-        }
         // GOW_AUDIO_RAW=<file>: the mixed samples as produced (s16le stereo 48 kHz), before the output's rate adaptation,
-        // so a recording can be compared sample by sample with its source (tools/movies.py)
+        // so a recording can be compared sample by sample with its source (tools/movies.py). Not written while
+        // GOW_SND_VERIFY captures a comparison pass.
         static std::FILE *raw = [] { const char *path = std::getenv("GOW_AUDIO_RAW"); return path ? std::fopen(path, "wb") : nullptr; }();
-        if (raw)
+        if (raw && m_capture == nullptr)
         {
             static std::vector<int16_t> pending;
             pending.insert(pending.end(), mixed, mixed + 2);
@@ -646,8 +679,126 @@ namespace ps2x::iop::detail
         }
     }
 
+    // GOW-Port: batch mixing (sound_engine.h, advanceTo). Same output as `frames` calls of step().
+    void SoundEngine::mixFrames(uint64_t frames)
+    {
+        // GOW_SND_PERFRAME=1: the former per-sample mixing; GOW_SND_VOICEDUMP reads every voice once per sample, so it keeps
+        // that path too.
+        static const bool perFrame = std::getenv("GOW_SND_PERFRAME") != nullptr || std::getenv("GOW_SND_VOICEDUMP") != nullptr;
+        static const bool verify = std::getenv("GOW_SND_VERIFY") != nullptr;
+        if (perFrame)
+        {
+            for (uint64_t i = 0; i < frames; ++i)
+                step();
+            return;
+        }
+        while (frames != 0u)
+        {
+            const uint32_t n = static_cast<uint32_t>(std::min<uint64_t>(frames, kBatchFrames));
+            if (verify)
+                verifyBatch(n);
+            else
+                mixBatch(n);
+            frames -= n;
+        }
+    }
+
+    // A voice's samples depend only on its own state (decodeBlock reads the sample RAM, which only LIBSD calls change, and
+    // those mix what is due first), so each voice runs its `frames` samples in one go; its dry contribution is an integer
+    // sum, the same in any order. The input stream of each core is independent of the voices and of the other core. The
+    // master volumes and the limiter keep their per-sample order in finishFrame.
+    void SoundEngine::mixBatch(uint32_t frames)
+    {
+        int32_t dry[2][2][kBatchFrames] = {}; // [core][side][frame]
+        for (uint32_t core = 0; core < 2u; ++core)
+        {
+            Core &c = m_cores[core];
+            for (uint32_t index = 0; index < VoicesPerCore; ++index)
+            {
+                // An inactive voice gives 0 and changes nothing, and nothing can start it within the batch.
+                if (!c.voices[index].active)
+                    continue;
+                const bool toLeft = (c.vmixL & (1u << index)) != 0u;
+                const bool toRight = (c.vmixR & (1u << index)) != 0u;
+                const int32_t volL = volumeOf(c.voices[index].volL);
+                const int32_t volR = volumeOf(c.voices[index].volR);
+                for (uint32_t f = 0; f < frames; ++f)
+                {
+                    const int32_t sample = stepVoice(c, index);
+                    if (sample == 0)
+                        continue;
+                    if (toLeft)
+                        dry[core][0][f] += (sample * volL) >> 14;
+                    if (toRight)
+                        dry[core][1][f] += (sample * volR) >> 14;
+                }
+            }
+            for (uint32_t f = 0; f < frames; ++f)
+                streamSample(core, dry[core][0][f], dry[core][1][f]);
+        }
+        for (uint32_t f = 0; f < frames; ++f)
+        {
+            const int32_t coreOut[2][2] = {{dry[0][0][f], dry[0][1][f]}, {dry[1][0][f], dry[1][1][f]}};
+            finishFrame(coreOut);
+        }
+    }
+
+    // GOW_SND_VERIFY=1: the batch is mixed from a copy of the state, then the same samples per sample from the original
+    // state; the outputs and the resulting voice states must match. The per-sample result is the one that stays.
+    void SoundEngine::verifyBatch(uint32_t frames)
+    {
+        const auto cores = m_cores;
+        const auto stream = m_stream;
+        const auto streamHalf = m_streamHalf;
+        const float limiterGain = m_limiterGain;
+        std::vector<int16_t> batched, reference;
+        batched.reserve(frames * 2u);
+        reference.reserve(frames * 2u);
+
+        m_capture = &batched;
+        mixBatch(frames);
+        const auto batchedCores = m_cores;
+        const auto batchedStream = m_stream;
+
+        m_cores = cores;
+        m_stream = stream;
+        m_streamHalf = streamHalf;
+        m_limiterGain = limiterGain;
+        m_capture = &reference;
+        for (uint32_t f = 0; f < frames; ++f)
+            step();
+        m_capture = nullptr;
+
+        static uint64_t checked = 0, differing = 0;
+        checked += frames;
+        bool same = batched == reference;
+        for (uint32_t core = 0; core < 2u && same; ++core)
+        {
+            same = batchedCores[core].endx == m_cores[core].endx && batchedStream[core].position == m_stream[core].position;
+            for (uint32_t index = 0; index < VoicesPerCore && same; ++index)
+            {
+                const Voice &a = batchedCores[core].voices[index], &b = m_cores[core].voices[index];
+                same = a.active == b.active && a.envelope == b.envelope && a.nax == b.nax && a.pitchCounter == b.pitchCounter &&
+                       a.decodedIndex == b.decodedIndex && a.phase == b.phase && a.envelopeCounter == b.envelopeCounter;
+            }
+        }
+        if (!same && differing++ < 20u)
+            std::fprintf(stderr, "[snd-verify] batch of %u frames differs from per-sample mixing\n", frames);
+        if (checked / 48000u != (checked - frames) / 48000u && (checked / 48000u) % 60u == 0u)
+            std::fprintf(stderr, "[snd-verify] %llu frames checked, %llu batches differ\n", static_cast<unsigned long long>(checked),
+                         static_cast<unsigned long long>(differing));
+        for (size_t i = 0; i + 1u < reference.size(); i += 2u)
+            pushFrame(reference[i], reference[i + 1u]);
+    }
+
     void SoundEngine::pushFrame(int16_t left, int16_t right) noexcept
     {
+        if (m_capture != nullptr) // GOW-Port: GOW_SND_VERIFY comparison pass
+        {
+            m_capture->push_back(left);
+            m_capture->push_back(right);
+            return;
+        }
         const uint64_t write = m_writeCount.load(std::memory_order_relaxed);
         if (write - m_readCount.load(std::memory_order_acquire) >= kRingFrames)
         {
@@ -662,11 +813,21 @@ namespace ps2x::iop::detail
 
     void SoundEngine::advanceTo(uint64_t iopCycle)
     {
-        if (iopCycle <= m_lastCycle)
+        if (iopCycle <= m_targetCycle)
             return;
-        const uint64_t samples = (iopCycle - m_lastCycle) / CyclesPerSample;
-        for (uint64_t i = 0; i < samples; ++i)
-            step();
+        m_targetCycle = iopCycle;
+        if ((m_targetCycle - m_lastCycle) / CyclesPerSample >= kBatchFrames)
+            flushPending();
+    }
+
+    void SoundEngine::flushPending()
+    {
+        if (m_targetCycle <= m_lastCycle)
+            return;
+        const uint64_t samples = (m_targetCycle - m_lastCycle) / CyclesPerSample;
+        if (samples == 0u)
+            return;
+        mixFrames(samples);
         m_lastCycle += samples * CyclesPerSample;
         // GOW_SND_VOICE_DIAG=1: every 5 s of mixed audio, per core: voices taken (active), in release, in release with an
         // envelope below 0x2000 (the ones a stalled release leaves behind) and the most taken at the end of any call

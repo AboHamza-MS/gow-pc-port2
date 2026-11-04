@@ -279,6 +279,11 @@ public:
     void requestStop();
     void postEvent(EeEvent event);
     [[nodiscard]] bool checkpointDue(uint32_t cycles = kGeneratedCheckpointCycles) noexcept;
+    // GOW-Port: the full checkpoint that PS2Runtime::eeCheckpointDue runs after EeCheckpointClock::advanceQuiet (the inline
+    // fast path that defers the timer and IOP cycles while nothing can be due). This one hands the deferred cycles to the EE
+    // timers and the IOP (below their next step by construction); limitsChanged also makes the next checkpoint a full one
+    // (an EE timer write can bring its next event closer). PS2Memory calls it before every EE timer register access.
+    void syncDeferredCycles(bool limitsChanged) noexcept;
     void accountCycles(uint32_t cycles) noexcept;
     // GOW-Port: for a guest busy-wait that never blocks (the movie player): when guest time has fallen behind the
     // host clock (a scheduled event's host deadline has passed but its guest cycle is not reached), account the
@@ -326,6 +331,8 @@ public:
     [[noreturn]] void invokeCurrentSequence(std::vector<GuestInvocation> invocations);
     [[nodiscard]] bool hasInvocation(GuestInvocationKind kind, uint64_t tag) const;
     [[nodiscard]] uint32_t invocationStackTop();
+    // GOW-Port: the invocation stacks of a deleted thread go back to m_freeInvocationStacks for the next request.
+    void releaseInvocationStacks(int id);
 
     int addIrqHandler(bool dmac,
                       uint32_t cause,
@@ -437,14 +444,19 @@ private:
     bool m_timeSliceExpired = false;
     bool m_insideInterrupt = false;
     uint32_t m_pendingEeTimerInterrupts = 0;
-    uint64_t m_eeCycle = 0;
+    // GOW-Port: the guest clock and the checkpoint flag live in PS2Runtime's EeCheckpointClock, which the generated code
+    // reads inline; these references keep their former names for the rest of the scheduler.
+    EeCheckpointClock &m_clock;
+    uint64_t &m_eeCycle;
     uint64_t m_sliceEndCycle = kDefaultTimeSliceCycles;
     std::thread::id m_executorThread{};
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_guestExecuting{false};
     std::atomic<bool> m_stopRequested{false};
-    std::atomic<bool> m_checkpointPending{false};
+    std::atomic<bool> &m_checkpointPending;
     uint32_t m_debugPublishCountdown = 0u;
+    bool checkpointDueFull(uint32_t cycles) noexcept;
+    uint64_t quietCycles() const noexcept;
 
     mutable std::mutex m_eventMutex;
     std::condition_variable m_eventCv;
@@ -460,6 +472,7 @@ private:
     uint32_t m_gsVSyncCallbackGp = 0;
     uint32_t m_gsVSyncCallbackSp = 0;
     std::unordered_map<uint64_t, uint32_t> m_invocationStackTops;
+    std::vector<uint32_t> m_freeInvocationStacks;
     std::atomic<uint64_t> m_nextDeadlineCycle{0};
 
     mutable std::mutex m_snapshotMutex;

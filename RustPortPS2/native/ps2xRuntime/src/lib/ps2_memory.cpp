@@ -262,8 +262,14 @@ PS2Memory::PS2Memory()
     ps2SetScratchpadHostPtr(nullptr);
     const char *worker = std::getenv("PS2X_GS_WORKER");
     m_gsWorkerEnabled = worker != nullptr && worker[0] == '1';
+    // GOW-Port: early FINISH (see ps2_memory.h), opt-in with GOW_GS_EARLY_FINISH=1 (needs the worker). Off by default: on the
+    // reference route the game hung at a scene transition with it (thread 1 stuck in the 0x185A20 state machine, the frame
+    // function no longer entered), so a sync that code relies on still has to be found.
+    const char *earlyFinish = std::getenv("GOW_GS_EARLY_FINISH");
+    m_gsEarlyFinish = m_gsWorkerEnabled && earlyFinish && earlyFinish[0] == '1';
     if (m_gsWorkerEnabled)
     {
+        std::fprintf(stderr, "[gs-worker] early FINISH %s (GOW_GS_EARLY_FINISH)\n", m_gsEarlyFinish ? "on" : "off");
         m_gsWorker = std::thread([this] { gsWorkerLoop(); });
         m_gsWorkerId = m_gsWorker.get_id();
         std::fprintf(stderr, "[gs-worker] VIF1/GIF processing on a worker thread (PS2X_GS_WORKER=1)\n");
@@ -476,6 +482,9 @@ uint32_t PS2Memory::eeTimerLoad(uint32_t address) noexcept
     uint32_t offset = 0u;
     if (!decodeEeTimerRegister(eeTimerPhysical(address), index, offset))
         return 0u;
+    // GOW-Port: the EE checkpoint fast path defers timer cycles; hand them over before the count is read.
+    if (m_eeCycleSync)
+        m_eeCycleSync(m_eeCycleSyncContext, false);
     flushEeTimers();
     const EeTimer &timer = m_eeTimers[index];
     switch (offset)
@@ -508,6 +517,10 @@ bool PS2Memory::eeTimerStore(uint32_t address, uint32_t value) noexcept
     uint32_t offset = 0u;
     if (!decodeEeTimerRegister(eeTimerPhysical(address), index, offset))
         return false;
+    // GOW-Port: deferred cycles first (see eeTimerLoad); a write can bring the next timer event closer, so the next
+    // checkpoint must recompute the quiet cycles.
+    if (m_eeCycleSync)
+        m_eeCycleSync(m_eeCycleSyncContext, true);
     flushEeTimers();
     m_eeTimerBudget = 0; // recompute the distance to the next interrupt at the next advance
     EeTimer &timer = m_eeTimers[index];
@@ -1485,7 +1498,6 @@ bool PS2Memory::eeDmaStore(uint32_t address, uint32_t value)
             return true;
         const uint32_t channelBase = address & 0xFFFFFF00u;
         m_ioRegisters[address] = value & ~0x100u;
-        m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
 
         // GOW-Port: PS2X_EE_WATCH_WORD also reports scratchpad DMAs that change the watched RAM word.
         static const uint32_t watchWord = [] {
@@ -1497,6 +1509,8 @@ bool PS2Memory::eeDmaStore(uint32_t address, uint32_t value)
             std::memcpy(&watchBefore, m_rdram + watchWord, 4);
         if (tryProcessScratchpadDma(channelBase, value))
         {
+            // GOW-Port: counted here and in deliverDma only, once per transfer (a VIF1 / GIF start counted twice before).
+            m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
             if (watchWord)
             {
                 uint32_t watchAfter;
@@ -1595,9 +1609,8 @@ bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
     // the VU1 packets were left at zero and the characters were drawn as giant polygons.
     if (mode == 1u)
         return processScratchpadChain(channelBase, chcr);
-    if (mode != 0u)
+    if (mode == 3u)
     {
-        // GOW-Port: interleave (MOD=2) is not implemented; report it so a missing transfer is visible.
         static unsigned reports = 0u;
         if (++reports <= 20u)
             std::fprintf(stderr, "[dma] SPR %s mode %u not handled (chcr=%08x qwc=%u madr=%08x sadr=%04x)\n",
@@ -1612,6 +1625,22 @@ bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
     const uint32_t originalMadr = m_ioRegisters[channelBase + 0x10u] & 0x7FFFFFF0u;
     const uint32_t originalSadr = m_ioRegisters[channelBase + 0x80u] & 0x3FF0u;
 
+    // GOW-Port: interleave (MOD=2, idea from the GoW II port): blocks of D_SQWC.TQWC quadwords, and after each one
+    // D_SQWC.SQWC quadwords skipped in main memory; the scratchpad side stays contiguous. Normal mode is one block.
+    uint32_t blockQw = qwc;
+    uint32_t skipQw = 0u;
+    if (mode == 2u)
+    {
+        const uint32_t sqwcRegister = m_ioRegisters[0x1000E030u];
+        blockQw = (sqwcRegister >> 16u) & 0xFFu;
+        skipQw = sqwcRegister & 0xFFu;
+        if (blockQw == 0u)
+            blockQw = qwc;
+    }
+    const uint32_t blocks = blockQw == 0u ? 0u : (qwc + blockQw - 1u) / blockQw;
+    // Main memory spanned: every block's data plus the skips between blocks.
+    const uint64_t mainSpan = uint64_t(byteCount) + (blocks > 1u ? uint64_t(blocks - 1u) * skipQw * 16u : 0u);
+
     uint32_t mainOffset = 0u;
     try
     {
@@ -1622,33 +1651,41 @@ bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
         return false;
     }
 
-    if (mainOffset > PS2_RAM_SIZE || byteCount > PS2_RAM_SIZE - mainOffset)
+    if (mainOffset > PS2_RAM_SIZE || mainSpan > uint64_t(PS2_RAM_SIZE - mainOffset))
         return false;
 
     const bool fromScratchpad = channelBase == kSprFromChannel;
     uint32_t scratchOffset = originalSadr;
     uint32_t bytesLeft = byteCount;
-    uint32_t copied = 0u;
+    uint32_t mainPosition = mainOffset;
+    uint32_t blockLeft = blockQw * 16u;
     while (bytesLeft != 0u)
     {
         const uint32_t scratchChunk = PS2_SCRATCHPAD_SIZE - scratchOffset;
-        const uint32_t chunk = std::min(bytesLeft, scratchChunk);
+        const uint32_t chunk = std::min({bytesLeft, scratchChunk, blockLeft});
         if (fromScratchpad)
         {
-            std::memcpy(m_rdram + mainOffset + copied, m_scratchpad + scratchOffset, chunk);
-            markModified(mainOffset + copied, chunk);
+            std::memcpy(m_rdram + mainPosition, m_scratchpad + scratchOffset, chunk);
+            markModified(mainPosition, chunk);
         }
         else
         {
-            std::memcpy(m_scratchpad + scratchOffset, m_rdram + mainOffset + copied, chunk);
+            std::memcpy(m_scratchpad + scratchOffset, m_rdram + mainPosition, chunk);
         }
 
-        copied += chunk;
+        mainPosition += chunk;
         bytesLeft -= chunk;
+        blockLeft -= chunk;
         scratchOffset = (scratchOffset + chunk) & (PS2_SCRATCHPAD_SIZE - 1u);
+        if (blockLeft == 0u)
+        {
+            blockLeft = blockQw * 16u;
+            if (bytesLeft != 0u)
+                mainPosition += skipQw * 16u;
+        }
     }
 
-    m_ioRegisters[channelBase + 0x10u] = (originalMadr + byteCount) & 0x7FFFFFF0u;
+    m_ioRegisters[channelBase + 0x10u] = (originalMadr + (mainPosition - mainOffset)) & 0x7FFFFFF0u;
     m_ioRegisters[channelBase + 0x20u] = 0u;
     m_ioRegisters[channelBase + 0x80u] = (originalSadr + byteCount) & 0x3FF0u;
     queueCompletedDmacCause(fromScratchpad ? 8u : 9u);
@@ -1960,13 +1997,28 @@ void PS2Memory::deliverDma(DmaPath path, std::vector<uint8_t> &&bytes)
     {
         GsWorkerJob job;
         job.fbrst = m_fbrstProvider ? m_fbrstProvider() : 0u;
-        job.items.push_back(GsWorkerItem{path == DmaPath::Vif1, std::move(bytes)});
+        if (m_gsEarlyFinish && path == DmaPath::Vif1)
+            job.earlyFinish = countPath2Finish(bytes.data(), size, m_finishScanCycle, m_finishScanDirectLeft);
+        GsWorkerItem item;
+        item.vif1 = path == DmaPath::Vif1;
+        item.data = std::move(bytes);
+        job.items.push_back(std::move(item));
         gsWorkerTrace("kick", size);
+        bool raiseNow = false;
         {
             std::lock_guard<std::mutex> lock(m_gsWorkerMutex);
+            // GOW-Port: early FINISH: given now when no other job waits (the running one aside), so the EE is at most one
+            // job ahead of the drawing; otherwise the worker gives it when it starts this job.
+            if (job.earlyFinish != 0u)
+            {
+                raiseNow = m_gsWorkerJobs.empty();
+                job.raiseAtStart = !raiseNow;
+            }
             m_gsWorkerJobs.push_back(std::move(job));
         }
         m_gsWorkerCv.notify_one();
+        if (raiseNow)
+            raiseEarlyFinish();
         return;
     }
     if (path == DmaPath::Vif1)
@@ -1998,6 +2050,140 @@ static void gsWorkerTrace(const char *what, size_t bytes)
                      std::chrono::duration<double, std::micro>(now.time_since_epoch()).count(), what, bytes);
 }
 
+// GOW-Port: early FINISH (see ps2_memory.h). The GS stage takes these markers as packets of GIF path 0, between the GIF
+// packets, so they act in drawing order (GS::stageMarker in gs_frontend.cpp).
+namespace
+{
+    constexpr uint32_t kStageMarkerDisplay = 1u;        // payload: the 7 display registers
+    constexpr uint32_t kStageMarkerFinishGiven = 2u;    // payload: FINISH writes of this job the game already received
+    constexpr uint8_t kGsRegisterFinish = 0x61u;
+    constexpr uint64_t kCsrFinish = 0x2u;
+
+    void pushStageMarker(uint32_t kind, const void *payload, uint32_t bytes)
+    {
+        uint8_t packet[8u + 7u * sizeof(uint64_t)] = {};
+        std::memcpy(packet, &kind, sizeof(kind));
+        std::memcpy(packet + 8u, payload, std::min<size_t>(bytes, sizeof(packet) - 8u));
+        ps2_gs_stage::push(static_cast<GifPathId>(0), packet, sizeof(packet));
+    }
+
+    // Source bytes of a VIF UNPACK, with the same rules as processVIF1Data (STCYCL with CL < WL reads fewer vectors).
+    uint32_t unpackSourceBytes(uint32_t opcode, uint32_t num, uint32_t cycle)
+    {
+        const uint32_t vn = (opcode >> 2) & 3u, vl = opcode & 3u;
+        const uint32_t componentBits = vl == 0u ? 32u : vl == 1u ? 16u : vl == 2u ? 8u : (vn == 3u ? 4u : 16u);
+        const uint32_t vectorBits = (vl == 3u && vn == 3u) ? 16u : (vn + 1u) * componentBits;
+        const uint32_t writes = num == 0u ? 256u : num;
+        const uint32_t cl = std::max(cycle & 0xFFu, 1u), wl = std::max((cycle >> 8) & 0xFFu, 1u);
+        const uint32_t vectors = cl < wl ? (writes / wl) * cl + std::min(writes % wl, cl) : writes;
+        return (vectors * ((vectorBits + 7u) / 8u) + 3u) & ~3u;
+    }
+
+    // A+D writes to FINISH in a block of GIF data (PATH2: the payload of a DIRECT). Only PACKED tags can carry A+D;
+    // REGLIST and IMAGE data are skipped by their size.
+    uint32_t finishWritesInGif(const uint8_t *gif, uint32_t bytes)
+    {
+        uint32_t found = 0u;
+        for (uint32_t at = 0u; at + 16u <= bytes;)
+        {
+            uint64_t tag = 0u, descriptors = 0u;
+            std::memcpy(&tag, gif + at, 8u);
+            std::memcpy(&descriptors, gif + at + 8u, 8u);
+            at += 16u;
+            const uint32_t loops = static_cast<uint32_t>(tag & 0x7FFFu);
+            const uint32_t format = static_cast<uint32_t>(tag >> 58) & 3u;
+            const uint32_t registers = (tag >> 60) == 0u ? 16u : static_cast<uint32_t>(tag >> 60);
+            if (format == 0u)
+            {
+                for (uint32_t i = 0u; i < loops * registers && at + 16u <= bytes; ++i, at += 16u)
+                    found += ((descriptors >> (4u * (i % registers))) & 0xFu) == 0xEu && gif[at + 8u] == kGsRegisterFinish;
+            }
+            else
+            {
+                const uint64_t skip = format == 1u ? ((uint64_t(loops) * registers + 1u) / 2u) * 16u : uint64_t(loops) * 16u;
+                at = skip > bytes - at ? bytes : at + static_cast<uint32_t>(skip);
+            }
+        }
+        return found;
+    }
+}
+
+uint32_t PS2Memory::countPath2Finish(const uint8_t *data, uint32_t sizeBytes, uint32_t &cycle, uint32_t &directLeft)
+{
+    // A DIRECT cut by the previous packet's end continues here: its rest is skipped (a FINISH in it is not counted, so
+    // the GS raises it the usual way: a miss only delays the game, never reorders anything).
+    uint32_t pos = std::min(directLeft, sizeBytes);
+    directLeft -= pos;
+    uint32_t found = 0u;
+    while (pos + 4u <= sizeBytes)
+    {
+        uint32_t code = 0u;
+        std::memcpy(&code, data + pos, 4u);
+        pos += 4u;
+        const uint32_t opcode = (code >> 24) & 0x7Fu, imm = code & 0xFFFFu, num = (code >> 16) & 0xFFu;
+        uint32_t payload = 0u;
+        if (opcode == 0x01u)                         // STCYCL
+            cycle = imm;
+        else if (opcode == 0x20u)                    // STMASK
+            payload = 4u;
+        else if (opcode == 0x30u || opcode == 0x31u) // STROW, STCOL
+            payload = 16u;
+        else if (opcode == 0x4Au)                    // MPG
+            payload = (num == 0u ? 256u : num) * 8u;
+        else if (opcode == 0x50u || opcode == 0x51u) // DIRECT, DIRECTHL
+        {
+            payload = (imm == 0u ? 65536u : imm) * 16u;
+            if (payload > sizeBytes - pos)
+            {
+                directLeft = payload - (sizeBytes - pos);
+                break;
+            }
+            found += finishWritesInGif(data + pos, payload);
+        }
+        else if ((opcode & 0x60u) == 0x60u)          // UNPACK
+            payload = unpackSourceBytes(opcode, num, cycle);
+        if (payload > sizeBytes - pos)
+            break;
+        pos += payload;
+    }
+    return found;
+}
+
+void PS2Memory::raiseEarlyFinish()
+{
+    gs_regs.csr.fetch_or(kCsrFinish, std::memory_order_acq_rel);
+    gsWorkerTrace("early-finish", 0u);
+    if (m_gsWorkerWake)
+        m_gsWorkerWake();
+}
+
+void PS2Memory::gsQueueDisplay(const uint64_t (&regs)[7])
+{
+    {
+        std::lock_guard<std::mutex> lock(m_displayShadowMutex);
+        std::memcpy(m_displayShadow, regs, sizeof(m_displayShadow));
+        m_displayShadowValid = true;
+    }
+    GsWorkerJob job;
+    GsWorkerItem item;
+    item.display = true;
+    item.data.assign(reinterpret_cast<const uint8_t *>(regs), reinterpret_cast<const uint8_t *>(regs) + sizeof(regs));
+    job.items.push_back(std::move(item));
+    {
+        std::lock_guard<std::mutex> lock(m_gsWorkerMutex);
+        m_gsWorkerJobs.push_back(std::move(job));
+    }
+    m_gsWorkerCv.notify_one();
+}
+
+bool PS2Memory::gsDisplayShadow(uint64_t (&regs)[7]) const
+{
+    std::lock_guard<std::mutex> lock(m_displayShadowMutex);
+    if (m_displayShadowValid)
+        std::memcpy(regs, m_displayShadow, sizeof(regs));
+    return m_displayShadowValid;
+}
+
 void PS2Memory::runGsWorkerJob(GsWorkerJob &job)
 {
     size_t traceBytes = 0;
@@ -2006,9 +2192,22 @@ void PS2Memory::runGsWorkerJob(GsWorkerJob &job)
     gsWorkerTrace("job-start", traceBytes);
     struct TraceDone { size_t bytes; ~TraceDone() { gsWorkerTrace("job-done", bytes); } } traceDone{traceBytes};
     m_gsWorkerJobFbrst = job.fbrst;
+    if (job.earlyFinish != 0u)
+    {
+        // GOW-Port: early FINISH: the GS skips this job's own FINISH writes (the game already got them); a job queued
+        // behind another gets its FINISH now that it starts.
+        pushStageMarker(kStageMarkerFinishGiven, &job.earlyFinish, sizeof(job.earlyFinish));
+        if (job.raiseAtStart)
+            raiseEarlyFinish();
+    }
     for (GsWorkerItem &item : job.items)
     {
         const uint32_t size = static_cast<uint32_t>(item.data.size());
+        if (item.display)
+        {
+            pushStageMarker(kStageMarkerDisplay, item.data.data(), size); // GOW-Port: applied after what was queued before
+            continue;
+        }
         if (item.vif1)
         {
             processVIF1Data(item.data.data(), size);
@@ -2017,11 +2216,32 @@ void PS2Memory::runGsWorkerJob(GsWorkerJob &job)
         {
             m_seenGifCopy = true;
             m_gifCopyCount.fetch_add(1, std::memory_order_relaxed);
-            submitGifPacket(GifPathId::Path3, item.data.data(), size, false);
+            // GOW-Port: the job's buffer goes into the arbiter's queue as it is, instead of a second copy (planning 1.5).
+            // PATH3 masked keeps the copying path (its own FIFO); GOW_GIF_COPY=1 forces it, to compare.
+            static const bool copyPath = [] { const char *v = std::getenv("GOW_GIF_COPY"); return v && v[0] == '1'; }();
+            if (m_gifArbiter && !m_path3Masked && size >= 16u && !copyPath)
+            {
+                flushMaskedPath3Packets(false);
+                m_gifArbiter->submitBuffer(GifPathId::Path3, std::move(item.data));
+            }
+            else
+            {
+                submitGifPacket(GifPathId::Path3, item.data.data(), size, false);
+            }
         }
     }
     if (m_gifArbiter)
+    {
         m_gifArbiter->drain();
+        for (std::vector<uint8_t> &spent : m_gifArbiter->takeSpentBuffers())
+            returnDmaBuffer(std::move(spent));
+    }
+    if (job.earlyFinish != 0u)
+    {
+        // GOW-Port: a FINISH the scan counted but the GS did not meet in this job must not swallow a later job's one.
+        const uint32_t none = 0u;
+        pushStageMarker(kStageMarkerFinishGiven, &none, sizeof(none));
+    }
 }
 
 void PS2Memory::gsWorkerLoop()
@@ -2068,6 +2288,21 @@ void PS2Memory::syncGsWorkerFor(uint32_t address)
 {
     if (ps2_gs_stage::onStageThread())
         return; // GOW-Port: the stage runs queued worker output; it must not wait for itself
+    if (m_gsEarlyFinish && !onGsWorkerThread())
+    {
+        // GOW-Port: early FINISH: CSR's FINISH handshake belongs to the EE now, and waiting for the drawing here would undo it.
+        if (isGsStatusRegister(address))
+            return;
+        // A display register accessed directly (not through gsDisplayStore): the queued display writes land first, then
+        // the registers themselves are the current values again.
+        if (isGsDisplayRegister(address))
+        {
+            waitGsWorkerIdle(nullptr, address);
+            std::lock_guard<std::mutex> lock(m_displayShadowMutex);
+            m_displayShadowValid = false;
+            return;
+        }
+    }
     if (m_gsWorkerEnabled && needsGsWorkerSync(address) && !onGsWorkerThread())
         waitGsWorkerIdle(nullptr, address);
 }
@@ -2085,7 +2320,9 @@ namespace
     // PS2X_GS_WORKER_DIAG=1: every 5 s, the sync sites that made the EE wait for the worker.
     struct GsWorkerSyncDiag
     {
-        struct Entry { uint64_t syncs = 0, waits = 0, waitUs = 0; };
+        // GOW-Port: stage* = the worker was idle but the GS stage still had packets (idea from gow-native-pc patch 36): those
+        // waits were not counted before, so a stall behind the stage alone looked like no wait at all.
+        struct Entry { uint64_t syncs = 0, waits = 0, waitUs = 0, stageWaits = 0, stageWaitUs = 0; };
         std::mutex mutex;
         std::map<std::string, Entry> sites;
         std::chrono::steady_clock::time_point next = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -2105,7 +2342,8 @@ void PS2Memory::waitGsWorkerIdle(const char *site, uint32_t address)
     if (busy)
         m_gsWorkerIdleCv.wait(lock, [this] { return m_gsWorkerJobs.empty() && !m_gsWorkerBusy; });
     lock.unlock();
-    ps2_gs_stage::waitIdle(); // GOW-Port: the GS frontend stage is part of the worker (gs_stage.h)
+    const auto workerDone = std::chrono::steady_clock::now();
+    const bool stageWaited = ps2_gs_stage::waitIdle(); // GOW-Port: the GS frontend stage is part of the worker (gs_stage.h)
     if (!gsWorkerSyncDiagEnabled())
         return;
     static GsWorkerSyncDiag diag;
@@ -2123,14 +2361,19 @@ void PS2Memory::waitGsWorkerIdle(const char *site, uint32_t address)
         ++entry.waits;
         entry.waitUs += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - start).count());
     }
+    else if (stageWaited)
+    {
+        ++entry.stageWaits;
+        entry.stageWaitUs += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now - workerDone).count());
+    }
     if (now >= diag.next)
     {
         diag.next = now + std::chrono::seconds(5);
         for (const auto &[name, e] : diag.sites)
-            if (e.waits)
-                std::fprintf(stderr, "[gs-worker:sync] %s syncs=%llu waits=%llu wait_ms=%.1f\n", name.c_str(),
-                             static_cast<unsigned long long>(e.syncs), static_cast<unsigned long long>(e.waits),
-                             e.waitUs / 1000.0);
+            if (e.waits || e.stageWaits)
+                std::fprintf(stderr, "[gs-worker:sync] %s syncs=%llu waits=%llu wait_ms=%.1f stage_waits=%llu stage_wait_ms=%.1f\n",
+                             name.c_str(), static_cast<unsigned long long>(e.syncs), static_cast<unsigned long long>(e.waits),
+                             e.waitUs / 1000.0, static_cast<unsigned long long>(e.stageWaits), e.stageWaitUs / 1000.0);
         diag.sites.clear();
     }
 }

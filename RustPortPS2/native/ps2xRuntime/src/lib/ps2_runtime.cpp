@@ -5,6 +5,10 @@ static bool gowUsePcsx2Vu1(); // GOW_VU1_PCSX2=1, defined before PS2Runtime::ini
 #include "runtime/gs/gs_host_present.h" // GOW-Port: the host's private consumer.
 #include "ps2_log.h"
 #include "runtime/ps2_perf.h"
+#include "gow_frame_metrics.h" // GOW-Port: GOW_FRAME_DIAG
+#if defined(PS2X_PGO_GENERATE)
+extern "C" int __llvm_profile_write_file(void); // GOW-Port: clang's profile runtime (instrumented builds only)
+#endif
 #include "ps2_stubs.h"
 #include "ps2_syscalls.h"
 #include "game_overrides.h"
@@ -85,8 +89,15 @@ namespace
     {
         int16_t *out = static_cast<int16_t *>(buffer);
         size_t produced = 0u;
+        // GOW-Port (R1): GOW_AUDIO_STRETCH=0 plays the samples as they arrive, without the standing buffer and the time
+        // stretcher (for comparing; drops of the emulation then become gaps of silence).
+        static const size_t latency = []
+        {
+            const char *stretch = std::getenv("GOW_AUDIO_STRETCH");
+            return stretch && stretch[0] == '0' ? SIZE_MAX : kSpu2MaxLatencyFrames;
+        }();
         if (ps2x::iop::IopSubsystem *source = g_spu2AudioSource.load(std::memory_order_acquire))
-            produced = source->drainAudio(out, frames, kSpu2MaxLatencyFrames);
+            produced = source->drainAudio(out, frames, latency);
         g_gowAudioFramesPlayed.fetch_add(frames, std::memory_order_relaxed);
         g_gowAudioFramesProduced.fetch_add(produced, std::memory_order_relaxed);
         // GOW-Port: GOW_AUDIO_PCM=<file> saves the emulated samples (s16le, stereo, 48 kHz) without the
@@ -209,6 +220,12 @@ namespace
     constexpr uint32_t kGuestHeapDefaultAlignment = 16u;
     constexpr uint32_t kGuestHeapSafetyPad = 0x1000u;
     constexpr uint32_t kGuestHeapHardLimit = 0x01F00000u;
+    // GOW-Port: the end of the runtime's own pools above the guest heap (RPC packets, RPC servers, TLS and boot mode,
+    // 0x01F00000-0x01F31000: Kernel/Syscalls/Helpers/State.h). The interrupt / callback stacks grow down from the top of RAM
+    // and used to stop only at 0x01F00000, so after ~45 of them (16 KB each, never freed) they overwrote the RPC pools
+    // silently. They stop above the pools now, and running out is the explicit "stack space exhausted" error. Idea from
+    // the GoW II port (pools kept out of the stacks' and the heap's way).
+    constexpr uint32_t kRuntimePoolsEnd = 0x01F31000u;
 
     constexpr uint32_t COP0_CAUSE_EXCCODE_MASK = 0x0000007Cu;
     constexpr uint32_t COP0_CAUSE_BD = 0x80000000u;
@@ -489,6 +506,11 @@ PS2Runtime::PS2Runtime()
     m_iopSubsystem = std::make_unique<ps2x::iop::IopSubsystem>(*m_iopHost);
 
     m_eeScheduler = std::make_unique<EeScheduler>(*this);
+    // GOW-Port: EE timer registers read the guest EE clock: the scheduler hands over the cycles its checkpoint fast path
+    // deferred first (EeScheduler::syncDeferredCycles; limitsChanged on a write, which can move the next timer event).
+    m_memory.setEeCycleSync([](void *scheduler, bool limitsChanged)
+                            { static_cast<EeScheduler *>(scheduler)->syncDeferredCycles(limitsChanged); },
+                            m_eeScheduler.get());
 
     // GOW-Port: VU1 without write queues (a third faster); GOW_VU1_QUEUES=1 returns to the queued model.
     {
@@ -520,7 +542,7 @@ PS2Runtime::PS2Runtime()
     m_guestHeapLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
     m_guestHeapSuggestedBase = kGuestHeapDefaultBase;
     m_guestHeapConfigured = false;
-    m_asyncCallbackStackFloor = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
+    m_asyncCallbackStackFloor = std::min(kRuntimePoolsEnd, PS2_RAM_SIZE);
     m_asyncCallbackStackTop = PS2_RAM_SIZE;
 }
 
@@ -626,6 +648,11 @@ void PS2Runtime::advanceIopEeCycles(uint64_t eeCycles) noexcept
         return;
     ps2_perf::Scope perf(ps2_perf::Bucket::Iop);
     m_iopSubsystem->runPendingEeCycles();
+}
+
+uint64_t PS2Runtime::iopEeCyclesUntilBatch() const noexcept
+{
+    return m_iopSubsystem->eeCyclesUntilBatch();
 }
 
 void PS2Runtime::resetIop()
@@ -1091,7 +1118,7 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
     {
         std::lock_guard<std::mutex> lock(m_asyncCallbackStackMutex);
         const uint32_t hardLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
-        m_asyncCallbackStackFloor = std::min(std::max(hardLimit, suggestedHeapBase), PS2_RAM_SIZE);
+        m_asyncCallbackStackFloor = std::min(std::max({hardLimit, suggestedHeapBase, kRuntimePoolsEnd}), PS2_RAM_SIZE);
         m_asyncCallbackStackTop = PS2_RAM_SIZE;
     }
 
@@ -1556,6 +1583,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     const uint64_t checkpointSerial = m_eeCheckpointSerial;
     const uint64_t jumpSerial = g_guestJumpSerial;
     ps2_perf::guestEntry(targetPc, rdram); // GOW-Port: also counts calls that do not return to the dispatcher.
+    // GOW-Port: GOW_FRAME_DIAG: the same frame entries, as an interval distribution (gow_frame_metrics.h).
+    static const bool frameDiag = gow_frame_metrics::enabled();
+    if (frameDiag)
+        gow_frame_metrics::onGuestEntry(targetPc);
     // GOW-Port: PS2X_GS_WORKER_TRACE=<s>: for 2 s after <s> s of uptime, host µs of vid::Flip (0x1837B8),
     // vid::WaitForDMAComplete (0x183878) and 0x13F730 entry/return, to see the per-frame dependency chain.
     static const double traceFrom = [] { const char *v = std::getenv("PS2X_GS_WORKER_TRACE"); return v ? std::atof(v) : -1.0; }();
@@ -2216,6 +2247,14 @@ uint32_t PS2Runtime::reserveAsyncCallbackStack(uint32_t size, uint32_t alignment
     base &= ~(normalizedAlignment - 1u);
     if (base < m_asyncCallbackStackFloor || base >= top)
     {
+        // GOW-Port: said once in the log, so a report shows it next to the error that follows.
+        static bool reported = false;
+        if (!reported)
+        {
+            reported = true;
+            std::fprintf(stderr, "[stack] no room for another interrupt / callback stack (top 0x%x, floor 0x%x)\n",
+                         m_asyncCallbackStackTop, m_asyncCallbackStackFloor);
+        }
         return 0u;
     }
 
@@ -2435,7 +2474,8 @@ void PS2Runtime::postEeEvent(EeEvent event)
     m_eeScheduler->postEvent(event);
 }
 
-bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
+// GOW-Port: the full checkpoint behind the inline fast path of eeCheckpointDue (ps2_runtime.h).
+bool PS2Runtime::eeCheckpointDueFull(uint32_t cycles) noexcept
 {
     const bool due = m_eeScheduler->checkpointDue(cycles);
     if (due) ++m_eeCheckpointSerial;
@@ -2689,6 +2729,12 @@ void PS2Runtime::run()
 
         if (WindowShouldClose())
         {
+#if defined(PS2X_PGO_GENERATE)
+            // GOW-Port: an instrumented (PGO training) build writes its profile as soon as the window is asked to close: the
+            // shutdown below waits for the game thread and can be cut short, and the profile runtime only writes at a normal
+            // process exit otherwise. The exit hook may write it again later, over the same file.
+            std::fprintf(stderr, "[gow-pgo] profile written: %s\n", __llvm_profile_write_file() == 0 ? "yes" : "FAILED");
+#endif
             RUNTIME_LOG("[run] window close requested, breaking out of loop");
             requestStop();
             break;

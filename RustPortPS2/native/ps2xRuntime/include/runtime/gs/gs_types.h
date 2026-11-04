@@ -125,6 +125,8 @@ struct GSFrameReg
     uint32_t fbw = 0;
     uint8_t psm = 0;
     uint32_t fbmsk = 0;
+
+    bool operator==(const GSFrameReg &) const = default; // GOW-Port: field by field (padding bytes are unspecified)
 };
 
 struct GSZbufReg
@@ -132,6 +134,8 @@ struct GSZbufReg
     uint32_t zbp = 0;
     uint8_t psm = 0;
     bool zmask = false;
+
+    bool operator==(const GSZbufReg &) const = default; // GOW-Port: field by field (padding bytes are unspecified)
 };
 
 struct GSScissorReg
@@ -140,6 +144,8 @@ struct GSScissorReg
     uint16_t x1 = 0;
     uint16_t y0 = 0;
     uint16_t y1 = 0;
+
+    bool operator==(const GSScissorReg &) const = default; // GOW-Port: field by field (padding bytes are unspecified)
 };
 
 struct GSTex0Reg
@@ -156,12 +162,16 @@ struct GSTex0Reg
     uint8_t csm = 0;
     uint8_t csa = 0;
     uint8_t cld = 0;
+
+    bool operator==(const GSTex0Reg &) const = default; // GOW-Port: field by field (padding bytes are unspecified)
 };
 
 struct GSXYOffsetReg
 {
     uint16_t ofx = 0;
     uint16_t ofy = 0;
+
+    bool operator==(const GSXYOffsetReg &) const = default; // GOW-Port: field by field (padding bytes are unspecified)
 };
 
 struct GSTexaReg
@@ -169,6 +179,8 @@ struct GSTexaReg
     uint8_t ta0 = 0;
     bool aem = false;
     uint8_t ta1 = 0;
+
+    bool operator==(const GSTexaReg &) const = default; // GOW-Port: field by field (padding bytes are unspecified)
 };
 
 struct GSTexClutReg
@@ -176,6 +188,8 @@ struct GSTexClutReg
     uint8_t cbw = 0;
     uint8_t cou = 0;
     uint16_t cov = 0;
+
+    bool operator==(const GSTexClutReg &) const = default; // GOW-Port: field by field (padding bytes are unspecified)
 };
 
 struct GSContext
@@ -192,6 +206,8 @@ struct GSContext
     uint64_t alpha = 0;
     uint64_t test = 0;
     uint64_t fba = 0;
+
+    bool operator==(const GSContext &) const = default; // GOW-Port: field by field (padding bytes are unspecified)
 };
 
 struct GSPrimReg
@@ -205,6 +221,8 @@ struct GSPrimReg
     bool fst = false;
     bool ctxt = false;
     bool fix = false;
+
+    bool operator==(const GSPrimReg &) const = default; // GOW-Port: field by field (padding bytes are unspecified)
 };
 
 struct GSBitBltBuf
@@ -249,6 +267,8 @@ struct GSDrawState
     uint16_t textureWidth = 1;
     uint16_t textureHeight = 1;
     bool linearFilter = false;
+
+    bool operator==(const GSDrawState &) const = default; // GOW-Port: field by field (padding bytes are unspecified)
 };
 
 struct GSPrimitiveBatch

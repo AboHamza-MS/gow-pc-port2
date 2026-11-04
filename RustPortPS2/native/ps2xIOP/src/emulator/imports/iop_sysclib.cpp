@@ -310,9 +310,37 @@ namespace ps2x::iop::detail
                       : a0 + static_cast<uint32_t>(position));
             return true;
         }
-        case 35: // strtok state is intentionally not shared across modules yet.
-            setV0(0);
+        case 35: // strtok
+        {
+            // GOW-Port: one saved position for all modules, as the real sysclib keeps a single static. Returning 0 always (as
+            // before) left a module that splits a list with it (the GoW II port found smpd doing so) with no tokens.
+            const std::string delimiters = m_memory.readString(a1, 256u);
+            const auto delimiter = [&](uint8_t c) { return c != 0u && delimiters.find(static_cast<char>(c)) != std::string::npos; };
+            uint32_t at = a0 != 0u ? a0 : m_strtokNext;
+            m_strtokNext = 0u;
+            if (at == 0u)
+            {
+                setV0(0);
+                return true;
+            }
+            while (delimiter(m_memory.read8(at)))
+                ++at;
+            if (m_memory.read8(at) == 0u)
+            {
+                setV0(0);
+                return true;
+            }
+            uint32_t end = at;
+            while (m_memory.read8(end) != 0u && !delimiter(m_memory.read8(end)))
+                ++end;
+            if (m_memory.read8(end) != 0u)
+            {
+                m_memory.write8(end, 0u);
+                m_strtokNext = end + 1u;
+            }
+            setV0(at);
             return true;
+        }
         case 36:
         case 38: // strtol / strtoul
         {

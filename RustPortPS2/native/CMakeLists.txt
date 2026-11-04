@@ -61,7 +61,45 @@ endif()
 # fuse a*b+c into FMA by default (-ffp-contract=fast); MSVC does not (/fp:precise), and the VU FMAC and the EE FPU
 # round the product and the sum separately: -ffp-contract=off gives the same results as on Windows.
 if(NOT MSVC AND NOT PS2X_IS_ARM_TARGET AND NOT PS2X_IS_AARCH64_TARGET AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
-    add_compile_options(-march=native -ffp-contract=off)
+    if(WIN32)
+        # GOW-Port (Windows clang / llvm-mingw, decision D1 of the 0.3.0 plan): the same minimum CPU as the MSVC build
+        # (SSE4.1, checked by install.ps1) instead of -march=native.
+        add_compile_options(-msse4.1 -ffp-contract=off)
+    else()
+        add_compile_options(-march=native -ffp-contract=off)
+    endif()
+    # GOW-Port: the generated EE code relies on wrapping integers and on overlapping accesses, which MSVC never exploits.
+    add_compile_options(-fno-strict-aliasing -fwrapv -fno-math-errno -fno-trapping-math)
+endif()
+if(WIN32 AND NOT MSVC)
+    # GOW-Port: llvm-mingw: big objects (the generated unity files exceed the COFF section limit) and a self-contained
+    # executable (no libc++ / libunwind DLLs next to it).
+    add_compile_options(-Wa,-mbig-obj)
+    add_link_options(-static)
+endif()
+
+# GOW-Port: clang profile-guided optimization, trained on the player's own machine (decision D3: no profile is shipped).
+# install.ps1 builds with PS2X_PGO=generate, plays the optimization run (which writes the profile when its window closes,
+# ps2_runtime.cpp), merges it and builds again with PS2X_PGO=use. Measured by gow-native-pc on the same game: +4.7 % on
+# average, +13 % in combat. The profile's hash is a compile definition, so a new profile at the same path rebuilds the objects.
+set(PS2X_PGO "" CACHE STRING "clang: profile-guided optimization: generate, use, or empty for none")
+set(PS2X_PGO_PROFILE "" CACHE FILEPATH "clang: the merged .profdata for PS2X_PGO=use")
+if(NOT MSVC AND PS2X_PGO STREQUAL "generate")
+    add_compile_options(-fprofile-instr-generate)
+    add_link_options(-fprofile-instr-generate)
+    add_compile_definitions(PS2X_PGO_GENERATE=1)
+    message(STATUS "PGO: instrumented build (training)")
+elseif(NOT MSVC AND PS2X_PGO STREQUAL "use")
+    if(NOT EXISTS "${PS2X_PGO_PROFILE}")
+        message(FATAL_ERROR "PS2X_PGO=use needs PS2X_PGO_PROFILE (not found: ${PS2X_PGO_PROFILE})")
+    endif()
+    file(SHA256 "${PS2X_PGO_PROFILE}" PS2X_PGO_PROFILE_SHA256)
+    string(SUBSTRING "${PS2X_PGO_PROFILE_SHA256}" 0 16 PS2X_PGO_PROFILE_ID)
+    # Functions the training run never reached, or that changed since, are compiled without a profile: no warnings for them.
+    add_compile_options("-fprofile-instr-use=${PS2X_PGO_PROFILE}" -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date
+                        -Wno-backend-plugin)
+    add_compile_definitions(PS2X_PGO_PROFILE_ID=0x${PS2X_PGO_PROFILE_ID})
+    message(STATUS "PGO: using ${PS2X_PGO_PROFILE} (${PS2X_PGO_PROFILE_ID})")
 endif()
 
 if(PS2X_BUILD_RUNTIME)

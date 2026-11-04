@@ -1137,6 +1137,15 @@ namespace ps2x::iop::detail
         return m_impl->pendingIopCycles >= kIopCycleBatch;
     }
 
+    uint64_t IopEmulator::eeCyclesUntilBatch() const noexcept
+    {
+        // GOW-Port: accrueEeCycles reports a batch once carry + eeCycles >= 8 * (kIopCycleBatch - pending): a limit of the
+        // EE checkpoint fast path, so the IOP batches still run at the same EE checkpoints.
+        if (m_impl->pendingIopCycles >= kIopCycleBatch)
+            return 0u;
+        return 8u * (kIopCycleBatch - m_impl->pendingIopCycles) - m_impl->eeCycleCarry;
+    }
+
     void IopEmulator::runPendingEeCycles() noexcept
     {
         const uint64_t cycles = m_impl->pendingIopCycles;

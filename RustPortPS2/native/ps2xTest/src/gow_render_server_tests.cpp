@@ -108,8 +108,10 @@ void register_gow_render_server_tests()
             t.Equals(g_callbackArguments[0], kPrimary + 0x10u, "the primary JALR delay slot must adjust a0");
             t.Equals(g_callbackArguments[1], kFinal, "the final callback receives its server");
             t.Equals(ctx.pc, kReturn, "the direct dispatcher must restore the retail return address");
-            t.Equals(GPR_U32(&ctx, 29), 0x001FF000u, "the direct dispatcher must restore sp");
-            t.Equals(GPR_U32(&ctx, 16), 0x00112233u, "the direct dispatcher must restore s0");
+            // GOW-Port: GPR_U32 does not parenthesize its argument, so it needs a plain pointer name (not &ctx).
+            R5900Context *const restored = &ctx;
+            t.Equals(GPR_U32(restored, 29), 0x001FF000u, "the direct dispatcher must restore sp");
+            t.Equals(GPR_U32(restored, 16), 0x00112233u, "the direct dispatcher must restore s0");
         });
 
         tc.Run("dispatches the second primary callback when the first is disabled", [](TestCase &t)

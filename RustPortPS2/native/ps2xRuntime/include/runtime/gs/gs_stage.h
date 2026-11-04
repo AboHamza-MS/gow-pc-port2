@@ -26,5 +26,6 @@ namespace ps2_gs_stage
     void push(GifPathId path, const uint8_t *data, uint32_t size);
 
     // Returns when every queued packet has been processed. No-op on the stage thread itself.
-    void waitIdle();
+    // GOW-Port: true when it had to wait (the stage still had packets), for PS2X_GS_WORKER_DIAG.
+    bool waitIdle();
 }
