@@ -16,7 +16,9 @@
 #include <vector>
 
 float gowPresentationAspect();                                // GOW-Port: gow_integration.cpp
-void gowFrameDraw(float x, float y, float w, float h, uint64_t presentedVsyncTick, bool hasSharedFrame); // GOW-Port: gow_integration.cpp
+void gowFrameDraw(float x, float y, float w, float h, uint64_t presentedSequence, bool hasSharedFrame); // GOW-Port: gow_integration.cpp
+int gowLogicFps();                                             // GOW-Port: gow_integration.cpp (PC_LOGIC_FPS)
+uint64_t gowGameFlipCount();                                   // GOW-Port: gow_integration.cpp (game buffer swaps)
 namespace
 {
     constexpr uint32_t kWidth = 640u;
@@ -355,7 +357,27 @@ GSHostPresentation::View GSHostPresentation::prepare(GS &gs, uint64_t vsyncTick)
         lastSharedSequence = 0u;
         current = {};
     }
-    const bool needsLatch = !hasLatched || vsyncTick != lastTick;
+    // GOW-Port: with the game logic above 60 Hz (PC_LOGIC_FPS) the game swaps buffers more than once per 60 Hz VBlank, so each
+    // swap latches a new picture (otherwise the window shows at most one new frame per VBlank). The VBlank latch then only
+    // runs when the game has not swapped for two VBlanks (loading, movies, stalls): latching the same picture again on every
+    // VBlank would publish duplicates that push real frames out of the shared queue.
+    static const bool latchOnSwap = gowLogicFps() > 60;
+    static uint64_t lastSwap = 0u, lastSwapTick = 0u;
+    bool needsLatch = !hasLatched;
+    if (latchOnSwap)
+    {
+        const uint64_t swap = gowGameFlipCount();
+        if (swap != lastSwap)
+        {
+            needsLatch = true;
+            lastSwap = swap;
+            lastSwapTick = vsyncTick;
+        }
+        else if (vsyncTick != lastTick && vsyncTick >= lastSwapTick + 2u)
+            needsLatch = true;
+    }
+    else
+        needsLatch = needsLatch || vsyncTick != lastTick;
     if (needsLatch)
     {
         gs.latchHostPresentationFrame();
@@ -530,7 +552,7 @@ GSHostPresentation::View GSHostPresentation::renderFrame(GS &gs, uint64_t vsyncT
     if (scaler)
         EndShaderMode();
     gowFrameDraw(destination.x, destination.y, destination.width, destination.height,
-                     selected.frame.vsyncTick, selected.shared && !selected.blank); // GOW-Port
+                     selected.frame.sequence, selected.shared && !selected.blank); // GOW-Port
     // GOW-Port: no renderer, so no frame will ever come: say why instead of the magenta placeholder. A blank frame without a
     // failure (PMODE off) keeps its look.
     if (selected.blank)

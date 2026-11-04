@@ -49,7 +49,7 @@ Last reviewed: October 2026, against the code in this repository.
 
 | Area | Limitation |
 |---|---|
-| Frame rate | The game's logic is tied to the PS2's 60 Hz VBlank and never runs faster. 120/144 FPS modes speed up the **presentation** only. Heavy scenes on integrated GPUs drop below 60 |
+| Frame rate | 60 FPS by default, the PS2's own rate. The **experimental** 120 and 240 FPS limits run the game logic at that rate with the game kept at real-time speed; actions timed in frames (QTEs, combo windows) are not verified there yet. Heavy scenes on integrated GPUs drop below 60 |
 | Multi-threading | The VU1 thread is the CPU bottleneck in combat. The optimization pass converts more of it to native code over time |
 | Window | At 3× and above, presentation can stall behind the GPU on mid-range cards; the launcher caps presentation at 60 FPS there |
 | Widescreen | With Hor+ on, the HUD and 2D screens are stretched horizontally (the PCSX2 patch does not correct them), more the wider the aspect |

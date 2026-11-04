@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 11;
+pub const SETTINGS_VERSION: u32 = 12;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -230,6 +230,12 @@ impl Settings {
             };
             self.settings_version = 11;
         }
+        if self.settings_version < 12 {
+            // 120 and 144 used to speed up only the window; now they also run the game logic at that rate (experimental).
+            // Nobody gets that without choosing it again.
+            self.fps_limit = 60;
+            self.settings_version = 12;
+        }
         if self.language != "pt-BR" && self.language != "en" {
             self.language = if prefers_portuguese { "pt-BR".into() } else { "en".into() };
         }
@@ -331,13 +337,17 @@ mod tests {
     }
 
     #[test]
-    fn version_nine_keeps_a_chosen_120() {
-        let mut settings = Settings { settings_version: 8, fps_limit: 144, ..Settings::default() };
-        settings.migrate(false, &DisplayInfo::default());
-        assert_eq!(settings.fps_limit, 120);
-        let mut settings = Settings { settings_version: 8, fps_limit: 30, ..Settings::default() };
-        settings.migrate(false, &DisplayInfo::default());
-        assert_eq!(settings.fps_limit, 60);
+    fn version_twelve_resets_the_fps_mode_once() {
+        // 120/144 now also mean the experimental logic rate: an old choice goes back to 60 once.
+        for stored in [30, 60, 120, 144] {
+            let mut settings = Settings { settings_version: 8, fps_limit: stored, ..Settings::default() };
+            settings.migrate(false, &DisplayInfo::default());
+            assert_eq!(settings.fps_limit, 60, "stored {stored}");
+        }
+        // A 120 chosen after the migration is kept.
+        let mut chosen = Settings { settings_version: 12, fps_limit: 120, ..Settings::default() };
+        chosen.migrate(false, &DisplayInfo::default());
+        assert_eq!(chosen.fps_limit, 120);
     }
 
     #[test]
@@ -365,15 +375,6 @@ mod tests {
         let mut chosen = Settings { settings_version: 10, optimize_during_game: true, ..Settings::default() };
         chosen.migrate(false, &DisplayInfo::default());
         assert!(chosen.optimize_during_game);
-    }
-
-    #[test]
-    fn version_eleven_snaps_the_frame_limit_to_60_120_or_144() {
-        for (stored, expected) in [(0, 60), (30, 60), (60, 60), (90, 120), (120, 120), (144, 144), (240, 144)] {
-            let mut settings = Settings { settings_version: 10, fps_limit: stored, ..Settings::default() };
-            settings.migrate(false, &DisplayInfo::default());
-            assert_eq!(settings.fps_limit, expected, "stored {stored}");
-        }
     }
 
     #[test]

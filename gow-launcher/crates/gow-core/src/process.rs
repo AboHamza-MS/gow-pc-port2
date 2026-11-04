@@ -103,6 +103,7 @@ pub fn start(
             .retro_achievements_enabled
             .then(|| credential::retro_achievements_password(&settings.retro_achievements_user))
             .flatten(),
+        refresh_hz: crate::display::refresh_rate(),
     };
     #[cfg_attr(windows, allow(unused_mut))]
     let mut plan = launch::build_environment(&ctx, |name| std::env::var(name).ok());

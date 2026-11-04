@@ -202,7 +202,7 @@ mod tests {
             settings_from_raw(&raw(&[("settingsVersion", "5"), ("skipVideos", "true"), ("fpsLimit", "144")]));
         settings.migrate(false, &crate::settings::DisplayInfo::default());
         assert!(!settings.skip_videos); // version 6
-        assert_eq!(settings.fps_limit, 120); // version 9
+        assert_eq!(settings.fps_limit, 60); // version 12: an old FPS mode never turns on the experimental limit
     }
 
     #[test]

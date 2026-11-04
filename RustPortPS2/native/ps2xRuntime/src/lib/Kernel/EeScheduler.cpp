@@ -12,6 +12,7 @@
 #include <stdexcept>
 
 void gowIntegrationVBlank(uint8_t *rdram); // GOW-Port: gow_integration.cpp
+int gowLogicFps();                          // GOW-Port: gow_integration.cpp (PC_LOGIC_FPS, 60 by default)
 
 namespace
 {
@@ -58,6 +59,14 @@ namespace
     constexpr uint64_t kVBlankDurationCycles = microsecondsToEeCycles(500u);
     constexpr uint64_t kAlarmTickCycles = microsecondsToEeCycles(kAlarmTickMicroseconds);
     constexpr uint64_t kPaceSteps = 16u; // pacing points per field (see VBlankStart)
+
+    // GOW-Port: with a logic rate above 60 (PC_LOGIC_FPS) the game measures shorter frames with the guest clock, so the
+    // pacing points get as many per field as N/60 to keep ~1 ms of resolution per logic frame.
+    uint64_t paceSteps()
+    {
+        static const uint64_t steps = kPaceSteps * static_cast<uint64_t>(std::max(60, gowLogicFps())) / 60u;
+        return steps;
+    }
 
     template <typename Map>
     int allocatePositiveId(int &nextId, const Map &objects)
@@ -2093,9 +2102,10 @@ void EeScheduler::processDueDeadlines()
                 // busy-waits (vid::WaitForDMAComplete polling the GS-done flag) otherwise burn guest cycles ~10x
                 // faster than real time, the FINISH and the game's frame-clock read land late in guest time and its
                 // frame step (>= 1 field) ran 3 % fast at 60 fps (docs/dev/PERFORMANCE.md, game speed).
-                for (uint64_t k = 1; k < kPaceSteps; ++k)
-                    scheduleEvent(scheduled.deadlineCycle + kVBlankPeriodCycles * k / kPaceSteps,
-                                  scheduled.hostDeadline + kVBlankPeriod * k / kPaceSteps,
+                const uint64_t steps = paceSteps();
+                for (uint64_t k = 1; k < steps; ++k)
+                    scheduleEvent(scheduled.deadlineCycle + kVBlankPeriodCycles * k / steps,
+                                  scheduled.hostDeadline + kVBlankPeriod * k / steps,
                                   EeEvent{EeEventType::ExternalWake, 0xFFFFFFFFu, ~0ull});
             }
             processEvent(scheduled.event);

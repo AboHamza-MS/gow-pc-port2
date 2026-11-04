@@ -110,6 +110,15 @@ namespace
             if (std::getenv("GOW_MPEG_DIAG"))
                 runtime.replaceFunction(0x0017AFE0u, gowDiagStreamRead);
         }
+        // game logic rate (gow_logic_rate.cpp): PC_LOGIC_FPS > 60 paces the frame at N Hz, off by default
+        const int logicFps = gowLogicFps();
+        if (logicFps > 60)
+        {
+            runtime.replaceFunction(0x0017A1D0u, gowLogicFrameWait); // frame end's VBlank wait
+            std::fprintf(stderr, "[gow-hfps] game logic at %d Hz (experimental, PC_LOGIC_FPS)\n", logicFps);
+        }
+        if (const char *diag = std::getenv("GOW_HFPS_DIAG"); logicFps > 60 || (diag && std::strcmp(diag, "1") == 0))
+            runtime.replaceFunction(0x0017D778u, gowLogicTimeStep); // per-frame time step
         if (std::getenv("GOW_RENDER_DIAG"))
             for (const uint32_t address : {0x001262C8u, 0x00126310u, 0x0012633Cu, 0x00126368u,
                                            0x00126428u, 0x00126478u, 0x00126528u})

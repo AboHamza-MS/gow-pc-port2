@@ -175,8 +175,9 @@ Everything else (the full cheat list, target lock rules, agile combat, memory ca
 
 ## Performance
 
-The game's logic is tied to the PS2's 60 Hz VBlank, so **the game never runs above 60 FPS** and never slows down: late
-frames are dropped. The window can present at 60, 120 or 144 Hz for lower latency.
+The game runs at 60 FPS by default, the PS2's own rate, always at real-time speed: late frames are dropped, never slowed
+down. The launcher's **experimental** FPS limits (120 and 240) run the game logic at that rate, smoother but never
+faster; the window refreshes at the monitor's rate.
 
 - **Internal resolution 2× is the sweet spot.** 3× and above are heavy and, on mid-range cards, can stall the
   presentation.

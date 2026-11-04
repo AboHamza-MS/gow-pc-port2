@@ -152,6 +152,7 @@ void gowRetroAchievementsVBlank(uint8_t *rdram);
 void gowRetroAchievementsDraw();
 void gowSamplingStart(); // gow_sampling.cpp (GOW_SAMPLING)
 void gowSamplingBurst(const char *path, double seconds, int intervalUs); // gow_sampling.cpp: synchronous sampling for a few seconds
+int gowLogicFps(); // GOW-Port: below (PC_LOGIC_FPS)
 
 namespace
 {
@@ -277,11 +278,11 @@ namespace
         g_gameFrameFunction(rdram, ctx, runtime);
     }
 
-    void drawFps(float x, float y, float h, uint64_t presentedVsyncTick, bool hasSharedFrame)
+    void drawFps(float x, float y, float h, uint64_t presentedSequence, bool hasSharedFrame)
     {
         static double last = 0.0;
         static uint64_t framesBefore = 0;
-        static uint64_t lastPresentedTick = 0;
+        static uint64_t lastPresentedSequence = 0;
         static int gameFps = 0, newFps = 0, windowFps = 0;
         static int newCount = 0, windowCount = 0;
         const double now = GetTime();
@@ -292,10 +293,10 @@ namespace
         static float intervalsMs[600];
         static int intervalCount = 0, intervalHead = 0, lowFps = 0;
         static double lastNewTime = 0.0;
-        if (hasSharedFrame && presentedVsyncTick != 0 && presentedVsyncTick != lastPresentedTick)
+        if (hasSharedFrame && presentedSequence != 0 && presentedSequence != lastPresentedSequence)
         {
             ++newCount;
-            lastPresentedTick = presentedVsyncTick;
+            lastPresentedSequence = presentedSequence;
             if (lastNewTime > 0.0)
             {
                 intervalsMs[intervalHead] = static_cast<float>((now - lastNewTime) * 1000.0);
@@ -312,7 +313,11 @@ namespace
         else if (now - last >= 1.0)
         {
             const double interval = now - last;
-            gameFps = static_cast<int>(static_cast<double>(frames - framesBefore) / interval + 0.5);
+            // GOW-Port: never above the chosen limit (PC_GAME_FPS=30, 60, or PC_LOGIC_FPS). After a hitch the guest clock
+            // catches up the lost time (late VBlanks fire back to back) and a second can count a few extra frames; that is
+            // time recovery, not the game running past the limit, so the counter shows the limit.
+            const int limit = g_gameFrameLimit == 30 ? 30 : gowLogicFps();
+            gameFps = std::min(limit, static_cast<int>(static_cast<double>(frames - framesBefore) / interval + 0.5));
             newFps = static_cast<int>(newCount / interval + 0.5);
             windowFps = static_cast<int>(windowCount / interval + 0.5);
             if (intervalCount >= 30)
@@ -335,9 +340,11 @@ namespace
             framesBefore = frames;
             newCount = windowCount = 0;
         }
-        // GOW-Port: the OSD shows the GS FPS (new frames) AND the guest's own frame rate, so a repeating picture is visible, and,
-        // if the system gives them, GPU, CPU and RAM. The 1 % low (lowFps) is computed but hidden.
-        gow_osd::draw(x, y, h, newFps, -1, windowFps, gameFps); // HZ = window refreshes per second
+        // GOW-Port: the OSD shows one frame rate, the real one: the game's own frames per second (entries to its frame
+        // function, which follow the launcher's FPS limit, PC_LOGIC_FPS), plus GPU, CPU and RAM when the system gives them.
+        // The new pictures on screen (newFps), the window refresh (windowFps, the monitor's rate) and the 1 % low stay in
+        // the [gow-osd] log line only.
+        gow_osd::draw(x, y, h, gameFps, -1, -1, -1);
     }
     constexpr uint32_t kGowPad2Read = 0x0027B9F0u;
     PS2Runtime::RecompiledFunction g_gowPad2Read = nullptr;
@@ -556,6 +563,45 @@ int gowWindowFps()
     return fps == 0 ? 0 : static_cast<int>(std::clamp<long>(fps, 30, 360));
 }
 
+// GOW-Port: game logic rate (PC_LOGIC_FPS, experimental and off by default; src/game/gow_logic_rate.cpp). 60 unless
+// the value is one of the supported rates and the 30 FPS cap (PC_GAME_FPS=30) is off. Read by the overrides and by the
+// scheduler's pacing (Kernel/EeScheduler.cpp).
+int gowLogicFps()
+{
+    static const int fps = [] {
+        const long requested = envLong("PC_LOGIC_FPS", 60, 0, 1000);
+        if (requested == 60)
+            return 60;
+        if (requested != 120 && requested != 144 && requested != 165 && requested != 240)
+        {
+            std::fprintf(stderr, "[gow-hfps] PC_LOGIC_FPS=%ld is not supported (120, 144, 165, 240): 60\n", requested);
+            return 60;
+        }
+        if (envLong("PC_GAME_FPS", 60, 30, 60) <= 30)
+        {
+            std::fprintf(stderr, "[gow-hfps] PC_LOGIC_FPS=%ld ignored with PC_GAME_FPS=30: 60\n", requested);
+            return 60;
+        }
+        return static_cast<int>(requested);
+    }();
+    return fps;
+}
+
+// GOW-Port: game buffer swaps (the display setup 0x183360 after it handed the new DISPFB to the presentation; called by
+// src/game/gow_display.cpp). With PC_LOGIC_FPS > 60 the window latches a new picture on each swap, not only on each
+// 60 Hz VBlank (gs_host_present.cpp).
+static std::atomic<uint64_t> g_gowGameFlips{0};
+
+void gowNoteGameFlip()
+{
+    g_gowGameFlips.fetch_add(1, std::memory_order_release);
+}
+
+uint64_t gowGameFlipCount()
+{
+    return g_gowGameFlips.load(std::memory_order_acquire);
+}
+
 // GOW-Port: what the EE is waiting for, printed by the hang watchdog before its sampling burst. Reads: the game's "GS done"
 // flag (0x29C7D0: 1 = waiting for the GS FINISH interrupt, 2 = done), the GS status and interrupt mask, the VBlank counter and
 // the guest threads of the kernel snapshot. A frame wait with the flag at 1 and CSR.FINISH (bit 1) clear means the FINISH was
@@ -682,11 +728,11 @@ void gowFrameInput()
 }
 
 // GOW-Port: gs_host_present.cpp (renderFrame), on top of the game image (destination = image rectangle).
-void gowFrameDraw(float x, float y, float w, float h, uint64_t presentedVsyncTick, bool hasSharedFrame)
+void gowFrameDraw(float x, float y, float w, float h, uint64_t presentedSequence, bool hasSharedFrame)
 {
     gowTargetingDraw(x, y, w, h);
     gowCheatsMenuDraw();
     gowRetroAchievementsDraw();
     if (g_gameFrameFunction)
-        drawFps(x, y, h, presentedVsyncTick, hasSharedFrame);
+        drawFps(x, y, h, presentedSequence, hasSharedFrame);
 }

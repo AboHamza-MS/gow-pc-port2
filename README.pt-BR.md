@@ -180,8 +180,9 @@ O resto - lista completa de cheats, regras da mira travada, combate ágil, cart�
 
 ## Desempenho
 
-A lógica do jogo está presa ao VBlank de 60 Hz do PS2: **o jogo nunca passa de 60 FPS** e nunca desacelera - quadros
-atrasados são descartados. A janela pode apresentar a 60, 120 ou 144 Hz para reduzir a latência.
+O jogo roda a 60 FPS por padrão, a taxa do próprio PS2, sempre na velocidade real: quadros atrasados são descartados,
+nunca desacelerados. Os limites de FPS **experimentais** do launcher (120 e 240) rodam a lógica do jogo nessa taxa, mais
+fluido mas nunca mais rápido; a janela atualiza na taxa do monitor.
 
 - **Resolução interna 2× é o ponto ideal.** 3× ou mais é pesado e, em placas intermediárias, pode travar a apresentação.
 - O lado da CPU é dominado pela **VU1** (unidade vetorial). Cada passe de otimização converte mais dela em código nativo:

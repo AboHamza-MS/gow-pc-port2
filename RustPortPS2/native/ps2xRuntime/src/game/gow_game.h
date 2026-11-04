@@ -10,6 +10,9 @@
 #include <cstddef>
 #include <string>
 
+int gowLogicFps(); // lib/gow_integration.cpp: PC_LOGIC_FPS (60 unless 120, 144, 165 or 240 and no 30 FPS cap)
+void gowNoteGameFlip(); // lib/gow_integration.cpp: the game swapped its display buffer
+
 namespace gow_game
 {
     // ---- pad (gow_pad2.cpp, gow_pad_test.cpp, gow_warp.cpp) -------------------------------------------------------
@@ -66,6 +69,10 @@ namespace gow_game
     void gowDiagBonusMovie(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
     void gowDiagStreamRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
     size_t movieOverrideCount(); // entries of GOW_MOVIE_OVERRIDE
+
+    // ---- game logic rate (gow_logic_rate.cpp) ------------------------------------------------------------------------
+    void gowLogicTimeStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);  // PC_LOGIC_FPS > 60 or GOW_HFPS_DIAG=1
+    void gowLogicFrameWait(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime); // PC_LOGIC_FPS > 60
 
     // ---- diagnostics (gow_diag_*.cpp): each logs what it reads and then runs the original ---------------------------------
     void gowDiagPathSelect(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);

@@ -105,6 +105,7 @@ namespace gow_game
             SET_GPR_U32(ctx, 31, ra);
         }
         ps2_gs_display::setDisplay(runtime->memory(), state);
+        gowNoteGameFlip(); // the new picture can be presented now (PC_LOGIC_FPS > 60)
         SET_GPR_U64(ctx, 2, 0u); // the original returned stack garbage; its only caller (0x1837B8 <- 0x17A128) ignores it
         ctx->pc = GPR_U32(ctx, 31);
     }

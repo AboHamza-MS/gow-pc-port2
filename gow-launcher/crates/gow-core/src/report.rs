@@ -284,6 +284,7 @@ fn environment_plan(request: &ReportRequest<'_>, scrubber: &Scrubber, env: &[(St
         shader_cache: request.paths.shader_cache(),
         pad_devices_file: Some(request.paths.pad_devices_file()),
         retro_achievements_password: None,
+        refresh_hz: crate::display::refresh_rate(),
     };
     let plan =
         launch::build_environment(&ctx, |name| env.iter().find(|(key, _)| key == name).map(|(_, value)| value.clone()));

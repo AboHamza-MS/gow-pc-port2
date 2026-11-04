@@ -402,8 +402,8 @@ namespace gow_osd
             text("GAME", left, baseline, size, pink);
             cell(col1, baseline, size, std::to_string(gameFps), "", nDigits3, 0.0f, white, unit);
         }
-        // GOW-Port: HZ = how often the window itself refreshes. FPS is the game's picture (new frames, 60 at most: it drops when the
-        // picture hitches); HZ is the presentation (it follows the 120 / Unlimited modes and stays high when only the picture stalls).
+        // GOW-Port: HZ = how often the window itself refreshes (optional; gow_integration.cpp no longer passes it). FPS is the
+        // game's picture (new frames, up to the launcher's FPS mode: it drops when the picture hitches).
         if (windowHz >= 0)
         {
             baseline += lineHeight;

@@ -4,7 +4,7 @@
 the right environment. It is a native application (Rust + Tauri + React), not a wrapper around a command line. This
 page describes what every tab does and where the launcher keeps its files.
 
-If you just want to play, set **Graphics → render resolution 2×** and **Performance → FPS mode 60**, then press
+If you just want to play, set **Graphics → render resolution 2×** and **Performance → FPS limit 60**, then press
 **PLAY**.
 
 ## Tabs
@@ -40,7 +40,7 @@ A pack applies the next time the game starts. [`TEXTURES.md`](TEXTURES.md) expla
 | Control | Default | What it does |
 |---|---|---|
 | Graphics card | Automatic | On Windows: Power saving (integrated) or High performance (dedicated); on Linux the launcher sets the PRIME variables. The game always renders on the card that drives the window, so a dedicated GPU is much faster |
-| FPS mode | 60 | 60 is the native game rate. **120 and 144 only speed up the window presentation**: the game logic stays at 60 Hz, so the game never runs faster than on a PS2 |
+| FPS limit | 60 | The game's real frame rate. 60 is the native rate; **120 and 240 are experimental**: the game logic runs at that rate with the game kept at normal speed (smoother, never faster). The window refreshes at the monitor's rate. Settings from older versions go back to 60 once |
 | Vertical sync | Off | Prevents tearing; locks the presentation to the display refresh |
 | FPS counter | Off | Shows game and window frame rates in a corner |
 | Background optimization | On | Recompiles the parts of the game you have reached, in the background, after you close the game |
