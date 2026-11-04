@@ -5,6 +5,7 @@ pub mod calls;
 pub mod captures;
 pub mod checks;
 pub mod perf;
+pub mod rate;
 pub mod sampling;
 pub mod util;
 pub mod validate;
