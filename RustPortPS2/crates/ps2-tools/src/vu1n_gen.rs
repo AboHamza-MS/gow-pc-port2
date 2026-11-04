@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const CODE_SIZE: usize = 16384;
 const BRANCH_OPS: [u32; 10] = [0x20, 0x21, 0x24, 0x25, 0x28, 0x29, 0x2C, 0x2D, 0x2E, 0x2F];
@@ -287,6 +287,13 @@ fn upper_info(u: u32) -> UpperInfo {
     UpperInfo { writes: w.into_iter().filter(|&x| x != 0).collect(), reads: r, writes_mac, reads_q }
 }
 
+/// GOW-Port: what the upper emitter knows about the block's VF operands: the registers holding clean (normalised) results, and
+/// the locals that already hold a normalised register (planning 3.2).
+struct Operands<'a> {
+    clean: &'a BTreeSet<u32>,
+    locals: &'a mut BTreeMap<u32, String>,
+}
+
 fn emit_upper(
     u: u32,
     pc: &str,
@@ -294,8 +301,9 @@ fn emit_upper(
     mac_var: Option<&str>,
     clip_var: &str,
     prev_clip: &str,
-    clean: &BTreeSet<u32>,
+    operands: Operands<'_>,
 ) -> Vec<String> {
+    let Operands { clean, locals: operands } = operands;
     let Class { kind, source, to_acc, bc } = classify(u);
     let dest = (u >> 21) & 0xF;
     let (ft, fs, fd) = ((u >> 16) & 31, (u >> 11) & 31, (u >> 6) & 31);
@@ -323,8 +331,21 @@ fn emit_upper(
         }
         _ => {}
     }
-    let opnd =
-        |r: u32| if r == 0 || clean.contains(&r) { format!("vu1n::ld(s, {r})") } else { format!("vu1n::ldn(s, {r})") };
+    // GOW-Port (planning 3.2): a register normalised once per block: the first read declares a local, later reads use it
+    // until the register is written (the caller drops it then, see `operands`).
+    let mut loads: Vec<String> = Vec::new();
+    let mut opnd = |r: u32| {
+        if r == 0 || clean.contains(&r) {
+            format!("vu1n::ld(s, {r})")
+        } else if let Some(local) = operands.get(&r) {
+            local.clone()
+        } else {
+            let local = format!("v{r}_{idx}");
+            loads.push(format!("const __m128 {local} = vu1n::ldn(s, {r});"));
+            operands.insert(r, local.clone());
+            local
+        }
+    };
     let a = opnd(fs);
     let b = match source {
         Source::Bc => format!("vu1n::bc<{bc}>({})", opnd(ft)),
@@ -343,7 +364,8 @@ fn emit_upper(
         _ => format!("_mm_min_ps({a}, {b})"),
     };
     let target = if to_acc { "s.acc".to_owned() } else { format!("s.vf[{fd}]") };
-    let mut out = vec![format!("__m128 r{idx} = {r};")];
+    let mut out = loads;
+    out.push(format!("__m128 r{idx} = {r};"));
     if matches!(kind, Kind::Add | Kind::Sub | Kind::Mul | Kind::Madd | Kind::Msub) {
         if let Some(mac_var) = mac_var {
             out.push(format!("const uint32_t {mac_var} = vu1n::macVal<{m}>(r{idx});"));
@@ -352,7 +374,10 @@ fn emit_upper(
             ));
         }
     }
-    if !matches!(kind, Kind::Max | Kind::Mini) {
+    // GOW-Port (planning 3.2): no clamp after ADD / SUB / MUL. The blocks run with round toward zero (runNative sets MXCSR),
+    // where an overflow gives +-FLT_MAX, never Inf, and the operands are finite (normalised, clean results, vf00, Q, I), so
+    // NaN cannot appear either: the clamp left every value as it was. MADD / MSUB keep it (their wide path is in double).
+    if matches!(kind, Kind::Madd | Kind::Msub) {
         out.push(format!("r{idx} = vu1n::clampv(r{idx});"));
     }
     if to_acc || fd != 0 {
@@ -788,6 +813,7 @@ fn gen_block(pairs: &[Pair], tail_out: &mut Vec<Tail>) -> Option<Vec<String>> {
 
     let mut lines: Vec<String> = Vec::new();
     let mut clean_regs: BTreeSet<u32> = BTreeSet::new(); // vf registers known to hold normalised values: FMAC results of this block
+    let mut operands: BTreeMap<u32, String> = BTreeMap::new(); // normalised operand locals still valid (GOW-Port, planning 3.2)
     for (i, &(l, u)) in pairs.iter().enumerate() {
         let off = (8 * i) as i64;
         let clean_i: BTreeSet<u32> = clean_regs.difference(&infos[i].vfw).copied().collect();
@@ -865,13 +891,47 @@ fn gen_block(pairs: &[Pair], tail_out: &mut Vec<Tail>) -> Option<Vec<String>> {
                 }
             }
             // The upper still executes in the branch pair.
-            lines.extend(emit_upper(u, &pc_arg(off), i, mac_var.as_deref(), &clip_var, &clip_prev(i), &clean_i));
+            let up = emit_upper(
+                u,
+                &pc_arg(off),
+                i,
+                mac_var.as_deref(),
+                &clip_var,
+                &clip_prev(i),
+                Operands { clean: &clean_i, locals: &mut operands },
+            );
+            // The delay slot that follows must not read a local of a register this upper wrote.
+            if up.iter().any(|line| line.contains("VU1NativeAccess::call")) {
+                operands.clear();
+            } else {
+                for r in uinfo[i].writes.iter() {
+                    operands.remove(r);
+                }
+            }
+            lines.extend(up);
             continue;
         }
 
         // Ordinary pair.
-        let up = emit_upper(u, &pc_arg(off), i, mac_var.as_deref(), &clip_var, &clip_prev(i), &clean_i);
+        let up = emit_upper(
+            u,
+            &pc_arg(off),
+            i,
+            mac_var.as_deref(),
+            &clip_var,
+            &clip_prev(i),
+            Operands { clean: &clean_i, locals: &mut operands },
+        );
         let lo = if i_bit { Vec::new() } else { emit_lower(l, &pc_arg(off), u, &mac_src(i), &clip_src(i), &clip_var) };
+        // A register this pair writes no longer holds the normalised local; a call into the interpreter (an upper or lower the
+        // generator does not emit) may write any register.
+        if up.iter().chain(lo.iter()).any(|line| line.contains("VU1NativeAccess::call")) {
+            operands.clear();
+        } else {
+            for r in infos[i].vfw.iter().chain(uinfo[i].writes.iter()) {
+                operands.remove(r);
+            }
+        }
         if i_bit {
             lines.extend(up);
             lines.push(format!("{{ const uint32_t bits = 0x{l:08x}u; float imm; std::memcpy(&imm, &bits, 4); s.i = vu1n::qnorm(imm); }}"));
@@ -925,6 +985,8 @@ pub struct Options {
     pub inputs: Vec<PathBuf>,
     pub heads: Option<PathBuf>,
     pub parts: usize,
+    /// GOW-Port: the incremental cache (`<output>/.vu1n-cache` by default; `None` with `--no-cache`).
+    pub cache: Option<PathBuf>,
 }
 
 struct BlockEntry {
@@ -934,23 +996,226 @@ struct BlockEntry {
     tail: Option<Tail>,
 }
 
-/// Runs the generator; returns the summary line the Python tool printed.
-pub fn run(options: &Options) -> Result<String, String> {
-    let mut inputs: Vec<PathBuf> = Vec::new();
-    for path in &options.inputs {
+// GOW-Port: incremental generation. A capture folder holds hundreds of thousands of micro-memory images (a player's had
+// 484,087 for 2,026 distinct blocks) and reading them all took ~36 minutes on every build, almost all of it opening files.
+// What an image contributes depends only on its bytes, its name (vu1s_*) and the extra heads, so the cache keeps the
+// images already read (path, size, modification time) and, for every distinct block, where a full run would take it from:
+// the first image in input order that has it, the pc there and its words. A later run reads only the new images and keeps
+// that same "first image wins" rule, so its output is byte for byte the output of a full run (tests/tools.rs checks it).
+// Any cached image missing or changed, other extra heads or another cache format: the cache is dropped and everything is read.
+// The cache holds the game's VU1 code: it stays in the build folder like the generated sources (never shipped or published).
+// Idea from gow-native-pc runtime patch 22 (VU1 analysis cache by image content, generator and heads).
+
+/// Bump when what an image contributes changes (heads_of, extent, scan_heads, the key).
+const CACHE_FORMAT: u32 = 3; // GOW-Port: 2 = no clamp after ADD / SUB / MUL, 3 = operands normalised once per block (planning 3.2)
+
+/// Where an image stands in input order: the index of the input argument, then the path (a folder's files sorted).
+type Order = (u32, String);
+
+#[derive(Clone)]
+struct Found {
+    order: Order,
+    pc: u32,
+    words: Vec<u32>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct Stamp {
+    size: u64,
+    modified: u128,
+}
+
+struct Input {
+    order: Order,
+    path: PathBuf,
+    stamp: Stamp,
+}
+
+fn stamp_of(metadata: &fs::Metadata) -> Stamp {
+    let modified =
+        metadata.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+    Stamp { size: metadata.len(), modified }
+}
+
+fn list_inputs(paths: &[PathBuf]) -> Result<Vec<Input>, String> {
+    let mut inputs = Vec::new();
+    for (index, path) in paths.iter().enumerate() {
+        let arg = index as u32;
         if path.is_dir() {
-            let mut files: Vec<PathBuf> = fs::read_dir(path)
-                .map_err(|e| format!("{}: {e}", path.display()))?
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .filter(|p| p.extension().is_some_and(|ext| ext == "bin"))
-                .collect();
-            files.sort();
+            let mut files: Vec<Input> = Vec::new();
+            for entry in fs::read_dir(path).map_err(|e| format!("{}: {e}", path.display()))?.filter_map(Result::ok) {
+                let file = entry.path();
+                if !file.extension().is_some_and(|ext| ext == "bin") {
+                    continue;
+                }
+                // On Windows the directory listing already carries the size and time: no extra open per file.
+                let metadata = entry.metadata().map_err(|e| format!("{}: {e}", file.display()))?;
+                files.push(Input {
+                    order: (arg, file.to_string_lossy().into_owned()),
+                    path: file,
+                    stamp: stamp_of(&metadata),
+                });
+            }
+            files.sort_by(|a, b| a.path.cmp(&b.path));
             inputs.extend(files);
         } else {
-            inputs.push(path.clone());
+            let metadata = fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+            inputs.push(Input {
+                order: (arg, path.to_string_lossy().into_owned()),
+                path: path.clone(),
+                stamp: stamp_of(&metadata),
+            });
         }
     }
+    // The order of a folder's files is the order of their paths, as the PathBuf sort above; keep the strings in that order.
+    Ok(inputs)
+}
+
+/// The blocks one image contributes: each distinct key once, at the lowest head pc that produces it.
+fn image_blocks(path: &Path, extra: &BTreeSet<u32>) -> Result<Vec<(u64, u32, Vec<u32>)>, String> {
+    let code = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if code.len() != CODE_SIZE {
+        return Ok(Vec::new());
+    }
+    let mut heads = heads_of(&code, extra);
+    if path.file_name().is_some_and(|name| name.to_string_lossy().starts_with("vu1s_")) {
+        // vu1s_*.bin holds code the ELF declares but no capture ever saw uploaded: nothing says where the game will
+        // enter it, so every pair that is not empty is a possible block head.
+        heads.extend(scan_heads(&code));
+    }
+    let mut seen: BTreeSet<u64> = BTreeSet::new();
+    let mut out = Vec::new();
+    for &pc in &heads {
+        let pairs = extent(&code, pc as usize);
+        if pairs.is_empty() {
+            continue;
+        }
+        let words: Vec<u32> = pairs.iter().flat_map(|&(l, u)| [l, u]).collect();
+        let key = fnv_block(&words);
+        if seen.insert(key) {
+            out.push((key, pc, words));
+        }
+    }
+    Ok(out)
+}
+
+/// Keeps, for every key, the block of the earliest image in input order (what a full sequential run keeps).
+fn merge_found(into: &mut BTreeMap<u64, Found>, key: u64, found: Found) {
+    match into.get(&key) {
+        Some(existing) if existing.order <= found.order => {}
+        _ => {
+            into.insert(key, found);
+        }
+    }
+}
+
+/// Reads `inputs` on several threads: opening files, not decoding, is what takes the time.
+fn scan_images(inputs: &[&Input], extra: &BTreeSet<u32>) -> Result<BTreeMap<u64, Found>, String> {
+    if inputs.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16).min(inputs.len());
+    let chunk = inputs.len().div_ceil(threads);
+    let results: Vec<Result<BTreeMap<u64, Found>, String>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = inputs
+            .chunks(chunk)
+            .map(|part| {
+                scope.spawn(move || {
+                    let mut local: BTreeMap<u64, Found> = BTreeMap::new();
+                    for input in part {
+                        for (key, pc, words) in image_blocks(&input.path, extra)? {
+                            merge_found(&mut local, key, Found { order: input.order.clone(), pc, words });
+                        }
+                    }
+                    Ok(local)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|_| Err("vu1n-gen: a reader thread panicked".to_owned())))
+            .collect()
+    });
+    let mut merged: BTreeMap<u64, Found> = BTreeMap::new();
+    for result in results {
+        for (key, found) in result? {
+            merge_found(&mut merged, key, found);
+        }
+    }
+    Ok(merged)
+}
+
+fn heads_digest(extra: &BTreeSet<u32>) -> u64 {
+    let words: Vec<u32> = extra.iter().copied().collect();
+    fnv_block(&words)
+}
+
+struct Cache {
+    files: std::collections::HashMap<String, Stamp>,
+    blocks: BTreeMap<u64, Found>,
+}
+
+fn cache_header(digest: u64) -> String {
+    format!("vu1n-cache {CACHE_FORMAT} {} {digest:016x}", env!("CARGO_PKG_VERSION"))
+}
+
+fn read_cache(path: &Path, digest: u64) -> Option<Cache> {
+    let text = fs::read_to_string(path).ok()?;
+    let mut lines = text.lines();
+    if lines.next()? != cache_header(digest) {
+        return None;
+    }
+    let mut cache = Cache { files: std::collections::HashMap::new(), blocks: BTreeMap::new() };
+    for line in lines {
+        let mut fields = line.split('\t');
+        match fields.next()? {
+            "F" => {
+                let size = fields.next()?.parse().ok()?;
+                let modified = fields.next()?.parse().ok()?;
+                let name = fields.next()?.to_owned();
+                cache.files.insert(name, Stamp { size, modified });
+            }
+            "B" => {
+                let key = u64::from_str_radix(fields.next()?, 16).ok()?;
+                let arg = fields.next()?.parse().ok()?;
+                let pc = u32::from_str_radix(fields.next()?, 16).ok()?;
+                let words =
+                    fields.next()?.split(' ').map(|w| u32::from_str_radix(w, 16).ok()).collect::<Option<Vec<u32>>>()?;
+                let name = fields.next()?.to_owned();
+                cache.blocks.insert(key, Found { order: (arg, name), pc, words });
+            }
+            _ => return None,
+        }
+    }
+    Some(cache)
+}
+
+fn write_cache(path: &Path, digest: u64, inputs: &[Input], blocks: &BTreeMap<u64, Found>) -> Result<(), String> {
+    let mut text = String::with_capacity(inputs.len() * 80 + blocks.len() * 200);
+    text.push_str(&cache_header(digest));
+    text.push('\n');
+    for input in inputs {
+        text.push_str(&format!("F\t{}\t{}\t{}\n", input.stamp.size, input.stamp.modified, input.order.1));
+    }
+    for (key, found) in blocks {
+        let words: Vec<String> = found.words.iter().map(|w| format!("{w:08x}")).collect();
+        text.push_str(&format!(
+            "B\t{key:016x}\t{}\t{:x}\t{}\t{}\n",
+            found.order.0,
+            found.pc,
+            words.join(" "),
+            found.order.1
+        ));
+    }
+    // Written beside it and renamed: an interrupted build never leaves half a cache behind.
+    let temporary = path.with_extension("tmp");
+    fs::write(&temporary, text).map_err(|e| format!("{}: {e}", temporary.display()))?;
+    fs::rename(&temporary, path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Runs the generator; returns the summary line the Python tool printed.
+pub fn run(options: &Options) -> Result<String, String> {
+    let inputs = list_inputs(&options.inputs)?;
 
     let mut extra: BTreeSet<u32> = BTreeSet::new();
     if let Some(heads) = options.heads.as_ref().filter(|p| p.exists()) {
@@ -962,36 +1227,34 @@ pub fn run(options: &Options) -> Result<String, String> {
         }
     }
 
+    let digest = heads_digest(&extra);
+    // The cache is valid only if every image it read is still there, unchanged, at the same place in the input order.
+    let cached = options.cache.as_deref().and_then(|path| read_cache(path, digest)).filter(|cache| {
+        let current: std::collections::HashMap<&str, &Stamp> =
+            inputs.iter().map(|i| (i.order.1.as_str(), &i.stamp)).collect();
+        cache.files.iter().all(|(name, stamp)| current.get(name.as_str()).is_some_and(|s| *s == stamp))
+            && cache.blocks.values().all(|f| inputs.iter().any(|i| i.order == f.order))
+    });
+    let (mut found, fresh): (BTreeMap<u64, Found>, Vec<&Input>) = match &cached {
+        Some(cache) => {
+            (cache.blocks.clone(), inputs.iter().filter(|i| !cache.files.contains_key(&i.order.1)).collect())
+        }
+        None => (BTreeMap::new(), inputs.iter().collect()),
+    };
+    for (key, block) in scan_images(&fresh, &extra)? {
+        merge_found(&mut found, key, block);
+    }
+
     let mut blocks: BTreeMap<u64, BlockEntry> = BTreeMap::new();
     let mut unsupported = 0usize;
-    for file in &inputs {
-        let code = fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
-        if code.len() != CODE_SIZE {
-            continue;
+    for (key, block) in &found {
+        let pairs: Vec<Pair> = block.words.chunks(2).map(|w| (w[0], w[1])).collect();
+        let mut tail = Vec::new();
+        let body = gen_block(&pairs, &mut tail);
+        if body.is_none() {
+            unsupported += 1;
         }
-        let mut heads = heads_of(&code, &extra);
-        if file.file_name().is_some_and(|name| name.to_string_lossy().starts_with("vu1s_")) {
-            // vu1s_*.bin holds code the ELF declares but no capture ever saw uploaded: nothing says where the game will
-            // enter it, so every pair that is not empty is a possible block head.
-            heads.extend(scan_heads(&code));
-        }
-        for &pc in &heads {
-            let pairs = extent(&code, pc as usize);
-            if pairs.is_empty() {
-                continue;
-            }
-            let words: Vec<u32> = pairs.iter().flat_map(|&(l, u)| [l, u]).collect();
-            let key = fnv_block(&words);
-            if blocks.contains_key(&key) {
-                continue;
-            }
-            let mut tail = Vec::new();
-            let body = gen_block(&pairs, &mut tail);
-            if body.is_none() {
-                unsupported += 1;
-            }
-            blocks.insert(key, BlockEntry { pc, pairs: pairs.len(), body, tail: tail.into_iter().next() });
-        }
+        blocks.insert(*key, BlockEntry { pc: block.pc, pairs: pairs.len(), body, tail: tail.into_iter().next() });
     }
 
     fs::create_dir_all(&options.output).map_err(|e| format!("{}: {e}", options.output.display()))?;
@@ -1058,8 +1321,13 @@ pub fn run(options: &Options) -> Result<String, String> {
         let path = options.output.join(format!("vu1n_part{k}.cpp"));
         crate::write_if_changed(&path, &body).map_err(|e| format!("{}: {e}", path.display()))?;
     }
+    if let Some(path) = &options.cache {
+        write_cache(path, digest, &inputs, &found)?;
+    }
+    let read =
+        if cached.is_some() { format!(" ({} read, the rest from the cache)", fresh.len()) } else { String::new() };
     Ok(format!(
-        "[vu1n_gen] {} images, {} distinct blocks, {count} generated, {unsupported} unsupported",
+        "[vu1n_gen] {} images{read}, {} distinct blocks, {count} generated, {unsupported} unsupported",
         inputs.len(),
         blocks.len()
     ))

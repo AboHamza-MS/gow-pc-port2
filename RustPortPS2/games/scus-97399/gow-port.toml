@@ -1698,3 +1698,12 @@ critical = [
   "sub_002A5B20", # Uses SIMD instructions
 ]
 
+
+# GOW-Port (decision D2): code generation. "compat" keeps PS2Recomp's output byte for byte (the parity gate runs on it);
+# "gow" turns on the switches that are ready for God of War: movz_low64 (MOVZ / MOVN move only the low 64 bits, like the
+# R5900) and cop0_count_clock (COP0 Count ticks with the EE clock; GOW_EE_COUNT_FROZEN=1 freezes it again at run time).
+# A switch written here wins over the mode.
+[codegen]
+mode = "gow"
+# register_locals = true: guest GPRs in C++ locals (ps2xRuntime/include/ps2_cg.h). Measured 4-6 % slower on the EE with
+# clang (the reloads after every call cost more than the locals save), so it stays off.

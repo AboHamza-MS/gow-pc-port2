@@ -158,12 +158,15 @@ pub fn translate(hooks: &mut impl FamilyTranslator, inst: &Instruction) -> Strin
             "SET_GPR_U64(ctx, {}, ((uint64_t)GPR_U64(ctx, {}) < (uint64_t)GPR_U64(ctx, {})) ? 1 : 0);",
             inst.rd, inst.rs, inst.rt
         ),
-        // The C++ uses the vector setter here; kept for byte parity.
-        SPECIAL_MOVZ => {
-            format!("if (GPR_U64(ctx, {}) == 0) SET_GPR_VEC(ctx, {}, GPR_VEC(ctx, {}));", inst.rt, inst.rd, inst.rs)
-        }
-        SPECIAL_MOVN => {
-            format!("if (GPR_U64(ctx, {}) != 0) SET_GPR_VEC(ctx, {}, GPR_VEC(ctx, {}));", inst.rt, inst.rd, inst.rs)
+        // The C++ uses the vector setter here; kept for byte parity. GOW-Port: `[codegen] movz_low64` moves only the low
+        // 64 bits, like the R5900 (the upper half of rd stays).
+        SPECIAL_MOVZ | SPECIAL_MOVN => {
+            let test = if inst.function == SPECIAL_MOVZ { "==" } else { "!=" };
+            if hooks.codegen().movz_low64 {
+                format!("if (GPR_U64(ctx, {}) {test} 0) SET_GPR_U64(ctx, {}, GPR_U64(ctx, {}));", inst.rt, inst.rd, inst.rs)
+            } else {
+                format!("if (GPR_U64(ctx, {}) {test} 0) SET_GPR_VEC(ctx, {}, GPR_VEC(ctx, {}));", inst.rt, inst.rd, inst.rs)
+            }
         }
         SPECIAL_MFSA => format!("SET_GPR_U32(ctx, {}, ctx->sa);", inst.rd),
         SPECIAL_MTSA => format!("ctx->sa = GPR_U32(ctx, {}) & 0x7F;", inst.rs),

@@ -163,3 +163,54 @@ fn rejects_broken_input() {
     ));
     assert!(matches!(RecompilerConfig::from_toml_str("[general\n", "bad toml"), Err(ConfigError::Parse { .. })));
 }
+
+// GOW-Port (decision D2): the `[codegen]` section.
+#[test]
+fn the_codegen_section_picks_the_mode_and_single_switches() {
+    let base = "[general]
+input = \"a.elf\"
+output = \"out/\"
+";
+    let (compat, _) = RecompilerConfig::from_toml_str(base, "test").unwrap();
+    assert!(compat.codegen.is_compat(), "no section: PS2Recomp's output");
+    assert!(!compat.to_toml_string().unwrap().contains("codegen"), "a compat configuration saves as before");
+
+    let (gow, report) = RecompilerConfig::from_toml_str(
+        &format!(
+            "{base}[codegen]
+mode = \"gow\"
+"
+        ),
+        "test",
+    )
+    .unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert_eq!(gow.codegen, ps2_config::Codegen::gow());
+    let saved = gow.to_toml_string().unwrap();
+    let (again, _) = RecompilerConfig::from_toml_str(&saved, "test").unwrap();
+    assert_eq!(again.codegen, gow.codegen, "the section survives a save: {saved}");
+
+    let (off, _) = RecompilerConfig::from_toml_str(
+        &format!(
+            "{base}[codegen]
+mode = \"gow\"
+movz_low64 = false
+"
+        ),
+        "test",
+    )
+    .unwrap();
+    assert!(!off.codegen.movz_low64, "a switch written in the section wins over the mode");
+
+    let (bad, report) = RecompilerConfig::from_toml_str(
+        &format!(
+            "{base}[codegen]
+mode = \"fast\"
+"
+        ),
+        "test",
+    )
+    .unwrap();
+    assert!(bad.codegen.is_compat());
+    assert!(report.warnings.iter().any(|w| w.contains("codegen.mode")), "{:?}", report.warnings);
+}

@@ -15,6 +15,7 @@
 
 use std::fmt;
 
+pub mod code_identity;
 pub mod funcmap;
 pub mod functions;
 pub mod number;

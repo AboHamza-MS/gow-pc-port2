@@ -13,4 +13,5 @@ name = "ps2-tools"
 path = "src/main.rs"
 
 [dependencies]
+ps2-elf.workspace = true
 ps2-parity.workspace = true

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use ps2_tools::{elfcheck, iso, vu1};
+use ps2_tools::{elfcheck, iso, memcard, vu1, xdelta};
 
 const USAGE: &str = "usage:
   ps2-tools verify-elf ELF [--map funcmap.csv] [--allow-modified]
@@ -14,7 +14,10 @@ const USAGE: &str = "usage:
   ps2-tools vu1-programs apply ELF MANIFEST OUTDIR
   ps2-tools vu1-programs report ELF MANIFEST
   ps2-tools iop-gen DUMPDIR OUTDIR [--overrides FILE]
-  ps2-tools vu1n-gen OUTDIR INPUT... [--heads heads.txt] [--parts N]";
+  ps2-tools vu1n-gen OUTDIR INPUT... [--heads heads.txt] [--parts N] [--cache FILE | --no-cache]
+  ps2-tools xdelta-apply PATCH BASE_ISO OUTPUT_ISO
+  ps2-tools mc-format CARD.ps2
+  ps2-tools mc-check CARD.ps2";
 
 fn flag(args: &[String], name: &str) -> bool {
     args.iter().any(|arg| arg == name)
@@ -57,6 +60,11 @@ fn verify_elf(args: &[String]) -> i32 {
         }
     };
     println!("{}", report.to_json());
+    // GOW-Port (decision D4): a translation with the USA code installs like the original; it is named, not refused.
+    if !report.known_edition() && report.same_code() {
+        println!("[gow-elf] Translated or re-released disc: the code is the USA one (same .text), so it is supported.");
+        return 0;
+    }
     if !report.known_edition() {
         let warning = "[gow-elf] Modified ELF: the map fits, but its compatibility is NOT verified.";
         if !flag(args, "--allow-modified") {
@@ -90,13 +98,59 @@ fn iso_extract(args: &[String]) -> i32 {
     }
 }
 
+/// GOW-Port (T5.4): progress every 256 MiB, then the result; the output appears only when every window checked out.
+fn xdelta_apply(patch: &str, base: &str, output: &str) -> i32 {
+    let mut next_report = 256u64 << 20;
+    let progress = |bytes: u64| {
+        if bytes >= next_report {
+            println!("[xdelta] {} MiB", bytes >> 20);
+            next_report = bytes + (256 << 20);
+        }
+    };
+    match xdelta::apply(&PathBuf::from(patch), &PathBuf::from(base), &PathBuf::from(output), progress) {
+        Ok(summary) => {
+            println!("[xdelta] done: {} windows, {} bytes written to {output}", summary.windows, summary.bytes);
+            0
+        }
+        Err(error) => {
+            eprintln!("[xdelta] {error}");
+            1
+        }
+    }
+}
+
 fn run(args: &[String]) -> Result<i32, String> {
     let Some((command, rest)) = args.split_first() else {
         return Err(USAGE.to_owned());
     };
+    // GOW-Port: `--help` anywhere prints the usage; it used to be taken as an output folder (vu1n-gen created "--help/").
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("{USAGE}");
+        return Ok(0);
+    }
     match (command.as_str(), rest) {
         ("verify-elf", rest) => Ok(verify_elf(rest)),
         ("iso-extract", rest) => Ok(iso_extract(rest)),
+        ("xdelta-apply", [patch, base, output]) => Ok(xdelta_apply(patch, base, output)),
+        ("mc-format", [card]) => {
+            memcard::format_file(&PathBuf::from(card))?;
+            println!("[mc-format] formatted 8 MB card written to {card}");
+            Ok(0)
+        }
+        ("mc-check", [card]) => {
+            let bytes = std::fs::read(card).map_err(|error| format!("{card}: {error}"))?;
+            match memcard::check(&bytes) {
+                Ok(report) => {
+                    let state = if report.formatted { "formatted" } else { "blank (the game can format it)" };
+                    println!("[mc-check] {card}: {state}, {} page(s) with a bad ECC", report.ecc_errors.len());
+                    Ok(if report.ecc_errors.is_empty() { 0 } else { 1 })
+                }
+                Err(error) => {
+                    eprintln!("[mc-check] {card}: {error}");
+                    Ok(1)
+                }
+            }
+        }
         ("iop-gen", [dump, output, rest @ ..]) => {
             let overrides = match option(rest, "--overrides") {
                 Some(path) => std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?,
@@ -108,11 +162,21 @@ fn run(args: &[String]) -> Result<i32, String> {
         ("vu1n-gen", [output, rest @ ..]) => {
             let mut inputs = Vec::new();
             let (mut heads, mut parts) = (None, 6usize);
+            // GOW-Port: incremental cache in the output folder unless --no-cache (or --cache <file> elsewhere).
+            let mut cache = Some(PathBuf::from(output).join(".vu1n-cache"));
             let mut index = 0;
             while index < rest.len() {
                 match rest[index].as_str() {
                     "--heads" => {
                         heads = Some(PathBuf::from(rest.get(index + 1).ok_or(USAGE)?));
+                        index += 2;
+                    }
+                    "--no-cache" => {
+                        cache = None;
+                        index += 1;
+                    }
+                    "--cache" => {
+                        cache = Some(PathBuf::from(rest.get(index + 1).ok_or(USAGE)?));
                         index += 2;
                     }
                     "--parts" => {
@@ -125,7 +189,7 @@ fn run(args: &[String]) -> Result<i32, String> {
                     }
                 }
             }
-            let options = ps2_tools::vu1n_gen::Options { output: PathBuf::from(output), inputs, heads, parts };
+            let options = ps2_tools::vu1n_gen::Options { output: PathBuf::from(output), inputs, heads, parts, cache };
             println!("{}", ps2_tools::vu1n_gen::run(&options)?);
             Ok(0)
         }

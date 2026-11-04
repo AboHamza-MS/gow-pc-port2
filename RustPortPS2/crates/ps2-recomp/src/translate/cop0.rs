@@ -26,6 +26,10 @@ pub fn translate(hooks: &mut impl FamilyTranslator, inst: &Instruction) -> Strin
             COP0_REG_PAGEMASK => format!("SET_GPR_S32(ctx, {rt}, (int32_t)ctx->cop0_pagemask);"),
             COP0_REG_WIRED => format!("SET_GPR_S32(ctx, {rt}, (int32_t)ctx->cop0_wired);"),
             COP0_REG_BADVADDR => format!("SET_GPR_S32(ctx, {rt}, (int32_t)ctx->cop0_badvaddr);"),
+            // GOW-Port: `[codegen] cop0_count_clock`: Count ticks with the EE cycle counter (PS2Runtime::eeCountRegister).
+            COP0_REG_COUNT if hooks.codegen().cop0_count_clock => {
+                format!("SET_GPR_S32(ctx, {rt}, (int32_t)runtime->eeCountRegister(ctx));")
+            }
             COP0_REG_COUNT => format!("SET_GPR_S32(ctx, {rt}, (int32_t)ctx->cop0_count);"),
             COP0_REG_ENTRYHI => format!("SET_GPR_S32(ctx, {rt}, (int32_t)ctx->cop0_entryhi);"),
             COP0_REG_COMPARE => format!("SET_GPR_S32(ctx, {rt}, (int32_t)ctx->cop0_compare);"),
@@ -53,6 +57,9 @@ pub fn translate(hooks: &mut impl FamilyTranslator, inst: &Instruction) -> Strin
             COP0_REG_PAGEMASK => format!("ctx->cop0_pagemask = GPR_U32(ctx, {rt}) & 0x01FFE000;"),
             COP0_REG_WIRED => format!("ctx->cop0_wired = GPR_U32(ctx, {rt}) & 0x3F; ctx->cop0_random = 47;"),
             COP0_REG_BADVADDR => "// MTC0 to BADVADDR register ignored (read-only)".to_owned(),
+            COP0_REG_COUNT if hooks.codegen().cop0_count_clock => {
+                format!("runtime->setEeCountRegister(ctx, GPR_U32(ctx, {rt}));")
+            }
             COP0_REG_COUNT => format!("ctx->cop0_count = GPR_U32(ctx, {rt});"),
             COP0_REG_ENTRYHI => format!("ctx->cop0_entryhi = GPR_U32(ctx, {rt}) & 0xC00000FF;"),
             COP0_REG_COMPARE => format!("ctx->cop0_compare = GPR_U32(ctx, {rt}); ctx->cop0_cause &= ~0x8000;"),

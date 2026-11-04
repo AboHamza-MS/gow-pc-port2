@@ -17,11 +17,19 @@ pub struct Report {
     pub pcsx2_crc: u32,
     pub entry: u32,
     pub mapped_functions: usize,
+    /// GOW-Port (decision D4): SHA-1 of `.text`, `None` when the ELF has no readable `.text`.
+    pub text_sha1: Option<String>,
 }
 
 impl Report {
     pub fn known_edition(&self) -> bool {
         self.pcsx2_crc == EXPECTED_CRC
+    }
+
+    /// GOW-Port (decision D4): the USA code, from the original disc or from a translation that kept `.text` byte for
+    /// byte; it recompiles to the same C++, so the installation can go on.
+    pub fn same_code(&self) -> bool {
+        self.known_edition() || self.text_sha1.as_deref() == Some(ps2_elf::code_identity::USA_TEXT_SHA1)
     }
 
     /// The JSON the Python tool printed (same keys, same order, two-space indent).
@@ -33,6 +41,14 @@ impl Report {
         let _ = writeln!(out, "  \"known_edition\": {},", self.known_edition());
         let _ = writeln!(out, "  \"entry\": \"{:08X}\",", self.entry);
         let _ = writeln!(out, "  \"mapped_functions\": {},", self.mapped_functions);
+        // GOW-Port: after the Python tool's keys
+        match &self.text_sha1 {
+            Some(hash) => {
+                let _ = writeln!(out, "  \"text_sha1\": \"{hash}\",");
+            }
+            None => out.push_str("  \"text_sha1\": null,\n"),
+        }
+        let _ = writeln!(out, "  \"same_code\": {},", self.same_code());
         out.push_str("  \"layout_valid\": true,\n");
         out.push_str("  \"compatibility_verified\": false\n}");
         out
@@ -134,5 +150,11 @@ pub fn inspect_bytes(data: &[u8], functions: &[(String, u32, u32)]) -> Result<Re
     let crc = data[..data.len() / 4 * 4]
         .chunks_exact(4)
         .fold(0u32, |crc, word| crc ^ u32::from_le_bytes([word[0], word[1], word[2], word[3]]));
-    Ok(Report { sha256: sha256_hex(data), pcsx2_crc: crc, entry, mapped_functions: functions.len() })
+    Ok(Report {
+        sha256: sha256_hex(data),
+        pcsx2_crc: crc,
+        entry,
+        mapped_functions: functions.len(),
+        text_sha1: ps2_elf::code_identity::text_sha1(data),
+    })
 }

@@ -79,3 +79,46 @@ fn interrupt_enable_and_disable_keep_the_comment() {
 fn an_unknown_format_is_reported() {
     assert_eq!(cop0(0x3, 0, 0, 0), "<unhandled: Unhandled COP0 instruction format: 0x3>");
 }
+
+/// GOW-Port (decision D2): the same templates with the God of War switches on.
+struct GowHooks;
+
+impl FamilyTranslator for GowHooks {
+    fn codegen(&self) -> ps2_config::Codegen {
+        ps2_config::Codegen::gow()
+    }
+    fn translate_special(&mut self, _: &Instruction) -> String {
+        String::new()
+    }
+    fn translate_regimm(&mut self, _: &Instruction) -> String {
+        String::new()
+    }
+    fn translate_cop0(&mut self, inst: &Instruction) -> String {
+        translate(self, inst)
+    }
+    fn translate_fpu(&mut self, _: &Instruction) -> String {
+        String::new()
+    }
+    fn translate_vu(&mut self, _: &Instruction) -> String {
+        String::new()
+    }
+    fn translate_mmi(&mut self, _: &Instruction) -> String {
+        String::new()
+    }
+    fn emit_unhandled(&mut self, _: &Instruction, reason: &str) -> String {
+        format!("<unhandled: {reason}>")
+    }
+}
+
+#[test]
+fn count_ticks_with_the_ee_clock_in_gow_mode() {
+    let gow = |format: u32| {
+        let raw = (OPCODE_COP0 << 26) | (format << 21) | (2 << 16) | (COP0_REG_COUNT << 11);
+        translate_generic(&mut GowHooks, &ps2_r5900::decode(0x0010_0000, raw, false), MemoryAccessHint::default())
+    };
+    assert_eq!(gow(COP0_MF), "SET_GPR_S32(ctx, 2, (int32_t)runtime->eeCountRegister(ctx));");
+    assert_eq!(gow(COP0_MT), "runtime->setEeCountRegister(ctx, GPR_U32(ctx, 2));");
+    // compat keeps the frozen field, as PS2Recomp
+    assert_eq!(cop0(COP0_MF, 2, COP0_REG_COUNT, 0), "SET_GPR_S32(ctx, 2, (int32_t)ctx->cop0_count);");
+    assert_eq!(cop0(COP0_MT, 2, COP0_REG_COUNT, 0), "ctx->cop0_count = GPR_U32(ctx, 2);");
+}

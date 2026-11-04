@@ -17,6 +17,10 @@ use crate::translate::memory::{translate_memory_read, translate_memory_write, Me
 
 /// The `CodeGenerator` calls the C++ translator makes for a family.
 pub trait FamilyTranslator {
+    /// GOW-Port (decision D2): the `[codegen]` switches; the default is PS2Recomp's output.
+    fn codegen(&self) -> ps2_config::Codegen {
+        ps2_config::Codegen::default()
+    }
     fn translate_special(&mut self, inst: &Instruction) -> String;
     fn translate_regimm(&mut self, inst: &Instruction) -> String;
     fn translate_cop0(&mut self, inst: &Instruction) -> String;

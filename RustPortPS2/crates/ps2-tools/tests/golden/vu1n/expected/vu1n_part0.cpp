@@ -11,10 +11,11 @@ static uint32_t b00e8_b1bbfe3f(VU1NativeCtx &n)
 {
     VU1State &s = *n.s;
     // pair 0 +0x0000 lower=017f2e07 upper=070ec61b
-    __m128 r0 = _mm_mul_ps(vu1n::ldn(s, 24), vu1n::bc<3>(vu1n::ldn(s, 14)));
+    const __m128 v24_0 = vu1n::ldn(s, 24);
+    const __m128 v14_0 = vu1n::ldn(s, 14);
+    __m128 r0 = _mm_mul_ps(v24_0, vu1n::bc<3>(v14_0));
     const uint32_t m0 = vu1n::macVal<1>(r0);
     const __m128 q0 = r0;  // unclamped: flags computed later if it outlives the block
-    r0 = vu1n::clampv(r0);
     vu1n::stf<1>(s.vf[24], r0);
     { uint32_t a = vu1n::qaddr(n, s.vi[5] + -505); vu1n::stf<13>(s.vf[31], vu1n::ldq(n, a)); }
     // pair 1 +0x0008 lower=500007fe upper=000002ff
@@ -43,46 +44,53 @@ static uint32_t b0000_9d67ccc7(VU1NativeCtx &n)
     VU1NativeAccess::callUpper(n, (n.pc + 8u), 0x07e53877u);
     vu1n::rsqrtOp(s, 27, 0, 14, 0);
     // pair 2 +0x0010 lower=01cd42d4 upper=21e7688d
-    __m128 r2 = vu1n::madd<true>(vu1n::ldAcc(s), vu1n::ldn(s, 13), vu1n::bc<1>(vu1n::ldn(s, 7)));
+    const __m128 v13_2 = vu1n::ldn(s, 13);
+    const __m128 v7_2 = vu1n::ldn(s, 7);
+    __m128 r2 = vu1n::madd<true>(vu1n::ldAcc(s), v13_2, vu1n::bc<1>(v7_2));
     const uint32_t m2 = vu1n::macVal<15>(r2);
     const __m128 q2 = r2;  // unclamped: flags computed later if it outlives the block
     r2 = vu1n::clampv(r2);
     vu1n::stf<15>(s.vf[2], r2);
     { uint32_t a = vu1n::qaddr(n, s.vi[8] + 724); vu1n::stf<7>(s.vf[13], vu1n::ldq(n, a)); }
     // pair 3 +0x0018 lower=12f029d1 upper=07f27100
-    __m128 r3 = _mm_add_ps(vu1n::ldn(s, 14), vu1n::bc<0>(vu1n::ldn(s, 18)));
+    const __m128 v14_3 = vu1n::ldn(s, 14);
+    const __m128 v18_3 = vu1n::ldn(s, 18);
+    __m128 r3 = _mm_add_ps(v14_3, vu1n::bc<0>(v18_3));
     const uint32_t m3 = vu1n::macVal<15>(r3);
     const __m128 q3 = r3;  // unclamped: flags computed later if it outlives the block
-    r3 = vu1n::clampv(r3);
     vu1n::stf<15>(s.vf[4], r3);
     s.vi[16] = vu1n::sx16(s.vi[5] - 14801);
     // pair 4 +0x0020 lower=811667f0 upper=03edcf45
-    __m128 r4 = _mm_sub_ps(vu1n::ldn(s, 25), vu1n::bc<1>(vu1n::ldn(s, 13)));
+    const __m128 v25_4 = vu1n::ldn(s, 25);
+    const __m128 v13_4 = vu1n::ldn(s, 13);
+    __m128 r4 = _mm_sub_ps(v25_4, vu1n::bc<1>(v13_4));
     const uint32_t m4 = vu1n::macVal<15>(r4);
     const __m128 q4 = r4;  // unclamped: flags computed later if it outlives the block
-    r4 = vu1n::clampv(r4);
     vu1n::stf<15>(s.vf[29], r4);
     s.vi[31] = vu1n::sx16(s.vi[12] + s.vi[22]);
     // pair 5 +0x0028 lower=01765db6 upper=271b9aa2
-    __m128 r5 = _mm_add_ps(vu1n::ldn(s, 19), _mm_set1_ps(s.i));
+    const __m128 v19_5 = vu1n::ldn(s, 19);
+    __m128 r5 = _mm_add_ps(v19_5, _mm_set1_ps(s.i));
     const uint32_t m5 = vu1n::macVal<1>(r5);
     const __m128 q5 = r5;  // unclamped: flags computed later if it outlives the block
-    r5 = vu1n::clampv(r5);
     vu1n::stf<1>(s.vf[10], r5);
     { uint32_t a = vu1n::qaddr(n, s.vi[11] + -586); vu1n::stf<13>(s.vf[22], vu1n::ldq(n, a)); }
     // pair 6 +0x0030 lower=105d3905 upper=23159c21
-    __m128 r6 = vu1n::madd<false>(vu1n::ldAcc(s), vu1n::ldn(s, 19), _mm_set1_ps(s.q));
+    __m128 r6 = vu1n::madd<false>(vu1n::ldAcc(s), v19_5, _mm_set1_ps(s.q));
     const uint32_t m6 = vu1n::macVal<1>(r6);
     const __m128 q6 = r6;  // unclamped: flags computed later if it outlives the block
     r6 = vu1n::clampv(r6);
     vu1n::stf<1>(s.vf[16], r6);
     s.vi[29] = vu1n::sx16(s.vi[7] + 4357);
     // pair 7 +0x0038 lower=09861b16 upper=05f1d357
-    __m128 r7 = _mm_min_ps(vu1n::ldn(s, 26), vu1n::bc<3>(vu1n::ldn(s, 17)));
+    const __m128 v26_7 = vu1n::ldn(s, 26);
+    const __m128 v17_7 = vu1n::ldn(s, 17);
+    __m128 r7 = _mm_min_ps(v26_7, vu1n::bc<3>(v17_7));
     vu1n::stf<15>(s.vf[13], r7);
     s.vi[6] = vu1n::ldWord(n, vu1n::qaddr(n, s.vi[3] + 790), 0);
     // pair 8 +0x0040 lower=093c60d2 upper=07115e4b
-    __m128 r8 = vu1n::madd<false>(vu1n::ldAcc(s), vu1n::ldn(s, 11), vu1n::bc<3>(vu1n::ldn(s, 17)));
+    const __m128 v11_8 = vu1n::ldn(s, 11);
+    __m128 r8 = vu1n::madd<false>(vu1n::ldAcc(s), v11_8, vu1n::bc<3>(v17_7));
     const uint32_t m8 = vu1n::macVal<1>(r8);
     const __m128 q8 = r8;  // unclamped: flags computed later if it outlives the block
     r8 = vu1n::clampv(r8);
@@ -92,52 +100,61 @@ static uint32_t b0000_9d67ccc7(VU1NativeCtx &n)
     VU1NativeAccess::callUpper(n, (n.pc + 72u), 0x01f45130u);
     s.vi[3] = vu1n::ldWord(n, vu1n::qaddr(n, s.vi[22] + -750), 2);
     // pair 10 +0x0050 lower=0b8c1479 upper=27e9c619
-    __m128 r10 = _mm_mul_ps(vu1n::ldn(s, 24), vu1n::bc<1>(vu1n::ldn(s, 9)));
+    const __m128 v24_10 = vu1n::ldn(s, 24);
+    const __m128 v9_10 = vu1n::ldn(s, 9);
+    __m128 r10 = _mm_mul_ps(v24_10, vu1n::bc<1>(v9_10));
     const uint32_t m10 = vu1n::macVal<15>(r10);
     const __m128 q10 = r10;  // unclamped: flags computed later if it outlives the block
-    r10 = vu1n::clampv(r10);
     vu1n::stf<15>(s.vf[24], r10);
     vu1n::stWords(n, vu1n::qaddr(n, s.vi[2] + -903), s.vi[12], 12);
     // pair 11 +0x0058 lower=08941fce upper=01eb74ba
     VU1NativeAccess::callUpper(n, (n.pc + 88u), 0x01eb74bau);
     s.vi[20] = vu1n::ldWord(n, vu1n::qaddr(n, s.vi[3] + -50), 1);
     // pair 12 +0x0060 lower=81c093fd upper=25ec6e2b
-    __m128 r12 = _mm_max_ps(vu1n::ld(s, 13), vu1n::ldn(s, 12));
+    const __m128 v12_12 = vu1n::ldn(s, 12);
+    __m128 r12 = _mm_max_ps(vu1n::ld(s, 13), v12_12);
     vu1n::stf<15>(s.vf[24], r12);
     // pair 13 +0x0068 lower=0beee184 upper=27108e96
-    __m128 r13 = _mm_min_ps(vu1n::ldn(s, 17), vu1n::bc<2>(vu1n::ldn(s, 16)));
+    const __m128 v17_13 = vu1n::ldn(s, 17);
+    const __m128 v16_13 = vu1n::ldn(s, 16);
+    __m128 r13 = _mm_min_ps(v17_13, vu1n::bc<2>(v16_13));
     vu1n::stf<1>(s.vf[26], r13);
     vu1n::stWords(n, vu1n::qaddr(n, s.vi[28] + 388), s.vi[14], 15);
     // pair 14 +0x0070 lower=100b0b40 upper=0516f18a
-    __m128 r14 = vu1n::madd<false>(vu1n::ldAcc(s), vu1n::ldn(s, 30), vu1n::bc<2>(vu1n::ldn(s, 22)));
+    const __m128 v30_14 = vu1n::ldn(s, 30);
+    const __m128 v22_14 = vu1n::ldn(s, 22);
+    __m128 r14 = vu1n::madd<false>(vu1n::ldAcc(s), v30_14, vu1n::bc<2>(v22_14));
     const uint32_t m14 = vu1n::macVal<1>(r14);
     const __m128 q14 = r14;  // unclamped: flags computed later if it outlives the block
     r14 = vu1n::clampv(r14);
     vu1n::stf<1>(s.vf[6], r14);
     s.vi[11] = vu1n::sx16(s.vi[1] + 832);
     // pair 15 +0x0078 lower=09df2037 upper=250cb864
-    __m128 r15 = _mm_sub_ps(vu1n::ldn(s, 23), _mm_set1_ps(s.q));
+    const __m128 v23_15 = vu1n::ldn(s, 23);
+    __m128 r15 = _mm_sub_ps(v23_15, _mm_set1_ps(s.q));
     const uint32_t m15 = vu1n::macVal<1>(r15);
     const __m128 q15 = r15;  // unclamped: flags computed later if it outlives the block
-    r15 = vu1n::clampv(r15);
     vu1n::stf<1>(s.vf[1], r15);
     s.vi[31] = vu1n::ldWord(n, vu1n::qaddr(n, s.vi[4] + 55), 0);
     // pair 16 +0x0080 lower=02a9e8d4 upper=0465deb3
     VU1NativeAccess::callUpper(n, (n.pc + 128u), 0x0465deb3u);
     { uint32_t a = vu1n::qaddr(n, s.vi[9] + 212); vu1n::stq<10>(n, a, vu1n::ld(s, 29)); }
     // pair 17 +0x0088 lower=0001bb6e upper=00721396
-    __m128 r17 = _mm_min_ps(vu1n::ld(s, 2), vu1n::bc<2>(vu1n::ldn(s, 18)));
+    const __m128 v18_17 = vu1n::ldn(s, 18);
+    __m128 r17 = _mm_min_ps(vu1n::ld(s, 2), vu1n::bc<2>(v18_17));
     vu1n::stf<12>(s.vf[14], r17);
     { uint32_t a = vu1n::qaddr(n, s.vi[23] + 878); vu1n::stf<0>(s.vf[1], vu1n::ldq(n, a)); }
     // pair 18 +0x0090 lower=1221cdb1 upper=07196727
-    __m128 r18 = vu1n::madd<true>(vu1n::ldAcc(s), vu1n::ldn(s, 12), _mm_set1_ps(s.i));
+    const __m128 v12_18 = vu1n::ldn(s, 12);
+    __m128 r18 = vu1n::madd<true>(vu1n::ldAcc(s), v12_18, _mm_set1_ps(s.i));
     const uint32_t m18 = vu1n::macVal<1>(r18);
     const __m128 q18 = r18;  // unclamped: flags computed later if it outlives the block
     r18 = vu1n::clampv(r18);
     vu1n::stf<1>(s.vf[28], r18);
     s.vi[1] = vu1n::sx16(s.vi[25] - 3505);
     // pair 19 +0x0098 lower=10f6243b upper=23089191
-    __m128 r19 = _mm_max_ps(vu1n::ldn(s, 18), vu1n::bc<1>(vu1n::ldn(s, 8)));
+    const __m128 v8_19 = vu1n::ldn(s, 8);
+    __m128 r19 = _mm_max_ps(v18_17, vu1n::bc<1>(v8_19));
     vu1n::stf<1>(s.vf[6], r19);
     s.vi[22] = vu1n::sx16(s.vi[4] + 15419);
     // pair 20 +0x00a0 lower=08f66241 upper=207845f5
@@ -147,36 +164,41 @@ static uint32_t b0000_9d67ccc7(VU1NativeCtx &n)
     __m128 r21 = _mm_mul_ps(vu1n::ld(s, 4), _mm_set1_ps(s.i));
     const uint32_t m21 = vu1n::macVal<15>(r21);
     const __m128 q21 = r21;  // unclamped: flags computed later if it outlives the block
-    r21 = vu1n::clampv(r21);
     vu1n::stf<15>(s.acc, r21);
     s.vi[29] = vu1n::ldWord(n, vu1n::qaddr(n, s.vi[5] + -199), 3);
     // pair 22 +0x00b0 lower=13b0943a upper=27ffd139
     VU1NativeAccess::callUpper(n, (n.pc + 176u), 0x27ffd139u);
     s.vi[16] = vu1n::sx16(s.vi[18] - 27706);
     // pair 23 +0x00b8 lower=81935272 upper=051e4409
-    __m128 r23 = vu1n::madd<false>(vu1n::ldAcc(s), vu1n::ldn(s, 8), vu1n::bc<1>(vu1n::ldn(s, 30)));
+    const __m128 v8_23 = vu1n::ldn(s, 8);
+    const __m128 v30_23 = vu1n::ldn(s, 30);
+    __m128 r23 = vu1n::madd<false>(vu1n::ldAcc(s), v8_23, vu1n::bc<1>(v30_23));
     const uint32_t m23 = vu1n::macVal<1>(r23);
     const __m128 q23 = r23;  // unclamped: flags computed later if it outlives the block
     r23 = vu1n::clampv(r23);
     vu1n::stf<1>(s.vf[16], r23);
     s.vi[19] = vu1n::sx16(s.vi[10] + 9);
     // pair 24 +0x00c0 lower=01aeb63c upper=0312f615
-    __m128 r24 = _mm_min_ps(vu1n::ldn(s, 30), vu1n::bc<1>(vu1n::ldn(s, 18)));
+    const __m128 v18_24 = vu1n::ldn(s, 18);
+    __m128 r24 = _mm_min_ps(v30_23, vu1n::bc<1>(v18_24));
     vu1n::stf<1>(s.vf[24], r24);
     { uint32_t a = vu1n::qaddr(n, s.vi[22] + -452); vu1n::stf<11>(s.vf[14], vu1n::ldq(n, a)); }
     // pair 25 +0x00c8 lower=016a5f4a upper=2670bd4e
-    __m128 r25 = vu1n::madd<true>(vu1n::ldAcc(s), vu1n::ldn(s, 23), vu1n::bc<2>(vu1n::ldn(s, 16)));
+    const __m128 v23_25 = vu1n::ldn(s, 23);
+    const __m128 v16_25 = vu1n::ldn(s, 16);
+    __m128 r25 = vu1n::madd<true>(vu1n::ldAcc(s), v23_25, vu1n::bc<2>(v16_25));
     const uint32_t m25 = vu1n::macVal<12>(r25);
     const __m128 q25 = r25;  // unclamped: flags computed later if it outlives the block
     r25 = vu1n::clampv(r25);
     vu1n::stf<12>(s.vf[21], r25);
     { uint32_t a = vu1n::qaddr(n, s.vi[11] + -182); vu1n::stf<13>(s.vf[10], vu1n::ldq(n, a)); }
     // pair 26 +0x00d0 lower=0a3cf043 upper=01f7f113
-    __m128 r26 = _mm_max_ps(vu1n::ldn(s, 30), vu1n::bc<3>(vu1n::ldn(s, 23)));
+    __m128 r26 = _mm_max_ps(v30_23, vu1n::bc<3>(v23_25));
     vu1n::stf<15>(s.vf[4], r26);
     vu1n::stWords(n, vu1n::qaddr(n, s.vi[30] + 67), s.vi[28], 1);
     // pair 27 +0x00d8 lower=80b0537c upper=2468b6c8
-    __m128 r27 = vu1n::madd<false>(vu1n::ldAcc(s), vu1n::ldn(s, 22), vu1n::bc<0>(vu1n::ldn(s, 8)));
+    const __m128 v22_27 = vu1n::ldn(s, 22);
+    __m128 r27 = vu1n::madd<false>(vu1n::ldAcc(s), v22_27, vu1n::bc<0>(v8_23));
     const uint32_t m27 = vu1n::macVal<12>(r27);
     const __m128 q27 = r27;  // unclamped: flags computed later if it outlives the block
     r27 = vu1n::clampv(r27);
@@ -187,10 +209,10 @@ static uint32_t b0000_9d67ccc7(VU1NativeCtx &n)
     VU1NativeAccess::callUpper(n, (n.pc + 224u), 0x27fd5274u);
     s.vi[13] = vu1n::sx16(s.vi[3] + 25558);
     // pair 29 +0x00e8 lower=017f2e07 upper=070ec61b
-    __m128 r29 = _mm_mul_ps(vu1n::ld(s, 24), vu1n::bc<3>(vu1n::ldn(s, 14)));
+    const __m128 v14_29 = vu1n::ldn(s, 14);
+    __m128 r29 = _mm_mul_ps(vu1n::ld(s, 24), vu1n::bc<3>(v14_29));
     const uint32_t m29 = vu1n::macVal<1>(r29);
     const __m128 q29 = r29;  // unclamped: flags computed later if it outlives the block
-    r29 = vu1n::clampv(r29);
     vu1n::stf<1>(s.vf[24], r29);
     { uint32_t a = vu1n::qaddr(n, s.vi[5] + -505); vu1n::stf<13>(s.vf[31], vu1n::ldq(n, a)); }
     // pair 30 +0x00f0 lower=500007fe upper=000002ff

@@ -9,12 +9,14 @@ use std::fmt::Write as _;
 use ps2_r5900::opcodes::*;
 use ps2_r5900::Instruction;
 
+use crate::emit::locals::{build_body, Chunk, ChunkKind};
 use crate::flow::emitter::ControlFlowEmitter;
 use crate::generator::{CodeGenerator, GenerationError};
 use crate::gif_dma::{
     emit_gif_dma_capture, gif_dma_delay_slot_override, gif_dma_kick_call, resolve_memory_access_hint,
     try_build_gif_dma_kick_plan, update_constant_registers, ConstantRegisterState, GifDmaKickPlan,
 };
+use crate::translate::instruction::FamilyTranslator;
 use crate::types::Function;
 
 fn make_synthetic_delay_slot(address: u32) -> Instruction {
@@ -57,6 +59,7 @@ pub fn emit_function(
 
     let mut constant_registers = ConstantRegisterState::new();
     let mut gif_dma_kick_plan = GifDmaKickPlan::default();
+    let function_text_start = ss.len(); // GOW-Port: where a locals body puts its include
     let _ = writeln!(ss, "// Function: {}", function.name);
     let _ = writeln!(ss, "// Address: 0x{:x} - 0x{:x}", function.start, function.end);
 
@@ -70,16 +73,24 @@ pub fn emit_function(
     let _ = writeln!(ss, "    PS_LOG_ENTRY(\"{sanitized_name}\");");
     ss.push_str("#endif\n");
     ss.push('\n');
+    // GOW-Port (decision D2): the body is collected in chunks; the classic output is their plain concatenation.
+    let mut head = String::new();
     if !resume_targets.is_empty() {
-        ss.push_str("    switch (ctx->pc) {\n");
+        head.push_str("    switch (ctx->pc) {\n");
         for target in &resume_targets {
-            let _ = writeln!(ss, "        case 0x{target:x}u: goto label_{target:x};");
+            let _ = writeln!(head, "        case 0x{target:x}u: goto label_{target:x};");
         }
-        ss.push_str("        default: break;\n");
-        ss.push_str("    }\n\n");
+        head.push_str("        default: break;\n");
+        head.push_str("    }\n\n");
     }
-    let _ = writeln!(ss, "    ctx->pc = 0x{:x}u;", function.start);
-    ss.push('\n');
+    let _ = writeln!(head, "    ctx->pc = 0x{:x}u;", function.start);
+    head.push('\n');
+    let mut chunks: Vec<Chunk> = Vec::new();
+    let mut push = |kind: ChunkKind, text: String| {
+        if !text.is_empty() {
+            chunks.push(Chunk { kind, text });
+        }
+    };
 
     let mut last_instruction_was_control_flow = false;
     let emit_comments = cg.emit_instruction_comments();
@@ -89,19 +100,21 @@ pub fn emit_function(
         let inst = &instructions[i];
         last_instruction_was_control_flow = inst.has_delay_slot;
 
+        let mut label = String::new();
         if analysis.entry_points.contains(&inst.address) {
             constant_registers.clear();
-            let _ = writeln!(ss, "label_{:x}:", inst.address);
+            let _ = writeln!(label, "label_{:x}:", inst.address);
         }
 
         if emit_comments {
-            let _ = write!(ss, "    // 0x{:x}: 0x{:x}", inst.address, inst.raw);
+            let _ = write!(label, "    // 0x{:x}: 0x{:x}", inst.address, inst.raw);
             let disassembly = inst.disassembly();
             if !disassembly.is_empty() {
-                let _ = write!(ss, "  {disassembly}");
+                let _ = write!(label, "  {disassembly}");
             }
-            ss.push('\n');
+            label.push('\n');
         }
+        push(ChunkKind::Label, label);
 
         if inst.has_delay_slot {
             let has_decoded_delay_slot =
@@ -116,7 +129,7 @@ pub fn emit_function(
             };
 
             if has_decoded_delay_slot && analysis.entry_points.contains(&delay_slot.address) {
-                let _ = writeln!(ss, "label_{:x}:", delay_slot.address);
+                push(ChunkKind::Label, format!("label_{:x}:\n", delay_slot.address));
             }
 
             if gif_dma_kick_plan.valid
@@ -125,10 +138,16 @@ pub fn emit_function(
                 && has_decoded_delay_slot
             {
                 let override_code = gif_dma_delay_slot_override(delay_slot, &gif_dma_kick_plan, emit_comments);
-                ss.push_str(&ControlFlowEmitter::new(cg, inst, delay_slot, function, &analysis, override_code).emit());
+                push(
+                    ChunkKind::Branch,
+                    ControlFlowEmitter::new(cg, inst, delay_slot, function, &analysis, override_code).emit(),
+                );
                 gif_dma_kick_plan = GifDmaKickPlan::default();
             } else {
-                ss.push_str(&ControlFlowEmitter::new(cg, inst, delay_slot, function, &analysis, String::new()).emit());
+                push(
+                    ChunkKind::Branch,
+                    ControlFlowEmitter::new(cg, inst, delay_slot, function, &analysis, String::new()).emit(),
+                );
             }
 
             if has_decoded_delay_slot {
@@ -143,26 +162,30 @@ pub fn emit_function(
 
             if gif_dma_kick_plan.suppresses(i) {
                 let slot = gif_dma_kick_plan.slot_for(i);
-                emit_gif_dma_capture(&mut ss, &gif_dma_kick_plan, slot, "    ");
+                let mut other = String::new();
+                emit_gif_dma_capture(&mut other, &gif_dma_kick_plan, slot, "    ");
 
                 if gif_dma_kick_plan.completes_at(i) {
-                    let _ = writeln!(ss, "    ctx->pc = 0x{:x}u;", inst.address);
-                    let _ = writeln!(ss, "    {}", gif_dma_kick_call(&gif_dma_kick_plan));
+                    let _ = writeln!(other, "    ctx->pc = 0x{:x}u;", inst.address);
+                    let _ = writeln!(other, "    {}", gif_dma_kick_call(&gif_dma_kick_plan));
                     gif_dma_kick_plan = GifDmaKickPlan::default();
                 }
+                push(ChunkKind::Other, other);
 
                 update_constant_registers(inst, &mut constant_registers);
                 i += 1;
                 continue;
             }
 
-            let _ = writeln!(ss, "    ctx->pc = 0x{:x}u;", inst.address);
+            let mut statement = String::new();
+            let _ = writeln!(statement, "    ctx->pc = 0x{:x}u;", inst.address);
             let memory_hint = resolve_memory_access_hint(inst, &constant_registers);
-            let _ = write!(ss, "    {}", cg.translate_instruction_with_hint(inst, memory_hint));
+            let _ = write!(statement, "    {}", cg.translate_instruction_with_hint(inst, memory_hint));
             if inst.is_mmio {
-                let _ = write!(ss, " // MMIO: 0x{:x}", inst.mmio_address);
+                let _ = write!(statement, " // MMIO: 0x{:x}", inst.mmio_address);
             }
-            ss.push('\n');
+            statement.push('\n');
+            push(ChunkKind::Instruction, statement);
 
             update_constant_registers(inst, &mut constant_registers);
         }
@@ -171,10 +194,47 @@ pub fn emit_function(
     }
 
     // Fallthrough with no terminating branch: publish the next PC so the EE dispatcher does not re-enter this function.
+    let mut tail = String::new();
     if !instructions.is_empty() && !last_instruction_was_control_flow {
-        let _ = writeln!(ss, "    ctx->pc = 0x{:x}u;", function.end);
+        let _ = writeln!(tail, "    ctx->pc = 0x{:x}u;", function.end);
+    }
+
+    // GOW-Port (decision D2): `[codegen] register_locals`, unless the rewrite cannot place this function.
+    let locals = cg.codegen().register_locals && locals_allowed(function.start);
+    match locals.then(|| build_body(&chunks, &head, &tail)).flatten() {
+        Some(body) => {
+            // the locals macros (header guarded, so a unity batch of several such files includes it once)
+            ss.insert_str(function_text_start, "#include \"ps2_cg.h\"\n");
+            ss.push_str(&body);
+        }
+        None => {
+            ss.push_str(&head);
+            for chunk in &chunks {
+                ss.push_str(&chunk.text);
+            }
+            ss.push_str(&tail);
+        }
     }
 
     ss.push_str("}\n");
     Ok(ss)
+}
+
+/// GOW-Port: `PS2X_CODEGEN_FUNCS=<file>` (one hex start address per line, `#` comments) limits `register_locals` to those
+/// functions, to bisect a difference while running the recompiler. Without it every function may use locals.
+fn locals_allowed(start: u32) -> bool {
+    use std::sync::OnceLock;
+    static ONLY: OnceLock<Option<std::collections::HashSet<u32>>> = OnceLock::new();
+    let only = ONLY.get_or_init(|| {
+        let path = std::env::var_os("PS2X_CODEGEN_FUNCS")?;
+        let text = std::fs::read_to_string(path).ok()?;
+        Some(
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .filter_map(|line| u32::from_str_radix(line.trim_start_matches("0x"), 16).ok())
+                .collect(),
+        )
+    });
+    only.as_ref().is_none_or(|set| set.contains(&start))
 }

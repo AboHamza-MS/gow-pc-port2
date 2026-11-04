@@ -31,6 +31,28 @@ fn read_at<R: Read + Seek>(reader: &mut R, offset: u64, length: usize) -> std::i
     Ok(buffer)
 }
 
+/// GOW-Port: a damaged or hostile image stops with a clear message instead of a panic, an endless recursion or a file
+/// written outside the output folder (idea from ps2-native-recomp `783b4b1`).
+fn damaged(detail: impl std::fmt::Display) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!(
+            "the disc image is damaged or is not a PS2 game disc ({detail}); make the ISO again from the original disc"
+        ),
+    )
+}
+
+/// Deeper than any real disc; a directory that lists itself or its parent would otherwise recurse forever.
+const MAX_DEPTH: usize = 32;
+
+/// One path component of the disc as a file name: no `..`, no separators, no drive letters.
+fn check_name(name: &str) -> std::io::Result<()> {
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', ':', '\0']) {
+        return Err(damaged(format!("invalid file name {name:?}")));
+    }
+    Ok(())
+}
+
 fn read_directory<R: Read + Seek>(
     reader: &mut R,
     lba: u64,
@@ -38,7 +60,11 @@ fn read_directory<R: Read + Seek>(
     path: &str,
     out: &mut Vec<DiscFile>,
     base: u64,
+    depth: usize,
 ) -> std::io::Result<()> {
+    if depth > MAX_DEPTH {
+        return Err(damaged(format!("directories nested deeper than {MAX_DEPTH} levels at {path}")));
+    }
     let data = read_at(reader, (base + lba) * SECTOR, size as usize)?;
     let mut offset = 0usize;
     while offset < data.len() {
@@ -62,9 +88,10 @@ fn read_directory<R: Read + Seek>(
         }
         let name: String = name_bytes.iter().map(|&b| if b.is_ascii() { b as char } else { '\u{fffd}' }).collect();
         let name = name.split(';').next().unwrap_or("").to_owned();
+        check_name(&name)?;
         let full = if path.is_empty() { name } else { format!("{path}/{name}") };
         if flags & 2 != 0 {
-            read_directory(reader, extent_lba, extent_length, &full, out, base)?;
+            read_directory(reader, extent_lba, extent_length, &full, out, base, depth + 1)?;
         } else {
             out.push(DiscFile { name: full, lba: base + extent_lba, size: extent_length });
         }
@@ -79,16 +106,16 @@ pub fn scan<R: Read + Seek>(reader: &mut R) -> std::io::Result<(Vec<DiscFile>, u
         return Err(std::io::Error::other("not ISO9660"));
     }
     let mut files = Vec::new();
-    let root = &pvd[156..156 + 34];
-    read_directory(reader, u32_at(root, 2), u32_at(root, 10), "", &mut files, 0)?;
+    let root = pvd.get(156..156 + 34).ok_or_else(|| damaged("the volume descriptor is cut"))?;
+    read_directory(reader, u32_at(root, 2), u32_at(root, 10), "", &mut files, 0, 0)?;
 
     let layer0 = u32_at(&pvd, 80);
     let mut layer1 = 0;
     let pvd1 = read_at(reader, layer0 * SECTOR, SECTOR as usize)?;
     if pvd1.get(1..6) == Some(b"CD001".as_slice()) {
         layer1 = layer0.saturating_sub(16);
-        let root1 = &pvd1[156..156 + 34];
-        read_directory(reader, u32_at(root1, 2), u32_at(root1, 10), "", &mut files, layer1)?;
+        let root1 = pvd1.get(156..156 + 34).ok_or_else(|| damaged("the second layer's volume descriptor is cut"))?;
+        read_directory(reader, u32_at(root1, 2), u32_at(root1, 10), "", &mut files, layer1, 0)?;
     }
     Ok((files, layer1))
 }
@@ -163,8 +190,19 @@ pub fn run(options: &Options) -> std::io::Result<()> {
         }
         iso.seek(SeekFrom::Start(file.lba * SECTOR))?;
         let mut target = std::io::BufWriter::with_capacity(1 << 20, File::create(&destination)?);
-        std::io::copy(&mut Read::by_ref(&mut iso).take(file.size), &mut target)?;
+        let copied = std::io::copy(&mut Read::by_ref(&mut iso).take(file.size), &mut target)?;
         target.flush()?;
+        // GOW-Port: an image cut short (an incomplete download or copy) gave short files silently. Padding files
+        // (DUMMY*) that some dumps trim at the end of the disc only warn.
+        if copied < file.size {
+            let message = format!("{} is cut: {copied} of {} bytes in the image", file.name, file.size);
+            let file_name = file.name.rsplit('/').next().unwrap_or(&file.name).to_uppercase();
+            if file_name.starts_with("DUMMY") {
+                eprintln!("[iso-extract] warning: {message} (a padding file, not needed)");
+            } else {
+                return Err(damaged(message));
+            }
+        }
     }
     if let (Some(output), true) = (&options.output, options.layout) {
         write_layout(&mut iso, &files, layer1, output)?;

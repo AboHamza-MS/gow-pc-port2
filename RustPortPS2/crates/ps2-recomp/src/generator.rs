@@ -188,6 +188,7 @@ pub struct CodeGenerator {
     emit_instruction_comments: bool,
     reporter: Option<Arc<Reporter>>,
     current_function_name: String,
+    codegen: ps2_config::Codegen,
 }
 
 impl CodeGenerator {
@@ -208,6 +209,7 @@ impl CodeGenerator {
             emit_instruction_comments: true,
             reporter: None,
             current_function_name: String::new(),
+            codegen: ps2_config::Codegen::default(),
         }
     }
 
@@ -247,6 +249,11 @@ impl CodeGenerator {
 
     pub fn set_emit_instruction_comments(&mut self, emit: bool) {
         self.emit_instruction_comments = emit;
+    }
+
+    /// GOW-Port (decision D2): the `[codegen]` switches of the configuration.
+    pub fn set_codegen(&mut self, codegen: ps2_config::Codegen) {
+        self.codegen = codegen;
     }
 
     pub fn set_reporter(&mut self, reporter: Arc<Reporter>) {
@@ -350,6 +357,10 @@ impl CodeGenerator {
 }
 
 impl FamilyTranslator for CodeGenerator {
+    fn codegen(&self) -> ps2_config::Codegen {
+        self.codegen
+    }
+
     fn translate_special(&mut self, inst: &Instruction) -> String {
         special::translate(self, inst)
     }

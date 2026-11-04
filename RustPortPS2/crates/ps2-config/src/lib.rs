@@ -33,6 +33,30 @@ pub struct JumpTable {
 }
 
 /// Everything the recompiler reads from `recomp.toml`.
+/// GOW-Port (decision D2): the `[codegen]` section. `mode = "compat"` (default) keeps the output byte-identical to PS2Recomp;
+/// `mode = "gow"` turns on the God of War code generation switches that are ready, and each switch can still be set alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Codegen {
+    /// MOVZ / MOVN write only the low 64 bits of rd, like the R5900 (PS2Recomp copies the whole 128-bit register).
+    pub movz_low64: bool,
+    /// Guest GPRs in C++ locals inside a generated function (written back around calls and the slow checkpoint path).
+    pub register_locals: bool,
+    /// COP0 Count reads and writes go to the EE cycle counter (PS2Runtime::eeCountRegister) instead of a frozen field.
+    pub cop0_count_clock: bool,
+}
+
+impl Codegen {
+    /// The switches `mode = "gow"` turns on.
+    pub fn gow() -> Self {
+        Self { movz_low64: true, register_locals: false, cop0_count_clock: true }
+    }
+
+    /// True when every switch is off: the output is PS2Recomp's.
+    pub fn is_compat(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecompilerConfig {
     pub input_path: String,
@@ -50,6 +74,7 @@ pub struct RecompilerConfig {
     pub patches: BTreeMap<u32, String>,
     pub mmio_by_instruction_address: BTreeMap<u32, u32>,
     pub jump_tables: Vec<JumpTable>,
+    pub codegen: Codegen,
 }
 
 impl Default for RecompilerConfig {
@@ -71,6 +96,7 @@ impl Default for RecompilerConfig {
             patches: BTreeMap::new(),
             mmio_by_instruction_address: BTreeMap::new(),
             jump_tables: Vec::new(),
+            codegen: Codegen::default(),
         }
     }
 }
@@ -289,6 +315,29 @@ impl RecompilerConfig {
             }
         }
 
+        // GOW-Port (decision D2): `[codegen]`. The mode sets the defaults; a switch written in the section wins.
+        if let Some(codegen) = root.get("codegen").and_then(Value::as_table) {
+            config.codegen = match optional_string(codegen, "mode").as_deref() {
+                None | Some("compat") => Codegen::default(),
+                Some("gow") => Codegen::gow(),
+                Some(other) => {
+                    report
+                        .warnings
+                        .push(format!("codegen.mode = \"{other}\" is not \"compat\" or \"gow\": compat used"));
+                    Codegen::default()
+                }
+            };
+            if let Some(value) = optional_bool(codegen, "movz_low64") {
+                config.codegen.movz_low64 = value;
+            }
+            if let Some(value) = optional_bool(codegen, "register_locals") {
+                config.codegen.register_locals = value;
+            }
+            if let Some(value) = optional_bool(codegen, "cop0_count_clock") {
+                config.codegen.cop0_count_clock = value;
+            }
+        }
+
         Ok((config, report))
     }
 
@@ -323,6 +372,16 @@ impl RecompilerConfig {
 
         let mut root = Map::new();
         root.insert("general".to_owned(), Value::Table(general));
+
+        // GOW-Port: written only when a switch is on, so a compat configuration saves as before.
+        if !self.codegen.is_compat() {
+            let mut codegen = Map::new();
+            codegen.insert("mode".to_owned(), Value::String("gow".to_owned()));
+            codegen.insert("movz_low64".to_owned(), Value::Boolean(self.codegen.movz_low64));
+            codegen.insert("register_locals".to_owned(), Value::Boolean(self.codegen.register_locals));
+            codegen.insert("cop0_count_clock".to_owned(), Value::Boolean(self.codegen.cop0_count_clock));
+            root.insert("codegen".to_owned(), Value::Table(codegen));
+        }
 
         if !self.mmio_by_instruction_address.is_empty() {
             let mut mmio = Map::new();

@@ -95,6 +95,48 @@ fn movz_uses_the_vector_setter_like_the_cpp() {
     assert_eq!(special(SPECIAL_MOVZ, 8, 5, 2, 0), "if (GPR_U64(ctx, 5) == 0) SET_GPR_VEC(ctx, 2, GPR_VEC(ctx, 8));");
 }
 
+/// GOW-Port (decision D2): the same templates with `[codegen] movz_low64`.
+struct GowHooks;
+
+impl FamilyTranslator for GowHooks {
+    fn codegen(&self) -> ps2_config::Codegen {
+        ps2_config::Codegen::gow()
+    }
+    fn translate_special(&mut self, inst: &Instruction) -> String {
+        translate(self, inst)
+    }
+    fn translate_regimm(&mut self, _: &Instruction) -> String {
+        String::new()
+    }
+    fn translate_cop0(&mut self, _: &Instruction) -> String {
+        String::new()
+    }
+    fn translate_fpu(&mut self, _: &Instruction) -> String {
+        String::new()
+    }
+    fn translate_vu(&mut self, _: &Instruction) -> String {
+        String::new()
+    }
+    fn translate_mmi(&mut self, _: &Instruction) -> String {
+        String::new()
+    }
+    fn emit_unhandled(&mut self, _: &Instruction, reason: &str) -> String {
+        format!("<unhandled: {reason}>")
+    }
+}
+
+#[test]
+fn movz_and_movn_move_only_the_low_64_bits_in_gow_mode() {
+    let gow = |function: u32| {
+        let raw = special_raw(function, 8, 5, 2, 0);
+        translate_generic(&mut GowHooks, &ps2_r5900::decode(0x0010_0000, raw, false), MemoryAccessHint::default())
+    };
+    assert_eq!(gow(SPECIAL_MOVZ), "if (GPR_U64(ctx, 5) == 0) SET_GPR_U64(ctx, 2, GPR_U64(ctx, 8));");
+    assert_eq!(gow(SPECIAL_MOVN), "if (GPR_U64(ctx, 5) != 0) SET_GPR_U64(ctx, 2, GPR_U64(ctx, 8));");
+    // compat keeps PS2Recomp's 128-bit copy for MOVN too
+    assert_eq!(special(SPECIAL_MOVN, 8, 5, 2, 0), "if (GPR_U64(ctx, 5) != 0) SET_GPR_VEC(ctx, 2, GPR_VEC(ctx, 8));");
+}
+
 #[test]
 fn an_unknown_special_function_is_reported() {
     // 0x3D is unassigned (0x3C and 0x3E are the DSLL32/DSRL32 pair, 0x3F DSRA32).

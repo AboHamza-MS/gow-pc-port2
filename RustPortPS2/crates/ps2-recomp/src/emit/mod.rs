@@ -4,3 +4,4 @@
 
 pub mod function;
 pub mod function_table;
+pub mod locals;

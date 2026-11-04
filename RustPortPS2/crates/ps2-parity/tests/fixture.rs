@@ -47,6 +47,34 @@ fn generate(fixture: &Fixture, directory: &Path) -> PathBuf {
     output
 }
 
+/// GOW-Port: translating again into the same folder rewrites no file whose bytes are the same, so the next build does not
+/// recompile the game for nothing; the tree stays byte for byte what it was.
+#[test]
+fn a_second_translation_leaves_unchanged_files_alone() {
+    let fixture = Fixture::build();
+    let directory = scratch("again");
+    let output = generate(&fixture, &directory);
+    let before = collect_tree(&output).unwrap();
+    let times = |root: &Path| -> Vec<(PathBuf, std::time::SystemTime)> {
+        let mut out: Vec<_> = std::fs::read_dir(root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| (entry.path(), entry.metadata().unwrap().modified().unwrap()))
+            .collect();
+        out.sort();
+        out
+    };
+    let first_times = times(&output);
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let output_again = generate(&fixture, &directory);
+    assert_eq!(output, output_again);
+    let after = collect_tree(&output).unwrap();
+    let comparison = compare_files(&before, &after);
+    assert!(comparison.is_identical(), "the second translation changed the tree: {:?}", comparison.different);
+    assert_eq!(first_times, times(&output), "an unchanged file was rewritten (its modification time moved)");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
 #[test]
 fn fixture_tree_matches_the_cpp_baseline() {
     let operating_system = current_operating_system();

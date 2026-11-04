@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use ps2_tools::elfcheck::{inspect_bytes, EXPECTED_CRC};
 use ps2_tools::hash::{blake2b_64_hex, fnv};
-use ps2_tools::{iop_gen, iso, vu1, vu1n_gen};
+use ps2_tools::{iop_gen, iso, vu1, vu1n_gen, xdelta};
 
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("ps2-tools-{name}-{}", std::process::id()));
@@ -106,6 +106,11 @@ fn another_architecture_is_refused() {
 
 /// A one-file ISO9660 image: the volume descriptor at sector 16, the root directory at sector 18 and `HELLO.TXT;1` at 19.
 fn tiny_iso() -> Vec<u8> {
+    tiny_iso_with(b"HELLO.TXT;1", 5, 18)
+}
+
+/// The same image with another file name, file size and sector of the root directory's own `.` record.
+fn tiny_iso_with(name: &[u8], size: u32, self_lba: u32) -> Vec<u8> {
     const SECTOR: usize = 2048;
     let mut image = vec![0u8; 22 * SECTOR];
     let record = |lba: u32, length: u32, flags: u8, name: &[u8]| -> Vec<u8> {
@@ -127,13 +132,49 @@ fn tiny_iso() -> Vec<u8> {
 
     let dir = &mut image[18 * SECTOR..19 * SECTOR];
     let mut offset = 0;
-    for entry in [record(18, 2048, 2, &[0]), record(18, 2048, 2, &[1]), record(19, 5, 0, b"HELLO.TXT;1")] {
+    for entry in [record(self_lba, 2048, 2, &[0]), record(18, 2048, 2, &[1]), record(19, size, 0, name)] {
         dir[offset..offset + entry.len()].copy_from_slice(&entry);
         offset += entry.len();
     }
     image[19 * SECTOR..19 * SECTOR + 5].copy_from_slice(b"hello");
     image[20 * SECTOR + 3] = 9; // a non-zero sector that belongs to no file: it goes to .disc_meta
     image
+}
+
+// GOW-Port: a damaged image gives a clear error, never a file outside the output folder, a panic or an endless recursion.
+#[test]
+fn a_damaged_iso_is_refused_with_a_clear_message() {
+    let directory = scratch("iso-damaged");
+    let run = |image: Vec<u8>, tag: &str| {
+        let iso_path = directory.join(format!("{tag}.iso"));
+        fs::write(&iso_path, image).unwrap();
+        let output = directory.join(format!("out-{tag}"));
+        fs::create_dir_all(&output).unwrap();
+        iso::run(&iso::Options { iso: iso_path, output: Some(output), ..Default::default() }).map_err(|e| e.to_string())
+    };
+    // A name that climbs out of the output folder.
+    let error = run(tiny_iso_with(b"..;1", 5, 18), "dotdot").unwrap_err();
+    assert!(error.contains("damaged") && error.contains("invalid file name"), "{error}");
+    assert!(run(tiny_iso_with(b"A\\B.TXT;1", 5, 18), "backslash").unwrap_err().contains("invalid file name"));
+    // A file that runs past the end of the image (an incomplete copy).
+    let error = run(tiny_iso_with(b"HELLO.TXT;1", 3 * 2048 + 1, 18), "cut").unwrap_err();
+    assert!(error.contains("HELLO.TXT is cut"), "{error}");
+    // ... unless it is a padding file.
+    assert!(run(tiny_iso_with(b"DUMMY.DAT;1", 3 * 2048 + 1, 18), "dummy").is_ok());
+    // A sub-directory that is the root again: recursion stops.
+    let mut looped = tiny_iso_with(b"SUB;1", 2048, 18);
+    let entry = 18 * 2048 + 34 + 34; // third record of the root: make it a directory pointing at the root
+    looped[entry + 2..entry + 6].copy_from_slice(&18u32.to_le_bytes());
+    looped[entry + 25] = 2;
+    assert!(run(looped, "loop").unwrap_err().contains("nested deeper"));
+    // An image too short for the volume descriptor.
+    let short = directory.join("short.iso");
+    let mut image = tiny_iso();
+    image.truncate(16 * 2048 + 100);
+    fs::write(&short, image).unwrap();
+    let error = iso::scan(&mut fs::File::open(&short).unwrap()).unwrap_err().to_string();
+    assert!(error.contains("cut"), "{error}");
+    let _ = fs::remove_dir_all(&directory);
 }
 
 #[test]
@@ -460,6 +501,40 @@ fn write_if_changed_writes_only_what_differs() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// GOW-Port: a module of more than PART_CHUNKS chunks is written as part files that the main file's table points to; a
+/// module that becomes shorter loses the parts it no longer needs.
+#[test]
+fn iop_gen_splits_a_long_module_into_part_files() {
+    let dump = scratch("iopgen-long");
+    let output = scratch("iopgen-long-out");
+    // NOPs (sll $zero, $zero, 0) and a final jr $ra: 8 chunks of 512 instructions plus one more chunk.
+    let words = 512 * iop_gen::PART_CHUNKS + 2;
+    let mut code = vec![0u8; words * 4];
+    code[(words - 2) * 4..(words - 1) * 4].copy_from_slice(&0x03E0_0008u32.to_le_bytes());
+    fs::write(dump.join("long.bin"), &code).unwrap();
+    fs::write(dump.join("modules.txt"), format!("long 10000 {:x} 1\n", code.len())).unwrap();
+    iop_gen::run(&dump, &output, "").unwrap();
+    let main = fs::read_to_string(output.join("iopn_long_10000.cpp")).unwrap();
+    let part0 = fs::read_to_string(output.join("iopn_long_10000_p0.cpp")).unwrap();
+    let part1 = fs::read_to_string(output.join("iopn_long_10000_p1.cpp")).unwrap();
+    assert!(!output.join("iopn_long_10000_p2.cpp").exists(), "9 chunks make two parts");
+    assert!(main.contains("const Chunk kChunks[] = {iopn_long_10000_chunk0,"), "the table names the external chunks");
+    assert!(main.contains("uint32_t iopn_long_10000_chunk8(IopCpuState"), "the main file declares every chunk");
+    assert!(!main.contains("goto L"), "no chunk body stays in the main file");
+    assert!(part0.contains("uint32_t iopn_long_10000_chunk0(") && part0.contains("uint32_t iopn_long_10000_chunk7("));
+    assert!(part1.contains("uint32_t iopn_long_10000_chunk8(") && !part1.contains("chunk7("));
+
+    // The module shrinks to one chunk: written as a single file again, and its old parts are removed.
+    let short = &code[..512 * 4];
+    fs::write(dump.join("long.bin"), short).unwrap();
+    fs::write(dump.join("modules.txt"), format!("long 10000 {:x} 1\n", short.len())).unwrap();
+    iop_gen::run(&dump, &output, "").unwrap();
+    assert!(!output.join("iopn_long_10000_p0.cpp").exists() && !output.join("iopn_long_10000_p1.cpp").exists());
+    assert!(fs::read_to_string(output.join("iopn_long_10000.cpp")).unwrap().contains("uint32_t chunk0("));
+    let _ = fs::remove_dir_all(&dump);
+    let _ = fs::remove_dir_all(&output);
+}
+
 #[test]
 fn iop_gen_leaves_the_files_alone_when_nothing_changed() {
     let output = scratch("iopgen-twice");
@@ -515,7 +590,88 @@ fn iop_gen_reads_the_overrides_that_ship_with_it() {
 // ---- vu1n-gen ---------------------------------------------------------------------------------------------------------
 
 fn run_vu1n(output: &Path, inputs: Vec<PathBuf>, parts: usize) -> String {
-    vu1n_gen::run(&vu1n_gen::Options { output: output.to_path_buf(), inputs, heads: None, parts }).unwrap()
+    vu1n_gen::run(&vu1n_gen::Options { output: output.to_path_buf(), inputs, heads: None, parts, cache: None }).unwrap()
+}
+
+fn run_vu1n_cached(output: &Path, inputs: Vec<PathBuf>, cache: &Path) -> String {
+    vu1n_gen::run(&vu1n_gen::Options {
+        output: output.to_path_buf(),
+        inputs,
+        heads: None,
+        parts: 2,
+        cache: Some(cache.to_path_buf()),
+    })
+    .unwrap()
+}
+
+/// A micro-memory image with the given (lower, upper) block written at each position.
+fn image_with(block: &[(u32, u32)], positions: &[usize]) -> Vec<u8> {
+    let mut image = vec![0u8; vu1n_gen_size()];
+    for &position in positions {
+        for (index, (lower, upper)) in block.iter().enumerate() {
+            let at = position + index * 8;
+            image[at..at + 4].copy_from_slice(&lower.to_le_bytes());
+            image[at + 4..at + 8].copy_from_slice(&upper.to_le_bytes());
+        }
+    }
+    image
+}
+
+const ADD_THEN_END: [(u32, u32); 2] =
+    [(0x8000_033C, (0xF << 21) | (3 << 16) | (2 << 11) | (1 << 6) | 0x28), (0x8000_033C, (1 << 30) | 0x2FF)];
+const MUL_THEN_END: [(u32, u32); 2] =
+    [(0x8000_033C, (0xF << 21) | (3 << 16) | (2 << 11) | (1 << 6) | 0x2A), (0x8000_033C, (1 << 30) | 0x2FF)];
+
+fn parts_text(output: &Path) -> String {
+    (0..2).map(|k| normalized(&output.join(format!("vu1n_part{k}.cpp")))).collect::<Vec<_>>().join("\n----\n")
+}
+
+#[test]
+fn vu1n_gen_incremental_output_is_the_full_run_output() {
+    let directory = scratch("vu1ncache");
+    let captures = directory.join("captures");
+    fs::create_dir_all(&captures).unwrap();
+    let cache = directory.join("cache.txt");
+    fs::write(captures.join("m.bin"), image_with(&ADD_THEN_END, &[0x100])).unwrap();
+    fs::write(captures.join("n.bin"), image_with(&MUL_THEN_END, &[0x300])).unwrap();
+    let first = run_vu1n_cached(&directory.join("out"), vec![captures.clone()], &cache);
+    assert!(first.contains("2 images, 2 distinct blocks"), "{first}");
+    assert!(!first.contains("from the cache"), "nothing cached yet: {first}");
+
+    // A new image that sorts before the cached ones holds the same block at another pc: a full run names the block after
+    // that pc, so the incremental run must too.
+    fs::write(captures.join("a.bin"), image_with(&ADD_THEN_END, &[0x2000])).unwrap();
+    let second = run_vu1n_cached(&directory.join("out"), vec![captures.clone()], &cache);
+    assert!(second.contains("(1 read, the rest from the cache)"), "{second}");
+    let full = run_vu1n(&directory.join("full"), vec![captures.clone()], 2);
+    assert!(full.contains("3 images, 2 distinct blocks"), "{full}");
+    assert_eq!(parts_text(&directory.join("out")), parts_text(&directory.join("full")));
+    assert!(parts_text(&directory.join("out")).contains("b2000_"), "the earliest image's pc names the block");
+
+    // Nothing new: everything comes from the cache, same output.
+    let third = run_vu1n_cached(&directory.join("out"), vec![captures.clone()], &cache);
+    assert!(third.contains("(0 read, the rest from the cache)"), "{third}");
+    assert_eq!(parts_text(&directory.join("out")), parts_text(&directory.join("full")));
+    let _ = fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn vu1n_gen_drops_the_cache_when_a_read_image_changes() {
+    let directory = scratch("vu1ncache-stale");
+    let captures = directory.join("captures");
+    fs::create_dir_all(&captures).unwrap();
+    let cache = directory.join("cache.txt");
+    fs::write(captures.join("m.bin"), image_with(&ADD_THEN_END, &[0x100])).unwrap();
+    run_vu1n_cached(&directory.join("out"), vec![captures.clone()], &cache);
+    // Same name, other bytes (and size kept): the block it gave is gone. A full read must replace the cached one.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::write(captures.join("m.bin"), image_with(&MUL_THEN_END, &[0x100])).unwrap();
+    let again = run_vu1n_cached(&directory.join("out"), vec![captures.clone()], &cache);
+    assert!(!again.contains("from the cache"), "a changed image invalidates the cache: {again}");
+    let full = run_vu1n(&directory.join("full"), vec![captures.clone()], 2);
+    assert!(full.contains("1 images, 1 distinct blocks"), "{full}");
+    assert_eq!(parts_text(&directory.join("out")), parts_text(&directory.join("full")));
+    let _ = fs::remove_dir_all(&directory);
 }
 
 #[test]
@@ -558,4 +714,193 @@ fn the_same_code_at_another_position_is_the_same_block() {
 
 fn vu1n_gen_size() -> usize {
     vu1::SIZE
+}
+
+// GOW-Port (decision D4): a translation keeps the USA `.text`; it is accepted as the same code, not as the original.
+#[test]
+fn a_translation_with_the_usa_code_is_the_same_code() {
+    let mut report = inspect_bytes(&tiny_elf(), &one_function(0x0010_0008, 0x0010_0010)).unwrap();
+    assert_eq!(report.text_sha1, None, "the tiny image has no section table, so no .text");
+    assert!(!report.same_code());
+    assert!(report.to_json().contains("\"text_sha1\": null") && report.to_json().contains("\"same_code\": false"));
+
+    report.text_sha1 = Some(ps2_elf::code_identity::USA_TEXT_SHA1.to_owned());
+    assert!(!report.known_edition(), "another CRC: not the original disc");
+    assert!(report.same_code(), "the USA .text: the same generated code");
+    assert!(report.to_json().contains("\"same_code\": true"));
+
+    report.text_sha1 = Some("0".repeat(40));
+    assert!(!report.same_code(), "other code is refused");
+}
+
+// ---- xdelta -----------------------------------------------------------------------------------------------------------
+
+fn varint(value: u64) -> Vec<u8> {
+    let mut digits = vec![(value & 0x7F) as u8];
+    let mut rest = value >> 7;
+    while rest != 0 {
+        digits.push((rest & 0x7F) as u8 | 0x80);
+        rest >>= 7;
+    }
+    digits.reverse();
+    digits
+}
+
+/// One VCDIFF window with the xdelta3 checksum of `target`.
+fn vcdiff_window(
+    indicator: u8,
+    segment: Option<(u64, u64)>,
+    target: &[u8],
+    data: &[u8],
+    inst: &[u8],
+    addr: &[u8],
+) -> Vec<u8> {
+    let mut body = varint(target.len() as u64);
+    body.push(0);
+    for section in [data, inst, addr] {
+        body.extend(varint(section.len() as u64));
+    }
+    body.extend(xdelta::adler32(target).to_be_bytes());
+    for section in [data, inst, addr] {
+        body.extend_from_slice(section);
+    }
+    let mut window = vec![indicator | 0x04];
+    if let Some((length, position)) = segment {
+        window.extend(varint(length));
+        window.extend(varint(position));
+    }
+    window.extend(varint(body.len() as u64));
+    window.extend(body);
+    window
+}
+
+const XDELTA_BASE: &[u8] = b"abcdefghijklmnop";
+
+/// A patch that uses every instruction kind and address mode: source, near, here (an overlapping copy of its own output),
+/// same, run, a two-instruction code, and a window that copies from the target already written.
+fn xdelta_patch() -> (Vec<u8>, Vec<u8>) {
+    let first = b"abcdwxyzefghefghefghefghzzzz";
+    let second = b"mnopmnop";
+    let third = b"abcd!";
+    let mut patch = vec![0xD6, 0xC3, 0xC4, 0x00, 0x04];
+    patch.extend(varint(9));
+    patch.extend_from_slice(b"base//out");
+    patch.extend(vcdiff_window(0x01, Some((16, 0)), first, b"wxyzz", &[20, 5, 52, 44, 0, 4], &[0, 4, 4]));
+    patch.extend(vcdiff_window(0x01, Some((16, 0)), second, b"", &[20, 116], &[12, 12]));
+    patch.extend(vcdiff_window(0x02, Some((4, 0)), third, b"!", &[247], &[0]));
+    (patch, [&first[..], second, third].concat())
+}
+
+#[test]
+fn an_xdelta_patch_is_applied_window_by_window() {
+    let dir = scratch("xdelta-ok");
+    let (patch, expected) = xdelta_patch();
+    fs::write(dir.join("patch.xdelta"), &patch).unwrap();
+    fs::write(dir.join("base.iso"), XDELTA_BASE).unwrap();
+    fs::write(dir.join("out.iso"), b"an older output is replaced").unwrap();
+    let mut reports = Vec::new();
+    let summary = xdelta::apply(&dir.join("patch.xdelta"), &dir.join("base.iso"), &dir.join("out.iso"), |bytes| {
+        reports.push(bytes)
+    })
+    .unwrap();
+    assert_eq!(summary, xdelta::Summary { windows: 3, bytes: expected.len() as u64 });
+    assert_eq!(fs::read(dir.join("out.iso")).unwrap(), expected);
+    assert_eq!(reports, [28, 36, 41]);
+    assert!(!dir.join("out.iso.part").exists());
+    assert!(xdelta::check_header(&dir.join("patch.xdelta")).is_ok());
+    assert!(xdelta::check_header(&dir.join("base.iso")).unwrap_err().contains("not an xdelta3"));
+}
+
+#[test]
+fn an_xdelta_patch_can_be_cancelled_and_leaves_nothing() {
+    let dir = scratch("xdelta-cancel");
+    let (patch, _) = xdelta_patch();
+    fs::write(dir.join("patch.xdelta"), &patch).unwrap();
+    fs::write(dir.join("base.iso"), XDELTA_BASE).unwrap();
+    let error =
+        xdelta::apply_cancellable(&dir.join("patch.xdelta"), &dir.join("base.iso"), &dir.join("out.iso"), |bytes| {
+            bytes < 30
+        })
+        .unwrap_err();
+    assert_eq!(error, xdelta::CANCELLED);
+    assert!(!dir.join("out.iso").exists() && !dir.join("out.iso.part").exists());
+}
+
+#[test]
+fn an_xdelta_patch_for_another_disc_fails_on_the_first_window_and_writes_nothing() {
+    let dir = scratch("xdelta-base");
+    let (patch, _) = xdelta_patch();
+    fs::write(dir.join("patch.xdelta"), &patch).unwrap();
+    fs::write(dir.join("base.iso"), b"ABCDEFGHIJKLMNOP").unwrap();
+    let error =
+        xdelta::apply(&dir.join("patch.xdelta"), &dir.join("base.iso"), &dir.join("out.iso"), |_| {}).unwrap_err();
+    assert!(error.contains("first window") && error.contains("different ISO"), "{error}");
+    assert!(!dir.join("out.iso").exists() && !dir.join("out.iso.part").exists());
+
+    fs::write(dir.join("short.iso"), b"abcd").unwrap();
+    let error =
+        xdelta::apply(&dir.join("patch.xdelta"), &dir.join("short.iso"), &dir.join("out.iso"), |_| {}).unwrap_err();
+    assert!(error.contains("past the end of the base disc"), "{error}");
+}
+
+#[test]
+fn unsupported_or_damaged_xdelta_patches_are_explained() {
+    let dir = scratch("xdelta-bad");
+    fs::write(dir.join("base.iso"), XDELTA_BASE).unwrap();
+    let (patch, _) = xdelta_patch();
+    let run = |bytes: &[u8]| {
+        fs::write(dir.join("patch.xdelta"), bytes).unwrap();
+        let result = xdelta::apply(&dir.join("patch.xdelta"), &dir.join("base.iso"), &dir.join("out.iso"), |_| {});
+        assert!(!dir.join("out.iso").exists() && !dir.join("out.iso.part").exists());
+        result.unwrap_err()
+    };
+    let mut compressed = patch.clone();
+    compressed[4] |= 0x01;
+    assert!(run(&compressed).contains("-S none"));
+    assert!(run(b"PK\x03\x04 a zip file").contains("not an xdelta3"));
+    assert!(run(&patch[..patch.len() - 3]).contains("damaged"));
+    assert!(run(&patch[..15]).contains("no windows"), "a header alone has no windows");
+    assert!(run(&patch[..12]).contains("damaged"), "cut inside the application header");
+    assert!(xdelta::apply(&dir.join("base.iso"), &dir.join("base.iso"), &dir.join("base.iso"), |_| {}).is_err());
+    assert_eq!(fs::read(dir.join("base.iso")).unwrap(), XDELTA_BASE, "the base disc is never touched");
+}
+
+// ---- memory card ------------------------------------------------------------------------------------------------------
+
+/// Compares the formatter with a card the PS2 BIOS formatted (in PCSX2), when one is given: `GOW_TEST_PCSX2_CARD=<.ps2>`.
+/// The card is only read; it is the user's, so it never becomes a fixture.
+#[test]
+fn the_formatted_card_matches_a_bios_card_when_one_is_given() {
+    use ps2_tools::memcard::{self, CardTime, RAW_PAGE_SIZE};
+    let Ok(path) = std::env::var("GOW_TEST_PCSX2_CARD") else {
+        return;
+    };
+    let bios = fs::read(&path).unwrap();
+    let ours = memcard::format(CardTime::now_japan());
+    let report = memcard::check(&bios).unwrap();
+    assert!(report.formatted && report.ecc_errors.is_empty(), "{report:?}");
+    assert_eq!(ours[..RAW_PAGE_SIZE], bios[..RAW_PAGE_SIZE], "superblock and its ECC");
+    // The last four spare bytes vary between cards (erased or zero); the data and the ECC must match.
+    for page in [16, 17] {
+        let range = page * RAW_PAGE_SIZE..page * RAW_PAGE_SIZE + RAW_PAGE_SIZE - 4;
+        assert_eq!(ours[range.clone()], bios[range], "indirect FAT cluster, page {page}");
+    }
+    let fat_entry = |card: &[u8], index: usize| {
+        let page = 18 + index / 128;
+        let at = page * RAW_PAGE_SIZE + index % 128 * 4;
+        u32::from_le_bytes(card[at..at + 4].try_into().unwrap())
+    };
+    for index in (8100..8192).chain([1]) {
+        let bios_entry = fat_entry(&bios, index);
+        if bios_entry == 0x7FFF_FFFF || index >= 8135 {
+            assert_eq!(fat_entry(&ours, index), bios_entry, "FAT entry {index}");
+        }
+    }
+    let root = 82 * RAW_PAGE_SIZE;
+    for (offset, length) in [(0x00, 2), (0x10, 8), (0x20, 4), (0x40, 32)] {
+        for entry in [0, RAW_PAGE_SIZE] {
+            let range = root + entry + offset..root + entry + offset + length;
+            assert_eq!(ours[range.clone()], bios[range], "root directory entry field {offset:#x}");
+        }
+    }
 }

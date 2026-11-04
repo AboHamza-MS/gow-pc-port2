@@ -890,6 +890,7 @@ impl<'a> Recompiler<'a> {
         recompiler.code_generator.set_bootstrap_info(recompiler.bootstrap_info.clone());
         recompiler.code_generator.set_configured_jump_tables(&recompiler.config.jump_tables);
         recompiler.code_generator.set_emit_instruction_comments(true);
+        recompiler.code_generator.set_codegen(recompiler.config.codegen); // GOW-Port: decision D2
 
         std::fs::create_dir_all(&recompiler.config.output_path)
             .map_err(|error| RecompileError(format!("{}: {error}", recompiler.config.output_path)))?;
@@ -1230,6 +1231,12 @@ impl<'a> Recompiler<'a> {
         // `std::ofstream` in text mode: CRLF on Windows, LF elsewhere.
         let data: std::borrow::Cow<'_, str> =
             if cfg!(windows) { std::borrow::Cow::Owned(content.replace('\n', "\r\n")) } else { content.into() };
+        // GOW-Port: a file whose bytes would not change is left alone, timestamp included. Rewriting all ~6,400 files on
+        // every translation made the next build recompile the whole game even when the generated code was the same. The
+        // bytes on disk are identical either way, so the parity gate is unaffected.
+        if std::fs::read(path).is_ok_and(|existing| existing == data.as_bytes()) {
+            return true;
+        }
         match std::fs::write(path, data.as_bytes()) {
             Ok(()) => true,
             Err(_) => {

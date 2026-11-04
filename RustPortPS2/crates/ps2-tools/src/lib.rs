@@ -5,14 +5,18 @@
 //! - [`vu1`]: `vu1-manifest` and `vu1-programs`, the VU1 micro-memories built from the ELF.
 //! - [`iop_gen`]: `iop-gen`, the IRX modules compiled ahead of time to C++.
 //! - [`vu1n_gen`]: `vu1n-gen`, the native VU1 block generator.
+//! - [`memcard`]: `mc-format` and `mc-check`, the 8 MB memory card image.
+//! - [`xdelta`]: `xdelta-apply`, applies an xdelta3 (VCDIFF) translation patch to the disc.
 //! - [`hash`]: the FNV and BLAKE2b fingerprints those use.
 
 pub mod elfcheck;
 pub mod hash;
 pub mod iop_gen;
 pub mod iso;
+pub mod memcard;
 pub mod vu1;
 pub mod vu1n_gen;
+pub mod xdelta;
 
 /// Writes `text` to `path` only when the file does not already hold it, and says whether it wrote.
 ///

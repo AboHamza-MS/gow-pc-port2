@@ -168,6 +168,7 @@ dependencies = [
 name = "ps2-tools"
 version = "0.2.9"
 dependencies = [
+ "ps2-elf",
  "ps2-parity",
 ]
 
