@@ -2,12 +2,14 @@
 # PC Port - installer for Linux.
 #
 #   ./install.sh [path/to/God of War.iso (or .chd)] [--destination DIR] [--no-optimize] [--optimize [seconds]] [--jobs N]
-#                [--compiler g++|clang] [--normal-priority] [--install-deps] [--check-deps] [--recomp-exe FILE] [--tools-exe FILE]
+#                [--compiler g++|clang] [--vu1-memory-limit-gb N] [--normal-priority] [--install-deps] [--check-deps]
+#                [--recomp-exe FILE] [--tools-exe FILE]
 #
 #   --destination    where game/, build/, build-gen/ and vu1_captures/ go (default: next to this script). The launcher's
 #                    wizard uses it; the generated C++ still lands inside RustPortPS2/native.
 #   --jobs N         build processes (default: cores minus a reserve of 2, 1 or 0, at most one per 2 GB of RAM).
 #   --compiler       C++ compiler: g++ (default) or clang (clang++). Also settable via CXX=clang++ or GOW_COMPILER=clang.
+#   --vu1-memory-limit-gb N  RAM budget for the VU1 AOT generator in GB (default: 4, 0 = unlimited; same as install.ps1).
 #   --normal-priority  do not lower the CPU and I/O priority of the long steps (nice, ionice); by default they run lowered so the
 #                    PC stays usable while the game builds.
 #   --install-deps   install the missing system packages (cmake, ninja, g++/clang, git and the GL/X11/ALSA development files)
@@ -232,6 +234,7 @@ RECOMP_EXE=""
 TOOLS_EXE=""
 OPTIMIZE="auto"
 SECONDS_TO_RUN=240
+VU1_MEM_LIMIT_GB=4
 DEPENDENCIES="ask"
 CHECK_ONLY=0
 
@@ -241,6 +244,7 @@ while [ $# -gt 0 ]; do
         --optimize) OPTIMIZE="yes"; if [[ "${2:-}" =~ ^[0-9]+$ ]]; then SECONDS_TO_RUN="$2"; shift; fi ;;
         --jobs) JOBS="${2:?--jobs needs a number}"; shift ;;
         --compiler) set_compiler "${2:?--compiler needs g++ or clang}"; shift ;;
+        --vu1-memory-limit-gb) VU1_MEM_LIMIT_GB="${2:?--vu1-memory-limit-gb needs a number}"; shift ;;
         --normal-priority) LOW_PRIORITY=0 ;;
         --destination) DEST="${2:?--destination needs a folder}"; shift ;;
         --install-deps) DEPENDENCIES="yes" ;;
@@ -383,7 +387,7 @@ configure() {
     local extra=()
     if compgen -G "$VU1/*.bin" >/dev/null; then
         extra+=("-DPS2X_VU1_MICROCODE_DIR=$VU1" "-DPS2X_VU1_GENERATOR_SOURCE=$NATIVE/tools/vu1/generate_vu1.cpp"
-                "-DPS2X_TOOLS_EXE=$TOOLS")
+                "-DPS2X_TOOLS_EXE=$TOOLS" "-DPS2X_VU1_MAX_MEMORY_MB=$(( VU1_MEM_LIMIT_GB * 1024 ))")
         # GOW-Port: CMake reads vu1n_heads.txt next to the microcode folder: the profile's list plus the block entries the
         # game reached without native code while capturing (vu1n_heads_seen.txt, written by the runtime). It was never
         # written here, so on Linux the blocks entered through a register jump ran in the interpreter. Rewritten only when
