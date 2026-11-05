@@ -50,7 +50,7 @@ Last reviewed: October 2026, against the code in this repository.
 | Area | Limitation |
 |---|---|
 | Frame rate | 60 FPS by default, the PS2's own rate. The **experimental** 120 and 240 FPS limits run the game logic at that rate with the game kept at real-time speed; actions timed in frames (QTEs, combo windows) are not verified there yet. Heavy scenes on integrated GPUs drop below 60 |
-| Multi-threading | The VU1 thread is the CPU bottleneck in combat. The optimization pass converts more of it to native code over time |
+| Multi-threading | The VU1 thread is the CPU bottleneck in combat. The optimization pass converts more of it to native code over time. Since 0.3.2 early FINISH lets the game prepare the next frame while the VU1 draws the current one (+17% in the reference fight at the 120 FPS limit; Performance → Early FINISH turns it off) |
 | Window | At 3× and above, presentation can stall behind the GPU on mid-range cards; the launcher caps presentation at 60 FPS there |
 | Widescreen | With Hor+ on, the HUD and 2D screens are stretched horizontally (the PCSX2 patch does not correct them), more the wider the aspect |
 | Ultrawide | 21:9 is experimental and 32:9 (5120×1440) very experimental (the HUD and menus are stretched across the whole width): the camera is widened by the same Hor+ patch, but edge pop-in, LOD and full-screen effects at those widths have not been checked in game. At 32:9 an internal resolution of 3× or more is advisable |
@@ -83,6 +83,8 @@ Last reviewed: October 2026, against the code in this repository.
   5 s that only the clang build had (writing a log line cost the game 50-100 ms) is fixed: the log now goes through its
   own writer thread (`GOW_LOG_DIRECT=1` restores the old path). An installation without Visual Studio on a clean PC has
   not been verified yet. `install.cmd -Compiler msvc` keeps the previous build.
+- **Pause on every hit:** in combat, each hit given or taken stops the picture for ~100 ms (with or without early FINISH,
+  at 60 and 120 FPS). Whether the PS2 shows the same pause is not established yet.
 - **Coverage of areas:** no systematic play-through validation exists. Zones beyond the ones tested while developing the
   port may still show visual or audio defects.
 

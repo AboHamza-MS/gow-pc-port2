@@ -103,6 +103,8 @@
   "vsyncDesc": "Prevents tearing; locks to the display refresh rate.",
   "showFps": "FPS counter",
   "showFpsDesc": "Shows the game's real frame rate in a corner.",
+  "earlyFinish": "Early FINISH",
+  "earlyFinishDesc": "The game prepares the next frame while the current one is still being drawn. More frames per second in heavy scenes and above 60 FPS; turn it off only to compare or if something looks wrong.",
   "noteFpsTitle": "About frame rate",
   "noteFps": "Above 60 the game runs more frames per second without speeding up: movement, timers and sound keep their normal pace. If the PC cannot reach the limit, it simply shows fewer frames. The window always refreshes at the monitor's rate. Experimental: some actions timed in frames (quick-time events, combo windows) may feel different; go back to 60 if anything seems off. The heaviest scenes are CPU-bound.",
   "elf": "Game executable (SCUS_973.99)",

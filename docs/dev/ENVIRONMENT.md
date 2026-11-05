@@ -57,6 +57,8 @@ arrives as `GOW_SHARPEN` and the render scale as `PS2X_GS_HW_SCALE`.
 |---|---|
 | `PS2X_GS_WORKER=1` | VIF1/VU1/GIF on the GS worker thread. **Required for real-time audio and speed** |
 | `GOW_GS_FINISH_ASYNC=1` | GS FINISH does not block the EE |
+| `GOW_GS_EARLY_FINISH=0` | Turns off early FINISH (on by default with the worker): the frame's FINISH is then given when the GS reaches it ([`RENDERING.md`](RENDERING.md)) |
+| `GOW_LOADER_DIAG=1` | Adds the level loader (0x185A20), its disc reads and the 989snd command count to the `[gow-hang]` report |
 | `GOW_EE_WAIT=1` | The EE sleeps while waiting for the frame (changes game pacing) |
 | `PS2X_IOP_NATIVE`, `PS2X_IOP_NATIVE_STATS` | Native IOP module use and its hit statistics |
 | `PS2X_THREAD_PRIORITY` | Thread priority policy |

@@ -103,6 +103,8 @@
   "vsyncDesc": "Reduz cortes na imagem e sincroniza com a atualização do monitor.",
   "showFps": "Mostrar FPS",
   "showFpsDesc": "Exibe no canto a taxa de quadros real do jogo.",
+  "earlyFinish": "Early FINISH",
+  "earlyFinishDesc": "O jogo prepara o próximo quadro enquanto o atual ainda está sendo desenhado. Mais quadros por segundo em cenas pesadas e acima de 60 FPS; desligue só para comparar ou se algo parecer errado.",
   "noteFpsTitle": "Sobre a taxa de quadros",
   "noteFps": "Acima de 60 o jogo roda mais quadros por segundo sem acelerar: movimento, tempos e som continuam no ritmo normal. Se o PC não chegar ao limite, ele apenas mostra menos quadros. A janela sempre atualiza na taxa do monitor. Experimental: algumas ações contadas em quadros (QTEs, janelas de combo) podem mudar; volte para 60 se algo parecer estranho. As cenas mais pesadas dependem do processador.",
   "elf": "Executável do jogo (SCUS_973.99)",

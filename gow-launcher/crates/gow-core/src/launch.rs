@@ -288,6 +288,8 @@ pub fn build_environment(ctx: &LaunchContext<'_>, inherited: impl Fn(&str) -> Op
     keep_inherited(&mut plan, "GOW_PRESENT_MIN_INTERVAL_US", &(800_000 / fps).to_string());
     plan.flag("PC_VSYNC", settings.vsync, None);
     plan.flag("PC_SHOW_FPS", settings.show_fps, None);
+    // Early FINISH is on in the runtime by default; "0" turns it off.
+    plan.flag("GOW_GS_EARLY_FINISH", settings.early_finish, Some("0"));
 
     // Files. The runtime reads the disc from the ISO (without an extracted PART2.PAK there is no complete disc in the
     // directory); without a chosen ISO the first one next to the ELF is used.
@@ -433,6 +435,7 @@ mod tests {
             ("PC_WINDOW_FPS", "144"), // the test display's refresh rate
             ("GOW_AUDIO_DEVICE", "default"),
             ("GOW_CANCEL", "1"),
+            ("GOW_GS_EARLY_FINISH", "1"),
             ("GOW_GS_FINISH_ASYNC", "1"),
             ("GOW_PERF_DIAG", "1"),
             ("GOW_PERF_FRAME_PC", "0x001837B8"),
@@ -562,6 +565,14 @@ mod tests {
         // Without an ELF there is no installation to look in.
         fixture.settings.elf.clear();
         assert!(plan(&fixture, 2.0).remove.contains("GOW_TEXTURE_REPLACE"));
+    }
+
+    #[test]
+    fn early_finish_is_on_by_default_and_can_be_turned_off() {
+        let mut fixture = fixture();
+        assert_eq!(value(&plan(&fixture, 2.0), "GOW_GS_EARLY_FINISH"), Some("1"));
+        fixture.settings.early_finish = false;
+        assert_eq!(value(&plan(&fixture, 2.0), "GOW_GS_EARLY_FINISH"), Some("0"));
     }
 
     #[test]

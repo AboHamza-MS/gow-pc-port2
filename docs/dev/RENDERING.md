@@ -70,6 +70,19 @@ With `GOW_GS_FINISH_ASYNC=1` (launcher default) the flush and the `glFinish` are
 the EE sees the bit immediately, and the reads that need real data (EE VRAM reads, presentation, dumps) synchronize
 on their own through the queue. Without it, FINISH waits for the GPU.
 
+**Early FINISH** (on with the worker since 0.3.2; `GOW_GS_EARLY_FINISH=0` turns it off). God of War ends each frame's
+VIF1 chain with a PATH2 A+D write to FINISH and waits for its interrupt before it builds the next frame, so the worker sat
+idle between frames. `PS2Memory::deliverDma` scans every VIF1 packet for those writes (`countPath2Finish`, skipping UNPACK
+data, MPG code and DIRECTs cut by the packet end) and sets CSR.FINISH when the packet is queued, or when the worker starts
+it if another job is waiting, so the EE is at most one job ahead. The worker then queues markers on GIF path 0 for the
+stage (`GS::stageMarker`): how many of the job's PATH2 FINISH writes the game already received (the frontend skips those),
+0 at the job's end (a count the job did not use never swallows the next job's FINISH), and the display registers
+(DISPFB/DISPLAY/PMODE), which the game now writes through the queue so they take effect in drawing order, with a shadow
+copy for its read-modify-write. CSR is read and acknowledged without waiting for the worker. A/B on the ship's combat
+(same executable, 3 alternating pairs of 150 s): 90.2 → 105.5 FPS (+17%) and worst 5 s window 74.9 → 89.5 at the 120
+FPS limit; no difference at the 60 FPS limit on 4 cores of the test PC, where both stay at 60. The test dumps of VRAM
+(`GOW_PAD_CAPTURES`) can catch the next frame being drawn, because the EE is ahead; the presented window does not change.
+
 **Presentation.** `GSHwBackend::Present` composes the enabled CRTC circuits (1 over 2 or `BGCOLOR`, blended by `ALP`),
 cutting the picture to the game's 448-line TV area, and either publishes it as a shared GL texture
 (`GSSharedPresent`, the default; no readback) or reads it back for `GSHostPresentation::prepare` to upload.

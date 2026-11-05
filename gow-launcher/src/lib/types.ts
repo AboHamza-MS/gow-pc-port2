@@ -20,6 +20,7 @@ export interface Settings {
   fpsLimit: number;
   vsync: boolean;
   showFps: boolean;
+  earlyFinish: boolean;
   elf: string;
   iso: string;
   executable: string;

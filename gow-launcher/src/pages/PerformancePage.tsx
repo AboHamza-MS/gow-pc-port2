@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Activity, Cpu, Flame, Gauge, Hourglass, MemoryStick, RefreshCw, Rocket } from 'lucide-react';
+import { Activity, Cpu, Flame, Gauge, Hourglass, Layers, MemoryStick, RefreshCw, Rocket } from 'lucide-react';
 import { GroupTitle, Note, ProgressBar, SecondaryButton, Select, SettingRow, Switch, type Option } from '../components/ui';
 import { useApp } from '../state/app';
 
@@ -81,6 +81,9 @@ export function PerformancePage() {
       </SettingRow>
       <SettingRow icon={Activity} title={t('showFps')} description={t('showFpsDesc')}>
         <Switch label={t('showFps')} checked={settings.showFps} onChange={(showFps) => patch({ showFps })} />
+      </SettingRow>
+      <SettingRow icon={Layers} title={t('earlyFinish')} description={t('earlyFinishDesc')}>
+        <Switch label={t('earlyFinish')} checked={settings.earlyFinish} onChange={(earlyFinish) => patch({ earlyFinish })} />
       </SettingRow>
       {optimizing && <GroupTitle>{t('groupOptimization')}</GroupTitle>}
       <SettingRow hidden={!optimizing} icon={Cpu} title={t('optimizationEnabled')} description={t('optimizationEnabledDesc')}>

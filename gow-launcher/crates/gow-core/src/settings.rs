@@ -29,6 +29,8 @@ pub struct Settings {
     pub fps_limit: i32,
     pub vsync: bool,
     pub show_fps: bool,
+    /// Early FINISH (`GOW_GS_EARLY_FINISH`): the game prepares the next frame while the current one is still drawn.
+    pub early_finish: bool,
     pub elf: String,
     pub iso: String,
     pub executable: String,
@@ -93,6 +95,7 @@ impl Default for Settings {
             fps_limit: 60,
             vsync: false,
             show_fps: false,
+            early_finish: true,
             elf: String::new(),
             iso: String::new(),
             executable: String::new(),
