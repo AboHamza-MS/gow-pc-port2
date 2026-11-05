@@ -2116,6 +2116,66 @@ void register_ps2_gs_tests()
             t.IsTrue((mem.gs().csr & 0x2ull) == 0ull, "writing CSR bit1 should acknowledge FINISH");
         });
 
+        // GOW-Port: early FINISH (planning 4.1): the GS worker queues markers on GIF path 0 between a job's packets. Kind 2
+        // says how many PATH2 FINISH writes of the job the game already received (they must not raise CSR.FINISH again),
+        // and 0 at the job's end, so a count the job did not use never swallows the next job's FINISH; kind 1 applies the
+        // display registers once everything queued before them is drawn.
+        tc.Run("early FINISH stage markers swallow only the PATH2 FINISH writes already given and reset at job end", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+            GS gs;
+            gs.init(mem.getGSVRAM(), static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &mem.gs());
+            mem.gs().csr.store(0u);
+
+            const auto marker = [&gs](uint32_t kind, const uint64_t *payload, size_t words)
+            {
+                std::vector<uint8_t> packet(8u + 7u * sizeof(uint64_t), 0u);
+                std::memcpy(packet.data(), &kind, sizeof(kind));
+                std::memcpy(packet.data() + 8u, payload, words * sizeof(uint64_t));
+                gs.processGIFPacket(packet.data(), static_cast<uint32_t>(packet.size()), static_cast<GifPathId>(0));
+            };
+            const auto given = [&marker](uint32_t count)
+            {
+                const uint64_t value = count;
+                marker(2u, &value, 1u);
+            };
+            // PACKED GIF tag (NLOOP 1, EOP, NREG 1, A+D) and its A+D write to FINISH.
+            const auto finish = [&gs](GifPathId path)
+            {
+                std::vector<uint8_t> packet;
+                appendU64(packet, (1ull << 60) | (1ull << 15) | 1ull);
+                appendU64(packet, 0xEull);
+                appendU64(packet, 0ull);
+                appendU64(packet, 0x61ull);
+                gs.processGIFPacket(packet.data(), static_cast<uint32_t>(packet.size()), path);
+            };
+            const auto finishSet = [&mem] { return (mem.gs().csr.load() & 0x2ull) != 0ull; };
+            const auto ack = [&mem] { mem.gs().csr.fetch_and(~0x2ull); };
+
+            given(1u);
+            finish(GifPathId::Path2);
+            t.IsTrue(!finishSet(), "a PATH2 FINISH the game already received does not raise CSR.FINISH again");
+            finish(GifPathId::Path2);
+            t.IsTrue(finishSet(), "a PATH2 FINISH beyond the given count raises CSR.FINISH");
+            ack();
+
+            given(1u);
+            finish(GifPathId::Path3);
+            t.IsTrue(finishSet(), "only PATH2 FINISH writes are swallowed (the scan counts only those)");
+            ack();
+            given(0u); // the job ends with its count unused
+            finish(GifPathId::Path2);
+            t.IsTrue(finishSet(), "the end-of-job marker clears a count the job did not use");
+            ack();
+
+            const uint64_t regs[7] = {0x1u, 0x2u, 0x3u, 0x4u, 0x5u, 0x6u, 0x7u};
+            marker(1u, regs, 7u);
+            t.Equals(mem.gs().pmode, 0x1ull, "the display marker applies PMODE");
+            t.Equals(mem.gs().dispfb2, 0x5ull, "the display marker applies DISPFB2");
+            t.Equals(mem.gs().bgcolor, 0x7ull, "the display marker applies BGCOLOR");
+        });
+
         tc.Run("GIF IMAGE packet writes host-to-local data into GS VRAM", [](TestCase &t)
         {
             std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);

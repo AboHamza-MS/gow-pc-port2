@@ -3,6 +3,10 @@
 #   scripts\ab-perf.ps1 -ExeA <old gow-2005.exe> -ExeB <new gow-2005.exe> -Elf <SCUS_973.99> -EnvFile <gow-cli env output>
 #                       [-WorkDir <folder>] [-Pairs 4] [-Seconds 150] [-WarmupSeconds 30] [-PadScript '5:start,12:x,...']
 #                       [-Set 'NAME=VALUE', ...] [-SetA 'NAME=VALUE', ...] [-SetB 'NAME=VALUE', ...] [-OutDir <folder>]
+#                       [-Cores 4]
+#
+# -Cores N pins the game to the first N logical processors, to approximate a weaker PC (the target of most performance
+# work); 0 (the default) leaves the affinity alone.
 #
 # -SetA / -SetB apply to one variant only: with the same executable as A and B they compare a switch on and off (for example
 # -SetA 'GOW_FRAME_DIAG=0' to measure what the diagnostics cost).
@@ -31,7 +35,8 @@ param(
     [string[]]$Set = @(),
     [string[]]$SetA = @(),
     [string[]]$SetB = @(),
-    [string]$OutDir = ''
+    [string]$OutDir = '',
+    [int]$Cores = 0
 )
 $ErrorActionPreference = 'Stop'
 
@@ -102,6 +107,7 @@ function Invoke-Run([string]$label, [string]$exe, [int]$index) {
         Write-Host ("[{0}] run {1} ({2}): {3} s" -f (Get-Date -Format 'HH:mm:ss'), $index, $label, $Seconds)
         $process = Start-Process -FilePath $exe -ArgumentList ('"' + $Elf + '"') -WorkingDirectory $WorkDir -PassThru `
             -RedirectStandardError $log -RedirectStandardOutput ($log + '.out')
+        if ($Cores -gt 0) { $process.ProcessorAffinity = [IntPtr]([int64](1 -shl $Cores) - 1) }
     }
     finally {
         foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') }
@@ -131,6 +137,7 @@ function Measure-Log($run) {
     $p95 = New-Object System.Collections.Generic.List[double]
     $p99 = New-Object System.Collections.Generic.List[double]
     $over = 0.0
+    $over50 = 0.0
     $worker = $false
     foreach ($line in $lines) {
         if ($line -match '\[gs-worker\] VIF1/GIF processing on a worker thread') { $worker = $true }
@@ -146,6 +153,7 @@ function Measure-Log($run) {
             $a = Read-Number $line 'p95_ms'; if ($null -ne $a) { $p95.Add($a) }
             $b = Read-Number $line 'p99_ms'; if ($null -ne $b) { $p99.Add($b) }
             $o = Read-Number $line 'over16_7ms'; if ($null -ne $o) { $over += $o }
+            $h = Read-Number $line '>50ms'; if ($null -ne $h) { $over50 += $h }
         }
     }
     $mean = { param($list) if ($list.Count) { ($list | Measure-Object -Average).Average } else { [double]::NaN } }
@@ -157,6 +165,7 @@ function Measure-Log($run) {
         P95Mean = & $mean $p95
         P99Worst = if ($p99.Count) { ($p99 | Measure-Object -Maximum).Maximum } else { [double]::NaN }
         FramesOver16 = $over
+        FramesOver50 = $over50
         VuMsMean = & $mean $vu
         EeMsMean = & $mean $ee
         Log = $run.Log
@@ -188,7 +197,7 @@ Write-Host 'Per variant (mean of its runs):'
 foreach ($label in @('A', 'B')) {
     $runs = @($results | Where-Object { $_.Label -eq $label })
     $avg = { param($name) ($runs | ForEach-Object { $_.$name } | Where-Object { -not [double]::IsNaN($_) } | Measure-Object -Average).Average }
-    Write-Host ("  {0}: fps {1:N2}  worst window {2:N2}  p95 {3:N2} ms  frames over 16.7 ms {4:N0}  ({5} runs)" -f $label, (& $avg 'FpsMean'), (& $avg 'FpsWorst'), (& $avg 'P95Mean'), (& $avg 'FramesOver16'), $runs.Count)
+    Write-Host ("  {0}: fps {1:N2}  worst window {2:N2}  p95 {3:N2} ms  frames over 16.7 ms {4:N0}  over 50 ms {5:N1}  ({6} runs)" -f $label, (& $avg 'FpsMean'), (& $avg 'FpsWorst'), (& $avg 'P95Mean'), (& $avg 'FramesOver16'), (& $avg 'FramesOver50'), $runs.Count)
 }
 $wins = 0
 for ($pair = 0; $pair -lt $Pairs; $pair++) {

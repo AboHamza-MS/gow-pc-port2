@@ -602,6 +602,14 @@ uint64_t gowGameFlipCount()
     return g_gowGameFlips.load(std::memory_order_acquire);
 }
 
+// GOW-Port: extra [gow-hang] lines from a diagnostic of the game overrides (GOW_LOADER_DIAG: src/game/gow_diag_io.cpp).
+static std::atomic<void (*)(PS2Runtime &)> g_gowHangReportExtra{nullptr};
+
+void gowSetHangReportExtra(void (*report)(PS2Runtime &))
+{
+    g_gowHangReportExtra.store(report, std::memory_order_release);
+}
+
 // GOW-Port: what the EE is waiting for, printed by the hang watchdog before its sampling burst. Reads: the game's "GS done"
 // flag (0x29C7D0: 1 = waiting for the GS FINISH interrupt, 2 = done), the GS status and interrupt mask, the VBlank counter and
 // the guest threads of the kernel snapshot. A frame wait with the flag at 1 and CSR.FINISH (bit 1) clear means the FINISH was
@@ -644,6 +652,8 @@ static void gowHangReport(PS2Runtime &runtime, uint64_t vsyncStep, uint64_t fram
     for (const EeEventFlagSnapshot &eventFlag : snapshot.eventFlags)
         if (eventFlag.waiters != 0u)
             std::fprintf(stderr, "[gow-hang] event flag %d bits=%08x waiters=%u\n", eventFlag.id, eventFlag.bits, eventFlag.waiters);
+    if (void (*extra)(PS2Runtime &) = g_gowHangReportExtra.load(std::memory_order_acquire))
+        extra(runtime);
 }
 
 // GOW-Port: ps2_runtime.cpp (loadELF), after the Waffle overrides (applyMatching): each wrapper calls the
