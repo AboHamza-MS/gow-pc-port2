@@ -679,7 +679,12 @@ void gowIntegrationInstall(PS2Runtime &runtime, const std::string &elfPath)
         }
     }
     g_gameFrameLimit = envLong("PC_GAME_FPS", 60, 30, 60) <= 30 ? 30 : 60;
-    g_osdShow = {envFlag("PC_SHOW_FPS", false), envFlag("PC_SHOW_GPU", false), envFlag("PC_SHOW_CPU", false), envFlag("PC_SHOW_RAM", false)};
+    // GOW-Port: a part the launcher does not mention follows PC_SHOW_FPS, which used to show the whole OSD: an older launcher
+    // (FPS switch only) keeps GPU, CPU and RAM. The current launcher sends 0 or 1 for each part.
+    {
+        const bool fps = envFlag("PC_SHOW_FPS", false);
+        g_osdShow = {fps, envFlag("PC_SHOW_GPU", fps), envFlag("PC_SHOW_CPU", fps), envFlag("PC_SHOW_RAM", fps)};
+    }
     if ((g_gameFrameLimit == 30 || g_osdShow.any()) && runtime.hasFunction(kGameFrameFunction))
         if (PS2Runtime::RecompiledFunction actual = runtime.lookupFunction(kGameFrameFunction))
         {

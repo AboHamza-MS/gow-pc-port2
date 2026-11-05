@@ -304,9 +304,10 @@ pub fn build_environment(ctx: &LaunchContext<'_>, inherited: impl Fn(&str) -> Op
     keep_inherited(&mut plan, "GOW_PRESENT_MIN_INTERVAL_US", &(800_000 / fps).to_string());
     plan.flag("PC_VSYNC", settings.vsync, None);
     plan.flag("PC_SHOW_FPS", settings.show_fps, None);
-    plan.flag("PC_SHOW_GPU", settings.show_gpu, None);
-    plan.flag("PC_SHOW_CPU", settings.show_cpu, None);
-    plan.flag("PC_SHOW_RAM", settings.show_ram, None);
+    // Each part is sent as 0 or 1: the runtime makes an unset part follow PC_SHOW_FPS (what older launchers relied on).
+    plan.flag("PC_SHOW_GPU", settings.show_gpu, Some("0"));
+    plan.flag("PC_SHOW_CPU", settings.show_cpu, Some("0"));
+    plan.flag("PC_SHOW_RAM", settings.show_ram, Some("0"));
     // Early FINISH is on in the runtime by default; "0" turns it off.
     plan.flag("GOW_GS_EARLY_FINISH", settings.early_finish, Some("0"));
 
@@ -447,6 +448,9 @@ mod tests {
             ("PC_PANEL", "0"),
             ("PC_RA_ENABLED", "0"),
             ("PC_SCREEN", "fullscreen"),
+            ("PC_SHOW_CPU", "0"),
+            ("PC_SHOW_GPU", "0"),
+            ("PC_SHOW_RAM", "0"),
             ("PC_SHARPNESS", "0.40"),
             ("PC_TITLE", "God of War"),
             ("PC_WIDESCREEN", "16:9"),
@@ -484,9 +488,6 @@ mod tests {
             "GOW_FAST_BOOT",
             "PC_VSYNC",
             "PC_SHOW_FPS",
-            "PC_SHOW_GPU",
-            "PC_SHOW_CPU",
-            "PC_SHOW_RAM",
             "PC_CHEATS",
             "GOW_ISO",
             "PC_PAD_FACE_MAP",
@@ -600,7 +601,9 @@ mod tests {
         fixture.settings.show_ram = true;
         let plan = plan(&fixture, 2.0);
         assert_eq!((value(&plan, "PC_SHOW_CPU"), value(&plan, "PC_SHOW_RAM")), (Some("1"), Some("1")));
-        assert!(plan.remove.contains("PC_SHOW_FPS") && plan.remove.contains("PC_SHOW_GPU"));
+        assert!(plan.remove.contains("PC_SHOW_FPS"));
+        // A part turned off is sent as 0, so the runtime does not make it follow PC_SHOW_FPS.
+        assert_eq!(value(&plan, "PC_SHOW_GPU"), Some("0"));
     }
 
     #[test]
