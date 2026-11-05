@@ -210,8 +210,11 @@ namespace
     std::atomic<uint64_t> g_gameFrames{0};
     int g_gameFrameLimit = 60;
 
+    std::atomic<R5900Context *> g_gameFrameContext{nullptr}; // GOW_STALL_DIAG: the main thread's context, read live
+
     void gameFrameHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        g_gameFrameContext.store(ctx, std::memory_order_relaxed);
         if (ctx->pc == kGameFrameFunction)
         {
             // GOW-Port: limit the game's output, not the window's repeats.
@@ -711,6 +714,79 @@ void gowIntegrationInstall(PS2Runtime &runtime, const std::string &elfPath)
                                 gowSamplingBurst(name, 3.0, 1000);
                             }
                             last = now;
+                        }
+                    })
+            .detach();
+    // GOW-Port: GOW_STALL_DIAG=1 (diagnostics): while the game has not entered its frame function for more than 40 ms, the
+    // running guest thread's pc/ra every 5 ms; when the frame comes, one [gow-stall] line with the gap, the game's display
+    // swaps and VBlanks during it and the most frequent places, to find what a short pause waits for.
+    if (g_gameFrameFunction && envFlag("GOW_STALL_DIAG", false))
+        std::thread([rt = &runtime]
+                    {
+                        using Clock = std::chrono::steady_clock;
+                        uint64_t lastFrames = g_gameFrames.load(std::memory_order_relaxed);
+                        Clock::time_point lastChange = Clock::now();
+                        uint64_t flipsAtFrame = gowGameFlipCount();
+                        uint64_t ticksAtFrame = rt->memory().gs().vsyncTick.load(std::memory_order_relaxed);
+                        std::vector<std::pair<uint64_t, unsigned>> places; // (pc << 32 | ra, samples)
+                        for (;;)
+                        {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                            const uint64_t frames = g_gameFrames.load(std::memory_order_relaxed);
+                            const auto now = Clock::now();
+                            if (frames != lastFrames)
+                            {
+                                const double gapMs = std::chrono::duration<double, std::milli>(now - lastChange).count();
+                                const uint64_t flips = gowGameFlipCount();
+                                const uint64_t ticks = rt->memory().gs().vsyncTick.load(std::memory_order_relaxed);
+                                if (!places.empty() && gapMs > 50.0)
+                                {
+                                    std::sort(places.begin(), places.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
+                                    std::string top;
+                                    for (size_t i = 0; i < places.size() && i < 6; ++i)
+                                    {
+                                        char item[48];
+                                        std::snprintf(item, sizeof(item), " %08x/%08x x%u", static_cast<uint32_t>(places[i].first >> 32),
+                                                      static_cast<uint32_t>(places[i].first), places[i].second);
+                                        top += item;
+                                    }
+                                    std::fprintf(stderr, "[gow-stall] gap=%.0f ms flips=%llu vblanks=%llu pc/ra:%s\n", gapMs,
+                                                 static_cast<unsigned long long>(flips - flipsAtFrame),
+                                                 static_cast<unsigned long long>(ticks - ticksAtFrame), top.c_str());
+                                }
+                                places.clear();
+                                lastFrames = frames;
+                                lastChange = now;
+                                flipsAtFrame = flips;
+                                ticksAtFrame = ticks;
+                                continue;
+                            }
+                            if (now - lastChange < std::chrono::milliseconds(40))
+                                continue;
+                            if (places.empty())
+                                if (const uint8_t *rdram = rt->memory().getRDRAM())
+                                {
+                                    // the game's frame pacing words: target rate, VBlanks per frame, VBlank count, flags
+                                    uint32_t w[6];
+                                    for (int i = 0; i < 6; ++i)
+                                        std::memcpy(&w[i], rdram + (0x0029C640u + 4u * i), 4u);
+                                    uint32_t count = 0u;
+                                    std::memcpy(&count, rdram + 0x0029C7D4u, 4u);
+                                    std::fprintf(stderr, "[gow-stall] at %.0f ms: 29C640..654=%u %u %u %u %u %u vblank_count=%u\n",
+                                                 std::chrono::duration<double, std::milli>(now - lastChange).count(), w[0], w[1], w[2], w[3],
+                                                 w[4], w[5], count);
+                                }
+                            // the live pc/ra of the main thread's context (racy reads: a diagnostic, not a value to act on)
+                            if (const R5900Context *ctx = g_gameFrameContext.load(std::memory_order_relaxed))
+                            {
+                                const uint64_t key = (uint64_t(*reinterpret_cast<const volatile uint32_t *>(&ctx->pc)) << 32) |
+                                                     GPR_U32(ctx, 31);
+                                auto it = std::find_if(places.begin(), places.end(), [key](const auto &p) { return p.first == key; });
+                                if (it == places.end())
+                                    places.emplace_back(key, 1u);
+                                else
+                                    ++it->second;
+                            }
                         }
                     })
             .detach();

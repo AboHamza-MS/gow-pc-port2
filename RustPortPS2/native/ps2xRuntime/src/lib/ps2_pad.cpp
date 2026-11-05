@@ -18,7 +18,7 @@
 #include <vector>
 
 #ifdef _WIN32
-bool ps2PadWindowsRumble(uint8_t large, bool small); // ps2_pad_rumble_win.cpp
+bool ps2PadWindowsRumble(uint8_t large, bool small); // ps2_pad_rumble_win.cpp: hands the state to the rumble thread
 #endif
 
 namespace

@@ -83,8 +83,6 @@ Last reviewed: October 2026, against the code in this repository.
   5 s that only the clang build had (writing a log line cost the game 50-100 ms) is fixed: the log now goes through its
   own writer thread (`GOW_LOG_DIRECT=1` restores the old path). An installation without Visual Studio on a clean PC has
   not been verified yet. `install.cmd -Compiler msvc` keeps the previous build.
-- **Pause on every hit:** in combat, each hit given or taken stops the picture for ~100 ms (with or without early FINISH,
-  at 60 and 120 FPS). Whether the PS2 shows the same pause is not established yet.
 - **Coverage of areas:** no systematic play-through validation exists. Zones beyond the ones tested while developing the
   port may still show visual or audio defects.
 

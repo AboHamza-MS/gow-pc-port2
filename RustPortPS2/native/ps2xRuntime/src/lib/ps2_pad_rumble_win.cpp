@@ -1,6 +1,7 @@
 // GOW-Port: Windows gamepad rumble (raylib's GLFW backend has none): XInput pads, and Sony DualShock 4 / DualSense
 // pads through their HID output report (they are not XInput devices unless Steam or DS4Windows wraps them). The DLLs
 // are loaded at run time, so the runner needs no import libraries; without them (or without a pad) rumble is off.
+// The devices are driven from a thread of their own (see ps2PadWindowsRumble): the game only records the motor state.
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -9,8 +10,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <condition_variable>
 #include <cstring>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -258,10 +262,47 @@ bool sonyRumble(uint8_t large, uint8_t small)
 }
 } // namespace
 
+// GOW-Port: the game asks for rumble on every hit given or taken (scePad2 SetActParam from 0x17C370). Applying it there,
+// on the EE thread, cost ~100 ms per hit without a pad (XInputGetState on the four empty slots and a new HID device scan
+// for a Sony pad, both slow), and the picture froze on each hit. The latest state is now handed to a thread that applies
+// it, so the game never waits for a device; a burst of changes collapses into the last one.
 bool ps2PadWindowsRumble(uint8_t large, bool small)
 {
-    const bool xinput = xinputRumble(static_cast<uint16_t>(large * 257u), small ? 0xFFFFu : 0u);
-    const bool sony = sonyRumble(large, small ? 0xFFu : 0u);
-    return xinput || sony;
+    struct Worker
+    {
+        std::mutex mutex;
+        std::condition_variable wake;
+        uint8_t large = 0;
+        bool small = false;
+        bool pending = false;
+    };
+    static Worker *const worker = [] {
+        auto *w = new Worker; // lives for the process, like the thread
+        std::thread([w] {
+            for (;;)
+            {
+                uint8_t wantLarge;
+                bool wantSmall;
+                {
+                    std::unique_lock<std::mutex> lock(w->mutex);
+                    w->wake.wait(lock, [w] { return w->pending; });
+                    w->pending = false;
+                    wantLarge = w->large;
+                    wantSmall = w->small;
+                }
+                xinputRumble(static_cast<uint16_t>(wantLarge * 257u), wantSmall ? 0xFFFFu : 0u);
+                sonyRumble(wantLarge, wantSmall ? 0xFFu : 0u);
+            }
+        }).detach();
+        return w;
+    }();
+    {
+        std::lock_guard<std::mutex> lock(worker->mutex);
+        worker->large = large;
+        worker->small = small;
+        worker->pending = true;
+    }
+    worker->wake.notify_one();
+    return true;
 }
 #endif
