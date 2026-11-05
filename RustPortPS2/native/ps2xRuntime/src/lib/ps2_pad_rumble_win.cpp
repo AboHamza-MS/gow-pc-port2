@@ -308,17 +308,20 @@ bool ps2PadWindowsRumble(uint8_t large, bool small)
 #elif defined(__linux__)
 // GOW-Port: Linux gamepad rumble through kernel evdev force-feedback (FF_RUMBLE on /dev/input/event*).
 // Covers Xbox (xpad), Sony DualShock 4 / DualSense (hid-playstation / hid-sony), Nintendo, 8BitDo and Steam Virtual
-// Gamepads without external libraries.
+// Gamepads without external libraries. Like on Windows, the devices are driven from a thread of their own.
 #include <chrono>
 #include <cctype>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <mutex>
 #include <string>
 #include <sys/ioctl.h>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -414,9 +417,8 @@ bool sendLinuxRumble(LinuxPad &pad, uint16_t strong, uint16_t weak, uint16_t len
     play.value = active ? 1 : 0;
     return write(pad.fd, &play, sizeof(play)) == static_cast<ssize_t>(sizeof(play));
 }
-} // namespace
-
-bool ps2PadLinuxRumble(uint8_t large, bool small)
+// Runs on the rumble thread only (see ps2PadLinuxRumble), so its statics need no lock.
+bool applyLinuxRumble(uint8_t large, bool small)
 {
     static std::vector<LinuxPad> pads;
     static std::chrono::steady_clock::time_point lastScan{};
@@ -474,5 +476,48 @@ bool ps2PadLinuxRumble(uint8_t large, bool small)
         }
     }
     return any;
+}
+} // namespace
+
+// GOW-Port: the game asks for rumble on every hit (scePad2 SetActParam from 0x17C370) on the EE thread. Opening and
+// probing every /dev/input/event* there (every 2 s while no rumble pad is found) or a slow driver write would stall the
+// frame, as the Windows device calls did (aa9bc38), so the latest state is handed to a rumble thread that applies it.
+bool ps2PadLinuxRumble(uint8_t large, bool small)
+{
+    struct Worker
+    {
+        std::mutex mutex;
+        std::condition_variable wake;
+        uint8_t large = 0;
+        bool small = false;
+        bool pending = false;
+    };
+    static Worker *const worker = [] {
+        auto *w = new Worker; // lives for the process, like the thread
+        std::thread([w] {
+            for (;;)
+            {
+                uint8_t wantLarge;
+                bool wantSmall;
+                {
+                    std::unique_lock<std::mutex> lock(w->mutex);
+                    w->wake.wait(lock, [w] { return w->pending; });
+                    w->pending = false;
+                    wantLarge = w->large;
+                    wantSmall = w->small;
+                }
+                applyLinuxRumble(wantLarge, wantSmall);
+            }
+        }).detach();
+        return w;
+    }();
+    {
+        std::lock_guard<std::mutex> lock(worker->mutex);
+        worker->large = large;
+        worker->small = small;
+        worker->pending = true;
+    }
+    worker->wake.notify_one();
+    return true;
 }
 #endif
