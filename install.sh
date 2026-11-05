@@ -2,14 +2,15 @@
 # PC Port - installer for Linux.
 #
 #   ./install.sh [path/to/God of War.iso (or .chd)] [--destination DIR] [--no-optimize] [--optimize [seconds]] [--jobs N]
-#                [--normal-priority] [--install-deps] [--check-deps] [--recomp-exe FILE] [--tools-exe FILE]
+#                [--compiler g++|clang] [--normal-priority] [--install-deps] [--check-deps] [--recomp-exe FILE] [--tools-exe FILE]
 #
 #   --destination    where game/, build/, build-gen/ and vu1_captures/ go (default: next to this script). The launcher's
 #                    wizard uses it; the generated C++ still lands inside RustPortPS2/native.
 #   --jobs N         build processes (default: cores minus a reserve of 2, 1 or 0, at most one per 2 GB of RAM).
+#   --compiler       C++ compiler: g++ (default) or clang (clang++). Also settable via CXX=clang++ or GOW_COMPILER=clang.
 #   --normal-priority  do not lower the CPU and I/O priority of the long steps (nice, ionice); by default they run lowered so the
 #                    PC stays usable while the game builds.
-#   --install-deps   install the missing system packages (cmake, ninja, g++, git and the GL/X11/ALSA development files)
+#   --install-deps   install the missing system packages (cmake, ninja, g++/clang, git and the GL/X11/ALSA development files)
 #                    with the distribution's package manager, through sudo. Without it the script asks, when it runs
 #                    in a terminal, and otherwise prints the command.
 #   --check-deps     only report what is missing, as "[missing] ...", "[packages] ..." and "[install-command] ..." lines
@@ -57,9 +58,19 @@ warn() { printf '\033[1;33m[warning]\033[0m %s\n' "$*"; }
 error() { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # --- System packages ----------------------------------------------------------------------------------------------
-# GOW-Port: what the build needs, as one list the script and the launcher (--check-deps) share. The programs are looked
-# up in PATH and the libraries with pkg-config; PACKAGE_FOR maps each one to the package of the three families we know.
-CHECKS="cmake ninja g++ git pkg-config gl x11 xrandr xinerama xcursor xi xkbcommon wayland-client alsa"
+# GOW-Port: C/C++ compiler selection. Defaults to g++/gcc; set CXX=clang++ (or pass --compiler clang) to build with clang.
+# Switching the default to clang later only requires changing the fallback below.
+set_compiler() {   # set_compiler NAME
+    case "$1" in
+        clang|clang++|*/clang++) CC_BIN="${CC:-clang}"; CXX_BIN="clang++"; COMPILER_CHECK="clang++" ;;
+        gcc|g++|*/g++)           CC_BIN="${CC:-gcc}";   CXX_BIN="g++";     COMPILER_CHECK="g++" ;;
+        *) error "Unknown compiler '$1' (expected g++ or clang)" ;;
+    esac
+    # GOW-Port: what the build needs, as one list the script and the launcher (--check-deps) share. The programs are looked
+    # up in PATH and the libraries with pkg-config; PACKAGE_FOR maps each one to the package of the three families we know.
+    CHECKS="cmake ninja $COMPILER_CHECK git pkg-config gl x11 xrandr xinerama xcursor xi xkbcommon wayland-client alsa"
+}
+set_compiler "${GOW_COMPILER:-${CXX:-g++}}"
 OS_RELEASE="${GOW_OS_RELEASE:-/etc/os-release}"
 
 distro_family() {   # arch | debian | fedora | unknown
@@ -81,6 +92,7 @@ package_for() {   # package_for FAMILY CHECK -> package name
     case "$1:$2" in
         debian:ninja) echo ninja-build ;;           fedora:ninja) echo ninja-build ;;       arch:ninja) echo ninja ;;
         debian:g++) echo build-essential ;;         fedora:g++) echo gcc-c++ ;;             arch:g++) echo base-devel ;;
+        debian:clang++) echo clang ;;               fedora:clang++) echo clang ;;           arch:clang++) echo clang ;;
         debian:pkg-config) echo pkg-config ;;       fedora:pkg-config) echo pkgconf-pkg-config ;; arch:pkg-config) echo pkgconf ;;
         debian:gl) echo libgl-dev ;;                fedora:gl) echo mesa-libGL-devel ;;     arch:gl) echo libglvnd ;;
         debian:x11) echo libx11-dev ;;              fedora:x11) echo libX11-devel ;;        arch:x11) echo libx11 ;;
@@ -103,7 +115,7 @@ find_missing() {   # find_missing FAMILY
     command -v pkg-config >/dev/null 2>&1 || have_pkg_config=0
     for key in $CHECKS; do
         case "$key" in
-            cmake|ninja|g++|git|pkg-config) ! command -v "$key" >/dev/null 2>&1 || continue ;;
+            cmake|ninja|g++|clang++|git|pkg-config) ! command -v "$key" >/dev/null 2>&1 || continue ;;
             *) [ "$have_pkg_config" = 1 ] && pkg-config --exists "$key" 2>/dev/null && continue ;;
         esac
         MISSING_CHECKS+=("$key")
@@ -228,6 +240,7 @@ while [ $# -gt 0 ]; do
         --no-optimize) OPTIMIZE="no" ;;
         --optimize) OPTIMIZE="yes"; if [[ "${2:-}" =~ ^[0-9]+$ ]]; then SECONDS_TO_RUN="$2"; shift; fi ;;
         --jobs) JOBS="${2:?--jobs needs a number}"; shift ;;
+        --compiler) set_compiler "${2:?--compiler needs g++ or clang}"; shift ;;
         --normal-priority) LOW_PRIORITY=0 ;;
         --destination) DEST="${2:?--destination needs a folder}"; shift ;;
         --install-deps) DEPENDENCIES="yes" ;;
@@ -358,6 +371,15 @@ configure() {
             rm -rf "$BUILD/CMakeCache.txt" "$BUILD/CMakeFiles"
         fi
     fi
+    # GOW-Port: drop the cache when switching compilers (e.g. g++ -> clang++), keeping _deps.
+    if [ -f "$BUILD/CMakeCache.txt" ]; then
+        local cached_cxx
+        cached_cxx="$(sed -n 's/^CMAKE_CXX_COMPILER:[A-Z]*=//p' "$BUILD/CMakeCache.txt" | head -n1)"
+        if [ -n "$cached_cxx" ] && [ "$(basename "$cached_cxx")" != "$(basename "$CXX_BIN")" ]; then
+            warn "The build folder was configured with another compiler ($cached_cxx): reconfiguring for $CXX_BIN."
+            rm -rf "$BUILD/CMakeCache.txt" "$BUILD/CMakeFiles"
+        fi
+    fi
     local extra=()
     if compgen -G "$VU1/*.bin" >/dev/null; then
         extra+=("-DPS2X_VU1_MICROCODE_DIR=$VU1" "-DPS2X_VU1_GENERATOR_SOURCE=$NATIVE/tools/vu1/generate_vu1.cpp"
@@ -375,6 +397,7 @@ configure() {
         fi
     fi
     cmake -S "$NATIVE" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER="$CC_BIN" -DCMAKE_CXX_COMPILER="$CXX_BIN" \
         -DPS2X_ENABLE_RUNTIME_LOGS=OFF -DPS2X_ENABLE_AGRESSIVE_LOGS=OFF -DPS2X_ENABLE_IOP_RPC_TRACE=OFF \
         -DPS2X_BUILD_TEST=OFF -DPS2X_RUNNER_UNITY_BUILD_BATCH_SIZE=8 \
         -DPS2X_LTO_JOBS="$LTO_JOBS" \

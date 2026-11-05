@@ -176,7 +176,7 @@ install.cmd -Destination "D:\GodOfWar"               # keep the game data and th
    ```
 
    The script looks the programs up in `PATH` and the libraries with `pkg-config` (GL, X11, Xrandr, Xinerama, Xcursor,
-   Xi, xkbcommon, Wayland, ALSA). Rust is only needed if you do not have prebuilt tools in `bin/` (see below). Python
+   Xi, xkbcommon, Wayland, ALSA). By default it uses `g++`; to compile with `clang++` instead, install `clang` (`sudo pacman -S clang`, `sudo apt install clang`, or `sudo dnf install clang`) and pass `--compiler clang` (or set `CC=clang CXX=clang++` / `GOW_COMPILER=clang`). Rust is only needed if you do not have prebuilt tools in `bin/` (see below). Python
    is **not** needed.
 
    Before building, it also checks the free space of the destination (about 20 GB; only a warning once the disc is
@@ -198,6 +198,7 @@ install.cmd -Destination "D:\GodOfWar"               # keep the game data and th
 | `--no-optimize` | Skip the optimization pass |
 | `--optimize [seconds]` | Force it, optionally for a different duration (default 240 s) |
 | `--jobs N` | Parallel compiler processes. Default: the cores minus a reserve (2 from 8 cores, 1 from 4 to 7, none below), at most one per 2 GB of RAM. An explicit value skips the reserve |
+| `--compiler g++\|clang` | C++ compiler (`g++` by default; `clang` uses `clang`/`clang++`, also selectable via `CXX=clang++` or `GOW_COMPILER=clang`) |
 | `--normal-priority` | Do not lower the CPU and I/O priority of the long steps (by default they run under `nice -n 10`, and `ionice -c 3` when it works) |
 | `--recomp-exe FILE` | Use a prebuilt `ps2_recomp` |
 | `--tools-exe FILE` | Use a prebuilt `ps2-tools` |
