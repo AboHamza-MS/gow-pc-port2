@@ -186,7 +186,7 @@ ensure_dependencies() {
 
 # --- Disk and memory ----------------------------------------------------------------------------------------------
 free_gb() {   # free_gb DIRECTORY -> whole GB available to the user, empty if it cannot be read
-    df -Pk "$1" 2>/dev/null | awk 'NR == 2 {print int($4 / 1048576)}'
+    { df -Pk "$1" 2>/dev/null || true; } | awk 'NR == 2 {print int($4 / 1048576)}'
 }
 
 # Errors (exit) when the machine cannot finish the installation, warns when it can but badly. GOW_SKIP_RESOURCE_CHECK=1 skips it.
@@ -390,9 +390,9 @@ configure() {
         # the list changes, so an unchanged list does not rebuild the VU1 code.
         local heads_target merged
         heads_target="$(dirname "$VU1")/vu1n_heads.txt"
-        merged="$(cat "$PROFILE/vu1-heads.list" "$VU1/vu1n_heads_seen.txt" 2>/dev/null | tr -d '\r' | tr 'A-F' 'a-f' \
-            | grep -E '^[0-9a-f]+$' | sed 's/^0*\([0-9a-f]\)/\1/' | sort -u)"
-        if [ -n "$merged" ] && [ "$(cat "$heads_target" 2>/dev/null)" != "$merged" ]; then
+        merged="$({ cat "$PROFILE/vu1-heads.list" "$VU1/vu1n_heads_seen.txt" 2>/dev/null || true; } | tr -d '\r' | tr 'A-F' 'a-f' \
+            | { grep -E '^[0-9a-f]+$' || true; } | sed 's/^0*\([0-9a-f]\)/\1/' | sort -u)"
+        if [ -n "$merged" ] && [ "$(cat "$heads_target" 2>/dev/null || true)" != "$merged" ]; then
             printf '%s\n' "$merged" > "$heads_target"
         fi
     fi
@@ -439,7 +439,7 @@ if [ "$OPTIMIZE" = "yes" ] || { [ "$OPTIMIZE" = "auto" ] && ! compgen -G "$VU1/*
         PC_CHEATS=god_mode \
         GOW_PAD_SCRIPT="5:start,12:x,20:x,28:x,40:square,41:square,42:square,44:triangle,48:lup*3,52:x,55:square,56:triangle,60:circle,64:r1,70:lleft*2,74:square,76:square,80:triangle,90:lup*4,96:x,100:square,104:l1,110:lright*2,120:square,125:triangle,140:lup*5,150:square,160:triangle,180:lup*5,200:square" \
         timeout "$SECONDS_TO_RUN" "$BUILD/ps2xRuntime/gow-2005" "$GAME/SCUS_973.99" > "$GEN/optimize.log" 2>&1) || true
-    echo "VU1: $(ls "$VU1"/*.bin 2>/dev/null | wc -l) micro-memories; IOP: $(ls "$GEN"/iop_mods/*.bin 2>/dev/null | wc -l) modules."
+    echo "VU1: $({ ls "$VU1"/*.bin 2>/dev/null || true; } | wc -l) micro-memories; IOP: $({ ls "$GEN"/iop_mods/*.bin 2>/dev/null || true; } | wc -l) modules."
     if compgen -G "$GEN/iop_mods/*.bin" >/dev/null; then
         low_priority "$TOOLS" iop-gen "$GEN/iop_mods" "$NATIVE/ps2xIOP/src/native"
     fi
