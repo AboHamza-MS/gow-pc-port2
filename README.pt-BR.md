@@ -68,7 +68,7 @@ nativas das bibliotecas que ele chama.
 - **Widescreen (Hor+)** - 16:9, 16:10, 21:9 (experimental) e 32:9 (muito experimental: HUD e menus esticados) pelo patch do PCSX2, com chave; desligado mostra o 4:3 original.
 - **Vídeos** - MPEG-2 decodificado nativamente, com som, incluindo as versões widescreen do próprio jogo.
 - **Controles** - teclado e mouse remapeáveis, qualquer controle, layout PS2 ou moderno, troca por botão, vibração no
-  Windows.
+  Windows e no Linux.
 - **Qualidade de vida** - menu de cheats (**F2**, nove cheats), mira travada (**Alt**), combate ágil, contador de FPS,
   tela cheia.
 - **Saves** - cartão `Mcd001.ps2` compatível com o PCSX2, nos dois sentidos.
@@ -88,7 +88,7 @@ nativas das bibliotecas que ele chama.
 > **O Linux é experimental.** O caminho Linux existe no repositório - `install.sh`, o caminho de renderização
 > GLFW/GL, `run_gow.sh`, o empacotamento `.deb`/AppImage - mas não está validado no mesmo nível: nenhum job de CI
 > compila ou testa o runtime em plataforma alguma, o assistente do launcher usa o `install.sh` no Linux mas nunca rodou
-> em uma máquina Linux de verdade, a vibração não existe e builds recentes no Linux não foram medidos. Trate
+> em uma máquina Linux de verdade e builds recentes no Linux não foram medidos. Trate
 > como preparado, não como suportado. [`docs/STATUS.md`](docs/STATUS.md) tem os detalhes, área por área.
 
 ## Índice
