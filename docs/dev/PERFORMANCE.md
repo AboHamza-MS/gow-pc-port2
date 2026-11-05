@@ -7,7 +7,7 @@ that two measurements can actually be compared.
 
 | Subsystem | Thread | Notes |
 |---|---|---|
-| EE (recompiled game code) | main | Cheap per instruction, but it waits on the VU1 and the GS |
+| EE (recompiled game code) | main | Cheap per instruction; with early FINISH it prepares frame *N+1* while the worker draws *N* |
 | VU1 | GS worker | **The usual bottleneck.** Native blocks where the microcode was captured, interpreter elsewhere |
 | GS (VIF1 unpack, GIF, rasterization) | GS worker + GPU | GPU-bound at high internal resolution |
 | Presentation | main | Scaling shader, FXAA, vsync |
@@ -62,6 +62,23 @@ cargo run -p gow-cli -- env > env.txt     # from gow-launcher/: the environment 
 scripts\ab-perf.ps1 -ExeA old\gow-2005.exe -ExeB new\gow-2005.exe -Elf <game>\SCUS_973.99 -EnvFile env.txt `
     -Pairs 4 -Seconds 150 -WarmupSeconds 30 -PadScript '5:start,12:x,18:x,24:x,30:x,36:x'
 ```
+
+`-Cores 4` pins the game to the first four logical processors, a rough stand-in for a weaker PC (the target of most
+of this work); the summary also counts frames over 50 ms (`GOW_FRAMES_HITCH_LOG=1`). Comparing a switch on the same
+executable works with `-SetA`/`-SetB`. Early FINISH, measured that way on the ship's combat (3 pairs of 150 s, god mode,
+scripted attacks):
+
+| Limit | Off | On |
+|---|---|---|
+| 120 FPS, all cores | 90.2 FPS, worst window 74.9, p95 13.5 ms | 105.5 FPS, worst window 89.5, p95 11.3 ms |
+| 60 FPS, 4 cores | 60.0, p95 17.2 ms, 23.7 frames over 50 ms | 60.0, p95 17.4 ms, 21.0 frames over 50 ms |
+
+The frames over 50 ms in that route were the same with and without it: a pause of ~100 ms each time Kratos hit or was
+hit. It was the pad rumble the game asks for on every hit, applied on the EE thread (without a pad: XInput polling of the
+empty slots and a new HID scan for a Sony pad); it now runs on its own thread (`ps2_pad_rumble_win.cpp`). After that fix,
+one pair at the 120 FPS limit: 0 frames over 50 ms in either variant (from ~27 per session), 99.5 FPS off and 113.3 FPS
+on (worst window 77.0 and 103.8). `GOW_STALL_DIAG=1` is how it was found: it samples the main thread's live pc/ra while a
+frame is late.
 
 It refuses to start while a `gow-2005` is running and closes only the processes it started (by PID, through their window
 first). Logs and `results.json` go to `logs/ab-perf/<date>/`. Only alternating pairs count: the noise between two runs of

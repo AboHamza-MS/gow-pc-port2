@@ -1,11 +1,19 @@
 import { useMemo } from 'react';
-import { Expand, Grid2x2, Image, Maximize, Monitor, RectangleHorizontal, SlidersHorizontal, SquareDashed, Film, StretchHorizontal, TriangleAlert } from 'lucide-react';
-import { GroupTitle, Note, Select, SettingRow, Slider, Switch, type Option } from '../components/ui';
+import { Contrast, Droplet, Expand, Grid2x2, Image, Maximize, Monitor, RectangleHorizontal, RotateCcw, SlidersHorizontal, SquareDashed, Film, StretchHorizontal, Sun, SunMoon, TriangleAlert } from 'lucide-react';
+import { GroupTitle, Note, SecondaryButton, Select, SettingRow, Slider, Switch, type Option } from '../components/ui';
 import { useApp } from '../state/app';
 import { activePreset, presetChange, type PresetId } from '../lib/presets';
 import type { DisplayInfo } from '../lib/types';
 
-const SCALES = [1, 1.5, 2, 2.5, 3, 4, 5, 6];
+const SCALES = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8];
+/** Shade Boost value that leaves the picture untouched (`IMAGE_NEUTRAL` in gow-core). */
+export const IMAGE_NEUTRAL = 50;
+const IMAGE_ADJUSTMENTS = [
+  { key: 'brightness', icon: Sun },
+  { key: 'contrast', icon: Contrast },
+  { key: 'gamma', icon: SunMoon },
+  { key: 'saturation', icon: Droplet },
+] as const;
 /** `Settings::default` in gow-core: the multiple the option list marks as the default. */
 const DEFAULT_SCALE = '2';
 /**
@@ -13,9 +21,9 @@ const DEFAULT_SCALE = '2';
  * "2× (~720px/HD)" instead of the raw pixel count. 360 lines is the baseline of the names.
  */
 const TIERS: Array<[number, string]> = [
-  [540, 'SD'], [720, 'HD'], [900, 'HD+'], [1080, 'FHD'], [1440, 'QHD'], [1800, 'QHD+'], [2160, '4K UHD'],
+  [540, 'SD'], [720, 'HD'], [900, 'HD+'], [1080, 'FHD'], [1440, 'QHD'], [1800, 'QHD+'], [2160, '4K UHD'], [2880, '5K'],
 ];
-const tierFor = (lines: number) => TIERS.find(([value]) => value === lines)?.[1] ?? `${lines}p`;
+const tierFor = (lines: number) => TIERS.find(([value]) => value === lines)?.[1];
 
 const COMMON_RESOLUTIONS: Array<[number, number]> = [
   [1024, 768], [1280, 960], [1440, 1080], [1600, 1200], [1920, 1440], [2880, 2160],
@@ -28,7 +36,9 @@ const COMMON_RESOLUTIONS: Array<[number, number]> = [
 /** "Native (PS2)" for 1×, "4× Native (~1440px/QHD)" for the rest, plus the default marker. */
 export const scaleText = (n: number, t: (key: string) => string, f: (key: string, ...values: Array<string | number>) => string) => {
   const lines = 360 * n;
-  const text = n === 1 ? t('scaleNative') : f('scaleLabel', n, lines, tierFor(lines));
+  const tier = tierFor(lines);
+  // a multiple with no named tier (7x = 2520 lines) shows only its lines
+  const text = n === 1 ? t('scaleNative') : tier ? f('scaleLabel', n, lines, tier) : f('scaleLabelPlain', n, lines);
   return String(n) === DEFAULT_SCALE ? `${text} · ${t('scaleDefault')}` : text;
 };
 
@@ -216,6 +226,20 @@ export function GraphicsPage() {
       </SettingRow>
       <SettingRow icon={Film} title={t('progressive')} description={t('progressiveDesc')}>
         <Switch label={t('progressive')} checked={settings.progressive480p} onChange={(progressive480p) => patch({ progressive480p })} />
+      </SettingRow>
+      <GroupTitle>{t('groupImageAdjustment')}</GroupTitle>
+      {IMAGE_ADJUSTMENTS.map(({ key, icon }) => (
+        <SettingRow key={key} icon={icon} title={t(key)} description={t(`${key}Desc`)}>
+          <Slider label={t(key)} from={0} to={100} step={1} value={settings[key]} onChange={(value) => patch({ [key]: value })} />
+        </SettingRow>
+      ))}
+      <SettingRow icon={RotateCcw} title={t('imageReset')} description={t('imageResetDesc')}>
+        <SecondaryButton
+          disabled={IMAGE_ADJUSTMENTS.every(({ key }) => settings[key] === IMAGE_NEUTRAL)}
+          onClick={() => patch({ brightness: IMAGE_NEUTRAL, contrast: IMAGE_NEUTRAL, gamma: IMAGE_NEUTRAL, saturation: IMAGE_NEUTRAL })}
+        >
+          {t('imageResetButton')}
+        </SecondaryButton>
       </SettingRow>
     </div>
   );

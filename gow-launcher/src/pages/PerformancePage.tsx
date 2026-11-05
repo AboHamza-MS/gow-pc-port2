@@ -1,12 +1,15 @@
 import { useMemo } from 'react';
-import { Activity, Cpu, Flame, Gauge, Hourglass, MemoryStick, RefreshCw, Rocket } from 'lucide-react';
+import { Activity, Cpu, Flame, Gauge, Gpu, Hourglass, Layers, MemoryStick, Microchip, RefreshCw, Rocket } from 'lucide-react';
 import { GroupTitle, Note, ProgressBar, SecondaryButton, Select, SettingRow, Switch, type Option } from '../components/ui';
 import { useApp } from '../state/app';
 
-/** Internal scale requested: "auto" and anything above 6x fall back to 2x (mirrors `Settings::selected_scale`). */
+/** Highest internal scale the launcher offers (`MAX_SCALE` in gow-core). */
+export const MAX_SCALE = 8;
+
+/** Internal scale requested: "auto" and anything above 8x fall back to 2x (mirrors `Settings::selected_scale`). */
 export function selectedScale(internalResolution: string): number {
   const n = parseFloat(internalResolution);
-  return internalResolution === 'auto' || Number.isNaN(n) || n > 6 ? 2 : Math.max(1, n);
+  return internalResolution === 'auto' || Number.isNaN(n) || n > MAX_SCALE ? 2 : Math.max(1, n);
 }
 
 export function PerformancePage() {
@@ -79,8 +82,26 @@ export function PerformancePage() {
       <SettingRow icon={RefreshCw} title={t('vsync')} description={t('vsyncDesc')}>
         <Switch label={t('vsync')} checked={settings.vsync} onChange={(vsync) => patch({ vsync })} />
       </SettingRow>
+      {settings.vsync && (
+        <Note tone="warn" title={t('vsyncWarningTitle')}>
+          {t('vsyncWarning')}
+        </Note>
+      )}
+      <SettingRow icon={Layers} title={t('earlyFinish')} description={t('earlyFinishDesc')}>
+        <Switch label={t('earlyFinish')} checked={settings.earlyFinish} onChange={(earlyFinish) => patch({ earlyFinish })} />
+      </SettingRow>
+      <GroupTitle>{t('groupOverlay')}</GroupTitle>
       <SettingRow icon={Activity} title={t('showFps')} description={t('showFpsDesc')}>
         <Switch label={t('showFps')} checked={settings.showFps} onChange={(showFps) => patch({ showFps })} />
+      </SettingRow>
+      <SettingRow icon={Gpu} title={t('showGpu')} description={t('showGpuDesc')}>
+        <Switch label={t('showGpu')} checked={settings.showGpu} onChange={(showGpu) => patch({ showGpu })} />
+      </SettingRow>
+      <SettingRow icon={Microchip} title={t('showCpu')} description={t('showCpuDesc')}>
+        <Switch label={t('showCpu')} checked={settings.showCpu} onChange={(showCpu) => patch({ showCpu })} />
+      </SettingRow>
+      <SettingRow icon={MemoryStick} title={t('showRam')} description={t('showRamDesc')}>
+        <Switch label={t('showRam')} checked={settings.showRam} onChange={(showRam) => patch({ showRam })} />
       </SettingRow>
       {optimizing && <GroupTitle>{t('groupOptimization')}</GroupTitle>}
       <SettingRow hidden={!optimizing} icon={Cpu} title={t('optimizationEnabled')} description={t('optimizationEnabledDesc')}>

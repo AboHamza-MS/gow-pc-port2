@@ -12,6 +12,7 @@
 
 int gowLogicFps(); // lib/gow_integration.cpp: PC_LOGIC_FPS (60 unless 120, 144, 165 or 240 and no 30 FPS cap)
 void gowNoteGameFlip(); // lib/gow_integration.cpp: the game swapped its display buffer
+void gowSetHangReportExtra(void (*report)(PS2Runtime &)); // lib/gow_integration.cpp: more [gow-hang] lines (diagnostics)
 
 namespace gow_game
 {
@@ -79,6 +80,7 @@ namespace gow_game
     void gowDiagAttachNode(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
     void gowSnd989SendCommand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
     void gowDiagSoundGroups(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+    void gowLoaderDiagInstall(PS2Runtime &runtime); // GOW_LOADER_DIAG=1: the level loader in the [gow-hang] report
 
     void gowDiagCalcWorldMatrix(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
     void gowDiagController(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);

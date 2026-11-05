@@ -23,4 +23,11 @@ fi
 if [ ! -f "$(dirname "$ELF")/.disc_layout" ] && [ -z "${GOW_ISO:-}" ]; then
     for c in "$(dirname "$ELF")"/*.iso; do [ -f "$c" ] && export GOW_ISO="$c" && break; done
 fi
-"${PS2X_RUNNER:-./build/ps2xRuntime/gow-2005}" "$ELF" "$@"
+if [ -z "${PS2X_RUNNER:-}" ]; then
+    if [ -x "$ROOT/build/ps2xRuntime/gow-2005" ]; then
+        PS2X_RUNNER="$ROOT/build/ps2xRuntime/gow-2005"
+    else
+        PS2X_RUNNER="./build/ps2xRuntime/gow-2005"
+    fi
+fi
+"$PS2X_RUNNER" "$ELF" "$@"

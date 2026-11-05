@@ -42,9 +42,25 @@ uniform vec2 srcSize;
 uniform float sharpen;
 uniform float plain;
 uniform float fxaa;
+uniform float shadeOn;
+uniform vec4 shade;
 out vec4 finalColor;
 
 vec4 tex(vec2 uv) { return texture(texture0, uv); }
+
+// GOW-Port: Shade Boost (PC_BRIGHTNESS / PC_CONTRAST / PC_GAMMA / PC_SATURATION, launcher) on the final colour, in this
+// same pass. shade = (brightness offset, contrast, saturation, 1 / gamma); off (all four at 50) the colour is untouched.
+vec4 outColor(vec3 c)
+{
+    if (shadeOn > 0.5)
+    {
+        c = clamp(c + shade.x, 0.0, 1.0);
+        c = (c - 0.5) * shade.y + 0.5;
+        c = mix(vec3(dot(c, vec3(0.299, 0.587, 0.114))), c, shade.z);
+        c = pow(clamp(c, 0.0, 1.0), vec3(shade.w));
+    }
+    return vec4(c, 1.0);
+}
 
 // GOW-Port: FXAA (PC_FXAA=1, launcher) over the game's texels, before the window scaling.
 vec3 fxaaColor(vec2 uv)
@@ -72,13 +88,13 @@ void main()
 {
     if (fxaa > 0.5)
     {
-        finalColor = vec4(fxaaColor(fragTexCoord), 1.0);
+        finalColor = outColor(fxaaColor(fragTexCoord));
         return;
     }
     if (plain > 0.5)
     {
         // frame at least as large as its window rectangle: one bilinear tap, no bicubic / sharpen
-        finalColor = vec4(texture(texture0, fragTexCoord).rgb, 1.0);
+        finalColor = outColor(texture(texture0, fragTexCoord).rgb);
         return;
     }
     vec2 pos = fragTexCoord * srcSize;
@@ -103,7 +119,7 @@ void main()
     c /= norm;
     if (sharpen <= 0.0) // GOW-Port: sharpness 0 = only the bicubic
     {
-        finalColor = vec4(clamp(c.rgb, 0.0, 1.0), 1.0);
+        finalColor = outColor(clamp(c.rgb, 0.0, 1.0));
         return;
     }
     // contrast-adaptive sharpen from the four direct neighbours of the nearest source texel
@@ -115,21 +131,59 @@ void main()
     float peak = -1.0 / mix(8.0, 5.0, sharpen);
     vec3 wgt = sqrt(amp) * peak;
     vec3 sharp = (c.rgb + (n + s + e + w) * wgt) / (1.0 + 4.0 * wgt);
-    finalColor = vec4(clamp(sharp, 0.0, 1.0), 1.0);
+    finalColor = outColor(clamp(sharp, 0.0, 1.0));
 }
 )GLSL";
 
     Shader g_scaler{};
     int g_scalerSrcSize = -1, g_scalerSharpen = -1, g_scalerPlain = -1;
     int g_scalerFxaa = -1; // GOW-Port: PC_FXAA
+    int g_scalerShadeOn = -1, g_scalerShade = -1; // GOW-Port: Shade Boost
     bool g_scalerTried = false;
+
+    // GOW-Port: Shade Boost settings, 0..100 with 50 = no change (the launcher only sets the variables it changed).
+    struct ShadeBoost
+    {
+        bool on = false;
+        float values[4] = {0.0f, 1.0f, 1.0f, 1.0f}; // brightness offset, contrast, saturation, 1 / gamma
+    };
+
+    const ShadeBoost &shadeBoost()
+    {
+        static const ShadeBoost boost = [] {
+            const auto level = [](const char *name) {
+                const char *v = std::getenv(name);
+                const int n = v && *v ? std::atoi(v) : 50;
+                return std::clamp(n, 0, 100);
+            };
+            const int brightness = level("PC_BRIGHTNESS"), contrast = level("PC_CONTRAST");
+            const int gamma = level("PC_GAMMA"), saturation = level("PC_SATURATION");
+            ShadeBoost b;
+            b.on = brightness != 50 || contrast != 50 || gamma != 50 || saturation != 50;
+            b.values[0] = static_cast<float>(brightness - 50) / 200.0f;                   // -0.25 .. +0.25
+            b.values[1] = static_cast<float>(contrast) / 50.0f;                           // 0 .. 2 around mid-grey
+            b.values[2] = static_cast<float>(saturation) / 50.0f;                         // 0 (grey) .. 2
+            b.values[3] = std::exp2(static_cast<float>(gamma - 50) / 50.0f);              // 1 / gamma, gamma 2 .. 0.5
+            if (b.on)
+                std::fprintf(stderr, "[gs-present] shade boost: brightness %d contrast %d gamma %d saturation %d\n",
+                             brightness, contrast, gamma, saturation);
+            return b;
+        }();
+        return boost;
+    }
+
+    bool bilinearScaler()
+    {
+        static const bool bilinear = [] { const char *v = std::getenv("GOW_SCALER"); return v && std::strcmp(v, "bilinear") == 0; }();
+        return bilinear;
+    }
 
     bool scalerEnabled()
     {
-        // GOW-Port: with PC_FXAA=1 the shader is also needed with the bilinear stretch.
+        // GOW-Port: with PC_FXAA=1 or a Shade Boost the shader is also needed with the bilinear stretch.
         static const bool on = [] {
-            const char *v = std::getenv("GOW_SCALER"), *fxaa = std::getenv("PC_FXAA");
-            return !(v && std::strcmp(v, "bilinear") == 0) || (fxaa && fxaa[0] == '1');
+            const char *fxaa = std::getenv("PC_FXAA");
+            return !bilinearScaler() || (fxaa && fxaa[0] == '1') || shadeBoost().on;
         }();
         return on;
     }
@@ -148,6 +202,8 @@ void main()
                     g_scalerSharpen = GetShaderLocation(g_scaler, "sharpen");
                     g_scalerPlain = GetShaderLocation(g_scaler, "plain");
                     g_scalerFxaa = GetShaderLocation(g_scaler, "fxaa");
+                    g_scalerShadeOn = GetShaderLocation(g_scaler, "shadeOn");
+                    g_scalerShade = GetShaderLocation(g_scaler, "shade");
                 }
                 else
                 {
@@ -541,10 +597,15 @@ GSHostPresentation::View GSHostPresentation::renderFrame(GS &gs, uint64_t vsyncT
         static const float sharpen = [] { const char *v = std::getenv("GOW_SHARPEN"); return v ? static_cast<float>(std::atof(v)) : 0.5f; }();
         SetShaderValue(*scaler, g_scalerSrcSize, size, SHADER_UNIFORM_VEC2);
         SetShaderValue(*scaler, g_scalerSharpen, &sharpen, SHADER_UNIFORM_FLOAT);
-        const float plain = magnified ? 0.0f : 1.0f;
+        // GOW-Port: the bilinear stretch (GOW_SCALER=bilinear) only reaches the shader for FXAA or Shade Boost: keep its one tap.
+        const float plain = magnified && !bilinearScaler() ? 0.0f : 1.0f;
         SetShaderValue(*scaler, g_scalerPlain, &plain, SHADER_UNIFORM_FLOAT);
         static const float fxaa = [] { const char *v = std::getenv("PC_FXAA"); return v && v[0] == '1' ? 1.0f : 0.0f; }();
         SetShaderValue(*scaler, g_scalerFxaa, &fxaa, SHADER_UNIFORM_FLOAT);
+        const ShadeBoost &boost = shadeBoost();
+        const float shadeOn = boost.on ? 1.0f : 0.0f;
+        SetShaderValue(*scaler, g_scalerShadeOn, &shadeOn, SHADER_UNIFORM_FLOAT);
+        SetShaderValue(*scaler, g_scalerShade, boost.values, SHADER_UNIFORM_VEC4);
         SetTextureFilter(selected.texture, TEXTURE_FILTER_BILINEAR);
         BeginShaderMode(*scaler);
     }

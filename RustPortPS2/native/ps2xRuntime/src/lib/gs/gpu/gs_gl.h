@@ -48,6 +48,7 @@ namespace GSGL
     constexpr GLenum kVendor = 0x1F00;
     constexpr GLenum kRenderer = 0x1F01;
     constexpr GLenum kVersion = 0x1F02;
+    constexpr GLenum kMaxTextureSize = 0x0D33; // GOW-Port: render-target size guard
     constexpr GLenum kSyncGpuCommandsComplete = 0x9117;
     constexpr GLbitfield kSyncFlushCommandsBit = 0x00000001;
     constexpr GLenum kTimeoutExpired = 0x911B;
@@ -130,6 +131,7 @@ namespace GSGL
         void (*Flush)() = nullptr;
         GLenum (*GetError)() = nullptr;
         const unsigned char *(*GetString)(GLenum) = nullptr;
+        void (*GetIntegerv)(GLenum, GLint *) = nullptr; // GOW-Port
         void (*GenTextures)(GLsizei, GLuint *) = nullptr;
         void (*DeleteTextures)(GLsizei, const GLuint *) = nullptr;
         void (*BindTexture)(GLenum, GLuint) = nullptr;

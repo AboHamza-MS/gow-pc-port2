@@ -159,6 +159,7 @@ namespace
         load(a.Flush, "glFlush", missing);
         load(a.GetError, "glGetError", missing);
         load(a.GetString, "glGetString", missing);
+        load(a.GetIntegerv, "glGetIntegerv", missing); // GOW-Port
         load(a.GenTextures, "glGenTextures", missing);
         load(a.DeleteTextures, "glDeleteTextures", missing);
         load(a.BindTexture, "glBindTexture", missing);

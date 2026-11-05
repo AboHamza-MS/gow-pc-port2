@@ -18,7 +18,9 @@
 #include <vector>
 
 #ifdef _WIN32
-bool ps2PadWindowsRumble(uint8_t large, bool small); // ps2_pad_rumble_win.cpp
+bool ps2PadWindowsRumble(uint8_t large, bool small); // ps2_pad_rumble_win.cpp: hands the state to the rumble thread
+#elif defined(__linux__)
+bool ps2PadLinuxRumble(uint8_t large, bool small); // ps2_pad_rumble_win.cpp: hands the state to the rumble thread
 #endif
 
 namespace
@@ -961,6 +963,15 @@ void PSPadBackend::applyRumble(bool refresh)
     if (refresh)
         return;
     ps2PadWindowsRumble(m_large, m_small);
+#elif defined(__linux__)
+    // GOW-Port: Linux evdev force-feedback (FF_RUMBLE on /dev/input/event*). Each effect has a 4 s safety length, so
+    // active motors are refreshed once per second.
+    const bool on = m_small || m_large;
+    const double now = IsWindowReady() ? GetTime() : 0.0;
+    if (refresh && (!on || now - m_rumbleSentAt < 1.0))
+        return;
+    m_rumbleSentAt = now;
+    ps2PadLinuxRumble(m_large, m_small);
 #else
     // Other platforms (SDL, Switch): raylib's rumble, which stops after at most 2 s, so it is resent every second.
     if (m_activeGamepad < 0 || !IsWindowReady())

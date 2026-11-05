@@ -52,10 +52,11 @@ function(EnableFastReleaseMode TargetName)
 
     # On MSVC cross-unit optimization (IPO) is /GL + /LTCG: only with PS2X_ENABLE_LTCG. GOW-Port: on Windows with clang
     # (llvm-mingw) too: LTO over ~6,400 files multiplies the link time and memory and was never measured faster (gow-native-pc
-    # keeps its ThinLTO opt-in for that reason). Linux keeps its LTO (with PS2X_LTO_JOBS).
-    if(IPO_SUPPORTED AND ((NOT MSVC AND NOT WIN32) OR PS2X_ENABLE_LTCG))
+    # keeps its ThinLTO opt-in for that reason). Linux with GCC keeps its LTO (with PS2X_LTO_JOBS); clang on Linux matches
+    # Windows clang (LTO opt-in with PS2X_ENABLE_LTCG, and no GCC-only -flto=<N> job count flag).
+    if(IPO_SUPPORTED AND ((CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT WIN32) OR PS2X_ENABLE_LTCG))
         set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
-        if(NOT MSVC AND PS2X_LTO_JOBS)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND PS2X_LTO_JOBS)
             target_link_options(${TargetName} PRIVATE $<$<CONFIG:Release>:-flto=${PS2X_LTO_JOBS}>)
         endif()
     elseif(NOT IPO_SUPPORTED)

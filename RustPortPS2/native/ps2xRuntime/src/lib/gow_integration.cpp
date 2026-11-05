@@ -203,6 +203,9 @@ namespace
     // stays idle (buttons released, sticks centered, no pressure).
     void reapplyWidescreenAspect(uint8_t *rdram); // further below, next to the widescreen code
 
+    // GOW-Port: which parts of the OSD are shown (PC_SHOW_FPS, PC_SHOW_GPU, PC_SHOW_CPU, PC_SHOW_RAM; launcher).
+    gow_osd::Show g_osdShow{false, false, false, false};
+
     // GOW-Port: game frames per second (PC_SHOW_FPS=1): entries to the frame function, 0x1837B8 (the one from
     // GOW_PERF_FRAME_PC). Resumes after a checkpoint (ctx->pc different from the entry) don't count.
     constexpr uint32_t kGameFrameFunction = 0x001837B8u;
@@ -210,8 +213,11 @@ namespace
     std::atomic<uint64_t> g_gameFrames{0};
     int g_gameFrameLimit = 60;
 
+    std::atomic<R5900Context *> g_gameFrameContext{nullptr}; // GOW_STALL_DIAG: the main thread's context, read live
+
     void gameFrameHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        g_gameFrameContext.store(ctx, std::memory_order_relaxed);
         if (ctx->pc == kGameFrameFunction)
         {
             // GOW-Port: limit the game's output, not the window's repeats.
@@ -344,7 +350,7 @@ namespace
         // function, which follow the launcher's FPS limit, PC_LOGIC_FPS), plus GPU, CPU and RAM when the system gives them.
         // The new pictures on screen (newFps), the window refresh (windowFps, the monitor's rate) and the 1 % low stay in
         // the [gow-osd] log line only.
-        gow_osd::draw(x, y, h, gameFps, -1, -1, -1);
+        gow_osd::draw(x, y, h, gameFps, -1, -1, -1, g_osdShow);
     }
     constexpr uint32_t kGowPad2Read = 0x0027B9F0u;
     PS2Runtime::RecompiledFunction g_gowPad2Read = nullptr;
@@ -602,6 +608,14 @@ uint64_t gowGameFlipCount()
     return g_gowGameFlips.load(std::memory_order_acquire);
 }
 
+// GOW-Port: extra [gow-hang] lines from a diagnostic of the game overrides (GOW_LOADER_DIAG: src/game/gow_diag_io.cpp).
+static std::atomic<void (*)(PS2Runtime &)> g_gowHangReportExtra{nullptr};
+
+void gowSetHangReportExtra(void (*report)(PS2Runtime &))
+{
+    g_gowHangReportExtra.store(report, std::memory_order_release);
+}
+
 // GOW-Port: what the EE is waiting for, printed by the hang watchdog before its sampling burst. Reads: the game's "GS done"
 // flag (0x29C7D0: 1 = waiting for the GS FINISH interrupt, 2 = done), the GS status and interrupt mask, the VBlank counter and
 // the guest threads of the kernel snapshot. A frame wait with the flag at 1 and CSR.FINISH (bit 1) clear means the FINISH was
@@ -644,6 +658,8 @@ static void gowHangReport(PS2Runtime &runtime, uint64_t vsyncStep, uint64_t fram
     for (const EeEventFlagSnapshot &eventFlag : snapshot.eventFlags)
         if (eventFlag.waiters != 0u)
             std::fprintf(stderr, "[gow-hang] event flag %d bits=%08x waiters=%u\n", eventFlag.id, eventFlag.bits, eventFlag.waiters);
+    if (void (*extra)(PS2Runtime &) = g_gowHangReportExtra.load(std::memory_order_acquire))
+        extra(runtime);
 }
 
 // GOW-Port: ps2_runtime.cpp (loadELF), after the Waffle overrides (applyMatching): each wrapper calls the
@@ -663,7 +679,13 @@ void gowIntegrationInstall(PS2Runtime &runtime, const std::string &elfPath)
         }
     }
     g_gameFrameLimit = envLong("PC_GAME_FPS", 60, 30, 60) <= 30 ? 30 : 60;
-    if ((g_gameFrameLimit == 30 || envFlag("PC_SHOW_FPS", false)) && runtime.hasFunction(kGameFrameFunction))
+    // GOW-Port: a part the launcher does not mention follows PC_SHOW_FPS, which used to show the whole OSD: an older launcher
+    // (FPS switch only) keeps GPU, CPU and RAM. The current launcher sends 0 or 1 for each part.
+    {
+        const bool fps = envFlag("PC_SHOW_FPS", false);
+        g_osdShow = {fps, envFlag("PC_SHOW_GPU", fps), envFlag("PC_SHOW_CPU", fps), envFlag("PC_SHOW_RAM", fps)};
+    }
+    if ((g_gameFrameLimit == 30 || g_osdShow.any()) && runtime.hasFunction(kGameFrameFunction))
         if (PS2Runtime::RecompiledFunction actual = runtime.lookupFunction(kGameFrameFunction))
         {
             g_gameFrameFunction = actual;
@@ -704,6 +726,79 @@ void gowIntegrationInstall(PS2Runtime &runtime, const std::string &elfPath)
                         }
                     })
             .detach();
+    // GOW-Port: GOW_STALL_DIAG=1 (diagnostics): while the game has not entered its frame function for more than 40 ms, the
+    // running guest thread's pc/ra every 5 ms; when the frame comes, one [gow-stall] line with the gap, the game's display
+    // swaps and VBlanks during it and the most frequent places, to find what a short pause waits for.
+    if (g_gameFrameFunction && envFlag("GOW_STALL_DIAG", false))
+        std::thread([rt = &runtime]
+                    {
+                        using Clock = std::chrono::steady_clock;
+                        uint64_t lastFrames = g_gameFrames.load(std::memory_order_relaxed);
+                        Clock::time_point lastChange = Clock::now();
+                        uint64_t flipsAtFrame = gowGameFlipCount();
+                        uint64_t ticksAtFrame = rt->memory().gs().vsyncTick.load(std::memory_order_relaxed);
+                        std::vector<std::pair<uint64_t, unsigned>> places; // (pc << 32 | ra, samples)
+                        for (;;)
+                        {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                            const uint64_t frames = g_gameFrames.load(std::memory_order_relaxed);
+                            const auto now = Clock::now();
+                            if (frames != lastFrames)
+                            {
+                                const double gapMs = std::chrono::duration<double, std::milli>(now - lastChange).count();
+                                const uint64_t flips = gowGameFlipCount();
+                                const uint64_t ticks = rt->memory().gs().vsyncTick.load(std::memory_order_relaxed);
+                                if (!places.empty() && gapMs > 50.0)
+                                {
+                                    std::sort(places.begin(), places.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
+                                    std::string top;
+                                    for (size_t i = 0; i < places.size() && i < 6; ++i)
+                                    {
+                                        char item[48];
+                                        std::snprintf(item, sizeof(item), " %08x/%08x x%u", static_cast<uint32_t>(places[i].first >> 32),
+                                                      static_cast<uint32_t>(places[i].first), places[i].second);
+                                        top += item;
+                                    }
+                                    std::fprintf(stderr, "[gow-stall] gap=%.0f ms flips=%llu vblanks=%llu pc/ra:%s\n", gapMs,
+                                                 static_cast<unsigned long long>(flips - flipsAtFrame),
+                                                 static_cast<unsigned long long>(ticks - ticksAtFrame), top.c_str());
+                                }
+                                places.clear();
+                                lastFrames = frames;
+                                lastChange = now;
+                                flipsAtFrame = flips;
+                                ticksAtFrame = ticks;
+                                continue;
+                            }
+                            if (now - lastChange < std::chrono::milliseconds(40))
+                                continue;
+                            if (places.empty())
+                                if (const uint8_t *rdram = rt->memory().getRDRAM())
+                                {
+                                    // the game's frame pacing words: target rate, VBlanks per frame, VBlank count, flags
+                                    uint32_t w[6];
+                                    for (int i = 0; i < 6; ++i)
+                                        std::memcpy(&w[i], rdram + (0x0029C640u + 4u * i), 4u);
+                                    uint32_t count = 0u;
+                                    std::memcpy(&count, rdram + 0x0029C7D4u, 4u);
+                                    std::fprintf(stderr, "[gow-stall] at %.0f ms: 29C640..654=%u %u %u %u %u %u vblank_count=%u\n",
+                                                 std::chrono::duration<double, std::milli>(now - lastChange).count(), w[0], w[1], w[2], w[3],
+                                                 w[4], w[5], count);
+                                }
+                            // the live pc/ra of the main thread's context (racy reads: a diagnostic, not a value to act on)
+                            if (const R5900Context *ctx = g_gameFrameContext.load(std::memory_order_relaxed))
+                            {
+                                const uint64_t key = (uint64_t(*reinterpret_cast<const volatile uint32_t *>(&ctx->pc)) << 32) |
+                                                     GPR_U32(ctx, 31);
+                                auto it = std::find_if(places.begin(), places.end(), [key](const auto &p) { return p.first == key; });
+                                if (it == places.end())
+                                    places.emplace_back(key, 1u);
+                                else
+                                    ++it->second;
+                            }
+                        }
+                    })
+            .detach();
     gowCheatsInstall(runtime, elfPath);
     gowRetroAchievementsInstall(elfPath); // login, hash (ISO or ELF) and RDRAM evaluation on VBlank
     gowVideoInstall(runtime, elfPath);    // progressive scan always enabled
@@ -733,6 +828,6 @@ void gowFrameDraw(float x, float y, float w, float h, uint64_t presentedSequence
     gowTargetingDraw(x, y, w, h);
     gowCheatsMenuDraw();
     gowRetroAchievementsDraw();
-    if (g_gameFrameFunction)
+    if (g_gameFrameFunction && g_osdShow.any()) // GOW-Port: a 30 FPS limit installs the hook without asking for the OSD
         drawFps(x, y, h, presentedSequence, hasSharedFrame);
 }

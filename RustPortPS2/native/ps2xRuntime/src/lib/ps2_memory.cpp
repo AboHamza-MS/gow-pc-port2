@@ -262,11 +262,12 @@ PS2Memory::PS2Memory()
     ps2SetScratchpadHostPtr(nullptr);
     const char *worker = std::getenv("PS2X_GS_WORKER");
     m_gsWorkerEnabled = worker != nullptr && worker[0] == '1';
-    // GOW-Port: early FINISH (see ps2_memory.h), opt-in with GOW_GS_EARLY_FINISH=1 (needs the worker). Off by default: on the
-    // reference route the game hung at a scene transition with it (thread 1 stuck in the 0x185A20 state machine, the frame
-    // function no longer entered), so a sync that code relies on still has to be found.
+    // GOW-Port: early FINISH (see ps2_memory.h), on with the worker unless GOW_GS_EARLY_FINISH=0. A/B on the ship's combat
+    // (Nov 2026, same executable, 3 alternating pairs): 90.2 -> 105.5 fps with the 120 FPS limit, worst 5 s window 74.9 ->
+    // 89.5, no difference at the 60 FPS limit. The loader hang seen once with a 0.3.0 pre-release build (0x185A20) did not
+    // come back in ~40 level and warp loads, also on 4 cores; GOW_LOADER_DIAG=1 reports the loader if it ever does.
     const char *earlyFinish = std::getenv("GOW_GS_EARLY_FINISH");
-    m_gsEarlyFinish = m_gsWorkerEnabled && earlyFinish && earlyFinish[0] == '1';
+    m_gsEarlyFinish = m_gsWorkerEnabled && !(earlyFinish && earlyFinish[0] == '0');
     if (m_gsWorkerEnabled)
     {
         std::fprintf(stderr, "[gs-worker] early FINISH %s (GOW_GS_EARLY_FINISH)\n", m_gsEarlyFinish ? "on" : "off");

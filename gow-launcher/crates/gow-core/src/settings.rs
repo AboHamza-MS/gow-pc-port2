@@ -5,7 +5,13 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 12;
+pub const SETTINGS_VERSION: u32 = 13;
+
+/// Highest internal GS scale the launcher offers (the runtime also keeps it within the GPU's texture limit).
+pub const MAX_SCALE: f64 = 8.0;
+
+/// Value of the four Shade Boost settings that leaves the picture as the game draws it.
+pub const IMAGE_NEUTRAL: i32 = 50;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -23,12 +29,25 @@ pub struct Settings {
     pub filter: String,
     pub sharpness: f64,
     pub fxaa: bool,
+    /// Shade Boost (PCSX2-style image adjustment on the final picture), 0..100 with 50 = no change: `PC_BRIGHTNESS`,
+    /// `PC_CONTRAST`, `PC_GAMMA` and `PC_SATURATION`. A file written before they existed reads 50 (`serde(default)`).
+    pub brightness: i32,
+    pub contrast: i32,
+    pub gamma: i32,
+    pub saturation: i32,
     pub progressive480p: bool,
     /// "auto" or "1".."8" (`PS2X_GS_SCALE`).
     pub internal_resolution: String,
     pub fps_limit: i32,
     pub vsync: bool,
+    /// In-game OSD, one switch per part: the FPS counter (`PC_SHOW_FPS`), GPU usage, temperature and video memory
+    /// (`PC_SHOW_GPU`), CPU usage and clock (`PC_SHOW_CPU`) and the game's RAM (`PC_SHOW_RAM`).
     pub show_fps: bool,
+    pub show_gpu: bool,
+    pub show_cpu: bool,
+    pub show_ram: bool,
+    /// Early FINISH (`GOW_GS_EARLY_FINISH`): the game prepares the next frame while the current one is still drawn.
+    pub early_finish: bool,
     pub elf: String,
     pub iso: String,
     pub executable: String,
@@ -88,11 +107,19 @@ impl Default for Settings {
             filter: "bilinear".into(),
             sharpness: 0.8,
             fxaa: true,
+            brightness: IMAGE_NEUTRAL,
+            contrast: IMAGE_NEUTRAL,
+            gamma: IMAGE_NEUTRAL,
+            saturation: IMAGE_NEUTRAL,
             progressive480p: true,
             internal_resolution: "2".into(),
             fps_limit: 60,
             vsync: false,
             show_fps: false,
+            show_gpu: false,
+            show_cpu: false,
+            show_ram: false,
+            early_finish: true,
             elf: String::new(),
             iso: String::new(),
             executable: String::new(),
@@ -236,6 +263,16 @@ impl Settings {
             self.fps_limit = 60;
             self.settings_version = 12;
         }
+        if self.settings_version < 13 {
+            // The FPS switch used to show the whole OSD (GPU, CPU, RAM too); now each part has its own. Whoever had it on
+            // keeps seeing everything.
+            if self.show_fps {
+                self.show_gpu = true;
+                self.show_cpu = true;
+                self.show_ram = true;
+            }
+            self.settings_version = 13;
+        }
         if self.language != "pt-BR" && self.language != "en" {
             self.language = if prefers_portuguese { "pt-BR".into() } else { "en".into() };
         }
@@ -244,12 +281,20 @@ impl Settings {
         }
     }
 
-    /// Internal GS scale actually requested: "auto" and anything above 6 fall back to 2x.
+    /// Internal GS scale actually requested: "auto" and anything above 8 fall back to 2x.
     pub fn selected_scale(&self) -> f64 {
         match self.internal_resolution.parse::<f64>() {
-            Ok(n) if self.internal_resolution != "auto" && n <= 6.0 => n.max(1.0),
+            Ok(n) if self.internal_resolution != "auto" && n <= MAX_SCALE => n.max(1.0),
             _ => 2.0,
         }
+    }
+
+    /// Brightness, contrast, gamma and saturation back to "no change" (the Reset button of the image adjustment group).
+    pub fn reset_image_adjustment(&mut self) {
+        self.brightness = IMAGE_NEUTRAL;
+        self.contrast = IMAGE_NEUTRAL;
+        self.gamma = IMAGE_NEUTRAL;
+        self.saturation = IMAGE_NEUTRAL;
     }
 
     /// Back to the defaults of the "Reset" button; paths, cheats' history, RetroAchievements and the hand-made mapping of a
@@ -265,11 +310,15 @@ impl Settings {
         self.filter = "bilinear".into();
         self.sharpness = 0.8;
         self.fxaa = true;
+        self.reset_image_adjustment();
         self.progressive480p = true;
         self.internal_resolution = "2".into();
         self.fps_limit = 60;
         self.vsync = false;
         self.show_fps = false;
+        self.show_gpu = false;
+        self.show_cpu = false;
+        self.show_ram = false;
         self.skip_videos = true;
         self.fast_boot = false;
         self.dmc5_controls = false;
@@ -351,6 +400,20 @@ mod tests {
     }
 
     #[test]
+    fn version_thirteen_keeps_the_whole_osd_for_whoever_had_the_fps_switch_on() {
+        let mut shown = Settings { settings_version: 12, show_fps: true, ..Settings::default() };
+        shown.migrate(false, &DisplayInfo::default());
+        assert!(shown.show_fps && shown.show_gpu && shown.show_cpu && shown.show_ram);
+        let mut hidden = Settings { settings_version: 12, ..Settings::default() };
+        hidden.migrate(false, &DisplayInfo::default());
+        assert!(!hidden.show_fps && !hidden.show_gpu && !hidden.show_cpu && !hidden.show_ram);
+        // After the migration the parts are independent: FPS alone stays alone.
+        let mut fps_only = Settings { settings_version: 13, show_fps: true, ..Settings::default() };
+        fps_only.migrate(false, &DisplayInfo::default());
+        assert!(fps_only.show_fps && !fps_only.show_gpu && !fps_only.show_cpu && !fps_only.show_ram);
+    }
+
+    #[test]
     fn a_current_file_is_left_alone() {
         let mut settings = Settings {
             settings_version: SETTINGS_VERSION,
@@ -400,7 +463,9 @@ mod tests {
     fn scale_falls_back_to_two() {
         let scale = |text: &str| Settings { internal_resolution: text.into(), ..Settings::default() }.selected_scale();
         assert_eq!(scale("auto"), 2.0);
-        assert_eq!(scale("8"), 2.0);
+        assert_eq!(scale("10"), 2.0);
+        assert_eq!(scale("9"), 2.0);
+        assert_eq!(scale("8"), 8.0);
         assert_eq!(scale("6"), 6.0);
         assert_eq!(scale("3"), 3.0);
         assert_eq!(scale("0.5"), 1.0);
@@ -449,6 +514,24 @@ mod tests {
         assert!(!loaded.auto_update);
         std::fs::write(&path, r#"{"autoUpdate":true}"#).unwrap();
         assert!(Settings::load(&path).auto_update);
+    }
+
+    #[test]
+    fn an_old_file_gets_a_neutral_image_adjustment_and_the_reset_restores_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, r#"{"fxaa":false,"settingsVersion":12}"#).unwrap();
+        let mut loaded = Settings::load(&path);
+        loaded.migrate(false, &DisplayInfo::default());
+        assert_eq!((loaded.brightness, loaded.contrast, loaded.gamma, loaded.saturation), (50, 50, 50, 50));
+        loaded.brightness = 70;
+        loaded.gamma = 20;
+        loaded.save(&path).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"brightness\": 70"));
+        let mut reloaded = Settings::load(&path);
+        assert_eq!((reloaded.brightness, reloaded.gamma), (70, 20));
+        reloaded.reset_game_options(&DisplayInfo::default());
+        assert_eq!((reloaded.brightness, reloaded.contrast, reloaded.gamma, reloaded.saturation), (50, 50, 50, 50));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from '../App';
@@ -38,5 +38,45 @@ describe('graphics presets in the Graphics tab', () => {
     expect(screen.getByRole('option', { name: 'Custom' })).toHaveAttribute('aria-disabled', 'true');
     await user.click(screen.getByRole('option', { name: /^Performance/ }));
     expect(await screen.findByRole('combobox', { name: 'Graphics preset' })).toHaveTextContent('Performance');
+  });
+});
+
+describe('image adjustment in the Graphics tab', () => {
+  it('starts at 50 with Reset disabled, writes a moved slider and resets all four to 50', async () => {
+    const { user, patch } = await openGraphics();
+    const reset = screen.getByRole('button', { name: 'Reset' });
+    expect(reset).toBeDisabled();
+    for (const name of ['Brightness', 'Contrast', 'Gamma', 'Saturation']) {
+      expect(screen.getByRole('slider', { name })).toHaveValue('50');
+    }
+    fireEvent.change(screen.getByRole('slider', { name: 'Gamma' }), { target: { value: '70' } });
+    await waitFor(() => expect(patch).toHaveBeenCalledWith({ gamma: 70 }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reset' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: 'Reset' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith({ brightness: 50, contrast: 50, gamma: 50, saturation: 50 }));
+    expect(await screen.findByRole('slider', { name: 'Gamma' })).toHaveValue('50');
+  });
+});
+
+describe('render resolution and the in-game overlay', () => {
+  it('offers render resolutions up to 8x', async () => {
+    const { user, patch } = await openGraphics();
+    await user.click(screen.getByRole('combobox', { name: 'Render resolution' }));
+    expect(screen.getAllByRole('option', { name: /^\d+(\.5)?×|^Native/ })).toHaveLength(10);
+    expect(screen.queryByRole('option', { name: /^9×/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('option', { name: /^8×/ }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith({ internalResolution: '8' }));
+  });
+
+  it('has one switch per part of the overlay on the Performance tab', async () => {
+    const { user, patch } = await openGraphics();
+    await user.click(screen.getByRole('button', { name: /Performance/ }));
+    for (const name of ['FPS counter', 'GPU', 'CPU', 'RAM']) {
+      expect(await screen.findByRole('switch', { name })).not.toBeChecked();
+    }
+    await user.click(screen.getByRole('switch', { name: 'CPU' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith({ showCpu: true }));
+    expect(screen.getByRole('switch', { name: 'FPS counter' })).not.toBeChecked();
+    expect(screen.queryByText(/120 FPS \(experimental\)/)).not.toBeInTheDocument();
   });
 });

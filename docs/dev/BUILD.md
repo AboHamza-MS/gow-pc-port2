@@ -12,7 +12,7 @@ the same `gow-2005`.
 
 | | Windows | Linux |
 |---|---|---|
-| Compiler | clang from [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) 20261020 UCRT (default since 0.3.0; `install.ps1` downloads it, SHA-256 pinned), or MSVC 2022 with `-Compiler msvc` (Build Tools; `vcvars64.bat` loaded) | GCC 13+ or Clang 17+ |
+| Compiler | clang from [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) 20261020 UCRT (default since 0.3.0; `install.ps1` downloads it, SHA-256 pinned), or MSVC 2022 with `-Compiler msvc` (Build Tools; `vcvars64.bat` loaded) | GCC 13+ (`g++`, default in `install.sh`) or Clang 17+ (`./install.sh --compiler clang`, `CC=clang CXX=clang++`, or `-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++`) |
 | Build system | CMake 3.21+ with `cmcldeps.exe` next to it (any official build has it), Ninja | CMake 3.21+, Ninja |
 | Rust | stable (for the recompiler and the tools) | stable |
 | Launcher | Node 22+, Rust stable, Tauri prerequisites | Node 22+, Rust stable, `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev patchelf` |

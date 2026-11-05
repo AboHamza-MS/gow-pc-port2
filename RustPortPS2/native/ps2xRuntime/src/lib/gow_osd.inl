@@ -1,4 +1,5 @@
-// GOW-Port: performance OSD in the style of MSI Afterburner / RTSS (PC_SHOW_FPS=1). It is included from gow_integration.cpp (no
+// GOW-Port: performance OSD in the style of MSI Afterburner / RTSS. Each part has its own switch: PC_SHOW_FPS, PC_SHOW_GPU
+// (GPU and video memory lines), PC_SHOW_CPU and PC_SHOW_RAM. It is included from gow_integration.cpp (no
 // new file in CMake). It shows the GS FPS (new frames per second) large and, only if the system provides them, GPU (usage, VRAM,
 // temperature, memory clock), CPU (usage, effective clock) and RAM. What cannot be read is not drawn (a value is never invented).
 //
@@ -327,11 +328,22 @@ namespace gow_osd
     // `gameFps` is the guest's own frame rate (entries to the game's frame function). The GS keeps producing frames even when
     // the game logic is behind, so the two numbers together tell what is happening: FPS high with GAME low = the picture is
     // repeating (the game stalled), both low = the machine cannot keep up. -1 = not measured (the line is not drawn).
-    void draw(float x, float y, float h, int fps, int low, int windowHz = -1, int gameFps = -1)
+    // GOW-Port: which parts of the OSD the player asked for (launcher, Performance tab).
+    struct Show
     {
-        start();
+        bool fps = true, gpu = true, cpu = true, ram = true;
+        bool any() const { return fps || gpu || cpu || ram; }
+        bool system() const { return gpu || cpu || ram; }
+    };
+
+    void draw(float x, float y, float h, int fps, int low, int windowHz = -1, int gameFps = -1, Show show = {})
+    {
+        // the sampler thread (PDH, D3DKMT) only runs when a system value is shown
+        if (show.system())
+            start();
 #if defined(_WIN32)
-        openAdapterOnce();
+        if (show.gpu)
+            openAdapterOnce();
 #endif
         loadFont();
         const float size = std::clamp(h / 42.0f, 14.0f, 34.0f);
@@ -351,8 +363,10 @@ namespace gow_osd
         const float col2 = col1 + std::max(nDigits4 + uMb, nDigits3 + uTemp) + size * 0.16f + colGap; // uso
         const float col3 = col2 + nDigits3 + uPct + size * 0.16f + colGap;      // reloj
 
-        const int gpu = g_metrics.gpuPercent.load(), vram = g_metrics.vramMb.load(), temp = g_metrics.gpuTempC.load(), memMhz = g_metrics.memMhz.load();
-        const int cpu = g_metrics.cpuPercent.load(), cpuMhz = g_metrics.cpuMhz.load(), ram = g_metrics.ramMb.load();
+        const int gpu = show.gpu ? g_metrics.gpuPercent.load() : -1, vram = show.gpu ? g_metrics.vramMb.load() : -1;
+        const int temp = show.gpu ? g_metrics.gpuTempC.load() : -1, memMhz = show.gpu ? g_metrics.memMhz.load() : -1;
+        const int cpu = show.cpu ? g_metrics.cpuPercent.load() : -1, cpuMhz = show.cpu ? g_metrics.cpuMhz.load() : -1;
+        const int ram = show.ram ? g_metrics.ramMb.load() : -1;
 
         // GPU: temperatura | uso
         if (gpu >= 0 || temp >= 0)
@@ -391,6 +405,8 @@ namespace gow_osd
             baseline += lineHeight;
         }
         (void)col3;
+        if (!show.fps)
+            return;
         // GS FPS: pink name and white number, the same size and in the same column as the other values.
         text("FPS", left, baseline, size, pink);
         cell(col1, baseline, size, std::to_string(fps), "", nDigits3, 0.0f, white, unit);

@@ -22,7 +22,7 @@ GOW_PERF_DIAG=1 GOW_PERF_FRAME_PC=0x001837B8
 
 plus, from the settings: `PC_SCREEN`, `PC_WIDTH`, `PC_HEIGHT`, `PC_TITLE`, `PC_PANEL=0`, `PC_ICON`, `PC_ASPECT`,
 `PC_WIDESCREEN`, `PC_FILTER`, `GOW_SHARPEN`, `PC_FXAA`, `GOW_PROGRESSIVE`, `GOW_SCALER`,
-`PS2X_GS_HW_SCALE`, `PC_GAME_FPS=60`, `PC_WINDOW_FPS`, `PC_VSYNC`, `PC_SHOW_FPS`, `GOW_SKIP_FMV`,
+`PS2X_GS_HW_SCALE`, `PC_GAME_FPS=60`, `PC_WINDOW_FPS`, `PC_VSYNC`, `PC_SHOW_FPS`, `PC_SHOW_GPU`, `PC_SHOW_CPU`, `PC_SHOW_RAM`, `GOW_SKIP_FMV`,
 `GOW_FAST_BOOT`, `PC_DMC5_CONTROLS`, `PC_PAD_FACE_MAP`, `PC_PAD_MAP`, `GOW_PAD_DEVICE`, `GOW_PAD_LIST_FILE`, `GOW_PAD_SDL_MAPPING`, `PC_KEYS`, `PC_CHEATS`, `PC_CHEATS_SHORTCUT`,
 `PC_LANGUAGE`, `PC_ESC_QUITS`, `GOW_CANCEL`, `GOW_ISO`, `GOW_VU1_CAPTURE`, `PS2X_GS_SHADER_CACHE_DIR`, and the
 `PC_RA_*` group when RetroAchievements is enabled.
@@ -44,7 +44,7 @@ arrives as `GOW_SHARPEN` and the render scale as `PS2X_GS_HW_SCALE`.
 | `PS2X_GS_FAIL_TEST=context\|shaders` | Test only: `GSHwBackend::ensure()` fails on purpose before touching GL, to see the on-screen renderer-failure message (English, or Portuguese when `PC_LANGUAGE` starts with `pt`); `GOW_HOST_SHOT=<frame>` writes `host_shot.png` |
 | `PS2X_GS_GL_MAX_MINOR=<3..6>` | Test only: the GS context ladder starts at OpenGL 4.<n> instead of 4.6 (then falls down to 4.3), to exercise the 4.3 path on a newer GPU. `[gs-gl]` in the log reports the version obtained |
 | `GOW_PRESENT_BLOCKING`, `GOW_PRESENT_FIFO`, `GOW_PRESENT_MIN_INTERVAL_US` | Presentation pacing |
-| `PC_GAME_FPS`, `PC_WINDOW_FPS`, `PC_VSYNC`, `PC_SHOW_FPS` | Limits, vsync, counter (`PC_WINDOW_FPS` = the display's refresh rate, set by the launcher) |
+| `PC_GAME_FPS`, `PC_WINDOW_FPS`, `PC_VSYNC`, `PC_SHOW_FPS`, `PC_SHOW_GPU`, `PC_SHOW_CPU`, `PC_SHOW_RAM` | Limits, vsync, overlay lines (`PC_WINDOW_FPS` = the display's refresh rate, set by the launcher) |
 | `PC_LOGIC_FPS=<120\|144\|165\|240>` | Experimental game logic rate (`src/game/gow_logic_rate.cpp`): the frame end waits for 1/N s slots of guest time instead of 60 Hz VBlanks, the time step floor becomes 60/N fields, and the window latches a new picture on each game buffer swap. Unset or 60 = the game's own 60 Hz. The launcher's FPS limit sets it (120, 240). Ignored with `PC_GAME_FPS=30` |
 | `GOW_HFPS_DIAG=1` | `[gow-hfps]` every 5 s: time step (ticks, fields, delta), fixed-step frames, N Hz waits, late frames and 60 Hz fallbacks, `game_s/host_s` |
 | `PC_PROGRESSIVE` / `GOW_PROGRESSIVE` | 480p progressive mode |
@@ -57,6 +57,9 @@ arrives as `GOW_SHARPEN` and the render scale as `PS2X_GS_HW_SCALE`.
 |---|---|
 | `PS2X_GS_WORKER=1` | VIF1/VU1/GIF on the GS worker thread. **Required for real-time audio and speed** |
 | `GOW_GS_FINISH_ASYNC=1` | GS FINISH does not block the EE |
+| `GOW_GS_EARLY_FINISH=0` | Turns off early FINISH (on by default with the worker): the frame's FINISH is then given when the GS reaches it ([`RENDERING.md`](RENDERING.md)) |
+| `GOW_STALL_DIAG=1` | While a game frame is more than 40 ms late, samples the main thread's live pc/ra; one `[gow-stall]` line per late frame with the gap, display swaps, VBlanks and the most frequent places |
+| `GOW_LOADER_DIAG=1` | Adds the level loader (0x185A20), its disc reads and the 989snd command count to the `[gow-hang]` report |
 | `GOW_EE_WAIT=1` | The EE sleeps while waiting for the frame (changes game pacing) |
 | `PS2X_IOP_NATIVE`, `PS2X_IOP_NATIVE_STATS` | Native IOP module use and its hit statistics |
 | `PS2X_THREAD_PRIORITY` | Thread priority policy |

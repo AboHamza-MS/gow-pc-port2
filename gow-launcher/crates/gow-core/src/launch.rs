@@ -252,6 +252,21 @@ pub fn build_environment(ctx: &LaunchContext<'_>, inherited: impl Fn(&str) -> Op
     let sharpness = settings.sharpness.clamp(0.0, 1.0);
     plan.insert("PC_SHARPNESS", fixed(2.0 * (1.0 - sharpness), 2));
     plan.flag("PC_FXAA", settings.fxaa, None);
+    // Shade Boost (gs_host_present.cpp), 0..100: only a value that changes the picture is sent, so 50 leaves the shader
+    // exactly as it was.
+    for (name, value) in [
+        ("PC_BRIGHTNESS", settings.brightness),
+        ("PC_CONTRAST", settings.contrast),
+        ("PC_GAMMA", settings.gamma),
+        ("PC_SATURATION", settings.saturation),
+    ] {
+        let value = value.clamp(0, 100);
+        if value == crate::settings::IMAGE_NEUTRAL {
+            plan.remove(name);
+        } else {
+            plan.insert(name, value.to_string());
+        }
+    }
     // Forced progressive 480p (gow_video.cpp): on by default (sharp image); off = the game's interlaced mode.
     plan.flag("GOW_PROGRESSIVE", settings.progressive480p, Some("0"));
     // Waffle's runtime scaling (gs_host_present.cpp). "fsr" = bicubic with enhancement (GOW_SHARPEN from 0 to 0.5
@@ -263,8 +278,9 @@ pub fn build_environment(ctx: &LaunchContext<'_>, inherited: impl Fn(&str) -> Op
         plan.insert("GOW_SCALER", "bilinear");
         plan.insert("GOW_SHARPEN", "0");
     }
-    // Internal GS resolution, 1..6 (4x playable, 5x experimental, 6x practically unplayable; recommended 2x).
-    let scale = ctx.scale.clamp(1.0, 6.0);
+    // Internal GS resolution, 1..8 (recommended 2x; from 3x up it needs a strong GPU, and the runtime keeps the render
+    // targets within the GPU's texture limit).
+    let scale = ctx.scale.clamp(1.0, crate::settings::MAX_SCALE);
     plan.insert("PS2X_GS_SCALE", fixed(scale, 1));
     plan.insert("PS2X_GS_HW_SCALE", fixed(scale, 1)); // Waffle's renderer reads the scale from here
     plan.insert("PC_FALLBACK_SMOOTHNESS", "0");
@@ -288,6 +304,12 @@ pub fn build_environment(ctx: &LaunchContext<'_>, inherited: impl Fn(&str) -> Op
     keep_inherited(&mut plan, "GOW_PRESENT_MIN_INTERVAL_US", &(800_000 / fps).to_string());
     plan.flag("PC_VSYNC", settings.vsync, None);
     plan.flag("PC_SHOW_FPS", settings.show_fps, None);
+    // Each part is sent as 0 or 1: the runtime makes an unset part follow PC_SHOW_FPS (what older launchers relied on).
+    plan.flag("PC_SHOW_GPU", settings.show_gpu, Some("0"));
+    plan.flag("PC_SHOW_CPU", settings.show_cpu, Some("0"));
+    plan.flag("PC_SHOW_RAM", settings.show_ram, Some("0"));
+    // Early FINISH is on in the runtime by default; "0" turns it off.
+    plan.flag("GOW_GS_EARLY_FINISH", settings.early_finish, Some("0"));
 
     // Files. The runtime reads the disc from the ISO (without an extracted PART2.PAK there is no complete disc in the
     // directory); without a chosen ISO the first one next to the ELF is used.
@@ -426,6 +448,9 @@ mod tests {
             ("PC_PANEL", "0"),
             ("PC_RA_ENABLED", "0"),
             ("PC_SCREEN", "fullscreen"),
+            ("PC_SHOW_CPU", "0"),
+            ("PC_SHOW_GPU", "0"),
+            ("PC_SHOW_RAM", "0"),
             ("PC_SHARPNESS", "0.40"),
             ("PC_TITLE", "God of War"),
             ("PC_WIDESCREEN", "16:9"),
@@ -433,6 +458,7 @@ mod tests {
             ("PC_WINDOW_FPS", "144"), // the test display's refresh rate
             ("GOW_AUDIO_DEVICE", "default"),
             ("GOW_CANCEL", "1"),
+            ("GOW_GS_EARLY_FINISH", "1"),
             ("GOW_GS_FINISH_ASYNC", "1"),
             ("GOW_PERF_DIAG", "1"),
             ("GOW_PERF_FRAME_PC", "0x001837B8"),
@@ -469,6 +495,10 @@ mod tests {
             "GOW_PAD_DEVICE",
             "GOW_PAD_LIST_FILE",
             "GOW_PAD_SDL_MAPPING",
+            "PC_BRIGHTNESS",
+            "PC_CONTRAST",
+            "PC_GAMMA",
+            "PC_SATURATION",
         ] {
             assert!(plan.remove.contains(name), "{name} should be removed");
         }
@@ -565,6 +595,39 @@ mod tests {
     }
 
     #[test]
+    fn each_part_of_the_osd_has_its_own_variable() {
+        let mut fixture = fixture();
+        fixture.settings.show_cpu = true;
+        fixture.settings.show_ram = true;
+        let plan = plan(&fixture, 2.0);
+        assert_eq!((value(&plan, "PC_SHOW_CPU"), value(&plan, "PC_SHOW_RAM")), (Some("1"), Some("1")));
+        assert!(plan.remove.contains("PC_SHOW_FPS"));
+        // A part turned off is sent as 0, so the runtime does not make it follow PC_SHOW_FPS.
+        assert_eq!(value(&plan, "PC_SHOW_GPU"), Some("0"));
+    }
+
+    #[test]
+    fn early_finish_is_on_by_default_and_can_be_turned_off() {
+        let mut fixture = fixture();
+        assert_eq!(value(&plan(&fixture, 2.0), "GOW_GS_EARLY_FINISH"), Some("1"));
+        fixture.settings.early_finish = false;
+        assert_eq!(value(&plan(&fixture, 2.0), "GOW_GS_EARLY_FINISH"), Some("0"));
+    }
+
+    #[test]
+    fn image_adjustment_is_sent_only_when_it_changes_the_picture() {
+        let mut fixture = fixture();
+        fixture.settings.brightness = 65;
+        fixture.settings.gamma = 140; // out of range in a hand-edited file
+        fixture.settings.saturation = -3;
+        let plan = plan(&fixture, 2.0);
+        assert_eq!(value(&plan, "PC_BRIGHTNESS"), Some("65"));
+        assert_eq!(value(&plan, "PC_GAMMA"), Some("100"));
+        assert_eq!(value(&plan, "PC_SATURATION"), Some("0"));
+        assert!(value(&plan, "PC_CONTRAST").is_none() && plan.remove.contains("PC_CONTRAST"));
+    }
+
+    #[test]
     fn fsr_filter_sets_the_sharpening() {
         let mut fixture = fixture();
         fixture.settings.filter = "fsr".into();
@@ -634,7 +697,8 @@ mod tests {
         assert_eq!(value(&plan(&fixture, 3.0), "GOW_PRESENT_MIN_INTERVAL_US"), Some("13333"));
         fixture.settings.fps_limit = 240;
         assert_eq!(value(&plan(&fixture, 2.0), "PC_LOGIC_FPS"), Some("240"));
-        assert_eq!(value(&plan(&fixture, 9.0), "PS2X_GS_SCALE"), Some("6.0"));
+        assert_eq!(value(&plan(&fixture, 7.0), "PS2X_GS_SCALE"), Some("7.0"));
+        assert_eq!(value(&plan(&fixture, 10.0), "PS2X_GS_SCALE"), Some("8.0"));
     }
 
     #[test]

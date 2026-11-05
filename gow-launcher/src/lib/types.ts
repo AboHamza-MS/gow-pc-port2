@@ -15,11 +15,21 @@ export interface Settings {
   filter: 'fsr' | 'bilinear' | 'pixel' | string;
   sharpness: number;
   fxaa: boolean;
+  /** Shade Boost, 0..100 with 50 = no change (`PC_BRIGHTNESS`, `PC_CONTRAST`, `PC_GAMMA`, `PC_SATURATION`). */
+  brightness: number;
+  contrast: number;
+  gamma: number;
+  saturation: number;
   progressive480p: boolean;
   internalResolution: string;
   fpsLimit: number;
   vsync: boolean;
+  /** In-game OSD, one switch per part: FPS (`PC_SHOW_FPS`), GPU (`PC_SHOW_GPU`), CPU (`PC_SHOW_CPU`), RAM (`PC_SHOW_RAM`). */
   showFps: boolean;
+  showGpu: boolean;
+  showCpu: boolean;
+  showRam: boolean;
+  earlyFinish: boolean;
   elf: string;
   iso: string;
   executable: string;
