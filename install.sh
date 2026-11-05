@@ -60,19 +60,28 @@ warn() { printf '\033[1;33m[warning]\033[0m %s\n' "$*"; }
 error() { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # --- System packages ----------------------------------------------------------------------------------------------
-# GOW-Port: C/C++ compiler selection. Defaults to g++/gcc; set CXX=clang++ (or pass --compiler clang) to build with clang.
-# Switching the default to clang later only requires changing the fallback below.
-set_compiler() {   # set_compiler NAME
+# GOW-Port: C/C++ compiler selection. Defaults to g++/gcc; pass --compiler clang (or GOW_COMPILER=clang, or CXX=clang++)
+# to build with clang. Switching the default to clang later only requires changing the fallback below.
+compiler_family() {   # compiler_family NAME -> clang | gcc (anything that is not clang: g++, c++, g++-14, /usr/bin/c++...)
+    case "$(basename "$1")" in *clang*) echo clang ;; *) echo gcc ;; esac
+}
+set_compiler() {   # set_compiler NAME (g++ or clang; checked strictly, it comes from --compiler or GOW_COMPILER)
     case "$1" in
         clang|clang++|*/clang++) CC_BIN="${CC:-clang}"; CXX_BIN="clang++"; COMPILER_CHECK="clang++" ;;
         gcc|g++|*/g++)           CC_BIN="${CC:-gcc}";   CXX_BIN="g++";     COMPILER_CHECK="g++" ;;
         *) error "Unknown compiler '$1' (expected g++ or clang)" ;;
     esac
+    # A C compiler of the other family (CC=gcc with clang++) is replaced by the matching one.
+    [ "$(compiler_family "$CC_BIN")" = "$(compiler_family "$CXX_BIN")" ] || { [ "$COMPILER_CHECK" = clang++ ] && CC_BIN=clang || CC_BIN=gcc; }
     # GOW-Port: what the build needs, as one list the script and the launcher (--check-deps) share. The programs are looked
     # up in PATH and the libraries with pkg-config; PACKAGE_FOR maps each one to the package of the three families we know.
     CHECKS="cmake ninja $COMPILER_CHECK git pkg-config gl x11 xrandr xinerama xcursor xi xkbcommon wayland-client alsa"
 }
-set_compiler "${GOW_COMPILER:-${CXX:-g++}}"
+# CXX is only a hint here (distributions and CI often set it to c++ or g++-N): it picks the family, never fails.
+if [ -n "${GOW_COMPILER:-}" ]; then set_compiler "$GOW_COMPILER"
+elif [ "$(compiler_family "${CXX:-g++}")" = clang ]; then set_compiler clang
+else set_compiler g++
+fi
 OS_RELEASE="${GOW_OS_RELEASE:-/etc/os-release}"
 
 distro_family() {   # arch | debian | fedora | unknown
@@ -375,15 +384,20 @@ configure() {
             rm -rf "$BUILD/CMakeCache.txt" "$BUILD/CMakeFiles"
         fi
     fi
-    # GOW-Port: drop the cache when switching compilers (e.g. g++ -> clang++), keeping _deps.
+    # GOW-Port: drop the cache when switching compiler family (g++ <-> clang++), keeping _deps. Only the family is
+    # compared: older installs cached /usr/bin/c++ (the g++ they were built with), and treating that as another compiler
+    # would rebuild all ~6,400 units. The compiler is passed only on a fresh configure, for the same reason: CMake resets
+    # the whole cache when CMAKE_CXX_COMPILER changes, even from c++ to g++.
+    local compiler=()
     if [ -f "$BUILD/CMakeCache.txt" ]; then
         local cached_cxx
         cached_cxx="$(sed -n 's/^CMAKE_CXX_COMPILER:[A-Z]*=//p' "$BUILD/CMakeCache.txt" | head -n1)"
-        if [ -n "$cached_cxx" ] && [ "$(basename "$cached_cxx")" != "$(basename "$CXX_BIN")" ]; then
+        if [ -n "$cached_cxx" ] && [ "$(compiler_family "$cached_cxx")" != "$(compiler_family "$CXX_BIN")" ]; then
             warn "The build folder was configured with another compiler ($cached_cxx): reconfiguring for $CXX_BIN."
             rm -rf "$BUILD/CMakeCache.txt" "$BUILD/CMakeFiles"
         fi
     fi
+    [ -f "$BUILD/CMakeCache.txt" ] || compiler=("-DCMAKE_C_COMPILER=$CC_BIN" "-DCMAKE_CXX_COMPILER=$CXX_BIN")
     local extra=()
     if compgen -G "$VU1/*.bin" >/dev/null; then
         extra+=("-DPS2X_VU1_MICROCODE_DIR=$VU1" "-DPS2X_VU1_GENERATOR_SOURCE=$NATIVE/tools/vu1/generate_vu1.cpp"
@@ -401,7 +415,7 @@ configure() {
         fi
     fi
     cmake -S "$NATIVE" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_COMPILER="$CC_BIN" -DCMAKE_CXX_COMPILER="$CXX_BIN" \
+        "${compiler[@]}" \
         -DPS2X_ENABLE_RUNTIME_LOGS=OFF -DPS2X_ENABLE_AGRESSIVE_LOGS=OFF -DPS2X_ENABLE_IOP_RPC_TRACE=OFF \
         -DPS2X_BUILD_TEST=OFF -DPS2X_RUNNER_UNITY_BUILD_BATCH_SIZE=8 \
         -DPS2X_LTO_JOBS="$LTO_JOBS" \

@@ -6,6 +6,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+INSTALL_SH="$ROOT/install.sh"   # sourcing install.sh redefines ROOT
 failures=0
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
@@ -105,6 +106,18 @@ PATH="$fake" find_missing fedora
 expect "missing clang++ maps to clang package on fedora" "ninja-build clang pkgconf-pkg-config mesa-libGL-devel libX11-devel libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel libxkbcommon-devel wayland-devel alsa-lib-devel" "${MISSING_PACKAGES[*]}"
 set_compiler g++
 expect "restoring g++ resets CXX_BIN" g++ "$CXX_BIN"
+expect "c++ is the gcc family" gcc "$(compiler_family /usr/bin/c++)"
+expect "g++-14 is the gcc family" gcc "$(compiler_family g++-14)"
+expect "clang++-18 is the clang family" clang "$(compiler_family /usr/bin/clang++-18)"
+CC=gcc set_compiler clang
+expect "a gcc CC is replaced next to clang++" clang "$CC_BIN"
+set_compiler g++
+sourced_cxx() {   # sourced_cxx CXX -> CXX_BIN after sourcing install.sh with that CXX, or "error"
+    (unset CXX_BIN; CXX="$1" GOW_COMPILER="" . "$INSTALL_SH" >/dev/null 2>&1 && echo "${CXX_BIN:-error}") || echo error
+}
+expect "CXX=c++ picks g++ instead of failing" g++ "$(sourced_cxx c++)"
+expect "CXX=g++-14 picks g++" g++ "$(sourced_cxx g++-14)"
+expect "CXX=clang++-18 picks clang++" clang++ "$(sourced_cxx clang++-18)"
 
 echo "disk and memory"
 free_gb() { echo "$FAKE_FREE"; }

@@ -443,7 +443,8 @@ describe('installation wizard', () => {
     await user.click(await screen.findByRole('button', { name: 'NEXT' }));
     await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'INSTALL' }));
     await waitFor(() => expect(install).toHaveBeenCalledWith(expect.objectContaining({ iso: 'D:\\Games\\God of War.iso' })));
-  });
+    // Two simulated conversions (cancelled, then complete) with 4 s waits: over the 5 s default on a slow CI runner.
+  }, 20000);
 
   it('never offers a patch for a modified CHD, before or after converting it', async () => {
     boot(false);
