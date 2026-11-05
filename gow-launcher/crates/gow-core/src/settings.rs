@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 pub const SETTINGS_VERSION: u32 = 12;
 
+/// Value of the four Shade Boost settings that leaves the picture as the game draws it.
+pub const IMAGE_NEUTRAL: i32 = 50;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -23,6 +26,12 @@ pub struct Settings {
     pub filter: String,
     pub sharpness: f64,
     pub fxaa: bool,
+    /// Shade Boost (PCSX2-style image adjustment on the final picture), 0..100 with 50 = no change: `PC_BRIGHTNESS`,
+    /// `PC_CONTRAST`, `PC_GAMMA` and `PC_SATURATION`. A file written before they existed reads 50 (`serde(default)`).
+    pub brightness: i32,
+    pub contrast: i32,
+    pub gamma: i32,
+    pub saturation: i32,
     pub progressive480p: bool,
     /// "auto" or "1".."8" (`PS2X_GS_SCALE`).
     pub internal_resolution: String,
@@ -90,6 +99,10 @@ impl Default for Settings {
             filter: "bilinear".into(),
             sharpness: 0.8,
             fxaa: true,
+            brightness: IMAGE_NEUTRAL,
+            contrast: IMAGE_NEUTRAL,
+            gamma: IMAGE_NEUTRAL,
+            saturation: IMAGE_NEUTRAL,
             progressive480p: true,
             internal_resolution: "2".into(),
             fps_limit: 60,
@@ -255,6 +268,14 @@ impl Settings {
         }
     }
 
+    /// Brightness, contrast, gamma and saturation back to "no change" (the Reset button of the image adjustment group).
+    pub fn reset_image_adjustment(&mut self) {
+        self.brightness = IMAGE_NEUTRAL;
+        self.contrast = IMAGE_NEUTRAL;
+        self.gamma = IMAGE_NEUTRAL;
+        self.saturation = IMAGE_NEUTRAL;
+    }
+
     /// Back to the defaults of the "Reset" button; paths, cheats' history, RetroAchievements and the hand-made mapping of a
     /// controller (`pad_sdl_map`) are untouched.
     pub fn reset_game_options(&mut self, display: &DisplayInfo) {
@@ -268,6 +289,7 @@ impl Settings {
         self.filter = "bilinear".into();
         self.sharpness = 0.8;
         self.fxaa = true;
+        self.reset_image_adjustment();
         self.progressive480p = true;
         self.internal_resolution = "2".into();
         self.fps_limit = 60;
@@ -452,6 +474,24 @@ mod tests {
         assert!(!loaded.auto_update);
         std::fs::write(&path, r#"{"autoUpdate":true}"#).unwrap();
         assert!(Settings::load(&path).auto_update);
+    }
+
+    #[test]
+    fn an_old_file_gets_a_neutral_image_adjustment_and_the_reset_restores_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        std::fs::write(&path, r#"{"fxaa":false,"settingsVersion":12}"#).unwrap();
+        let mut loaded = Settings::load(&path);
+        loaded.migrate(false, &DisplayInfo::default());
+        assert_eq!((loaded.brightness, loaded.contrast, loaded.gamma, loaded.saturation), (50, 50, 50, 50));
+        loaded.brightness = 70;
+        loaded.gamma = 20;
+        loaded.save(&path).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"brightness\": 70"));
+        let mut reloaded = Settings::load(&path);
+        assert_eq!((reloaded.brightness, reloaded.gamma), (70, 20));
+        reloaded.reset_game_options(&DisplayInfo::default());
+        assert_eq!((reloaded.brightness, reloaded.contrast, reloaded.gamma, reloaded.saturation), (50, 50, 50, 50));
     }
 
     #[test]

@@ -1,11 +1,19 @@
 import { useMemo } from 'react';
-import { Expand, Grid2x2, Image, Maximize, Monitor, RectangleHorizontal, SlidersHorizontal, SquareDashed, Film, StretchHorizontal, TriangleAlert } from 'lucide-react';
-import { GroupTitle, Note, Select, SettingRow, Slider, Switch, type Option } from '../components/ui';
+import { Contrast, Droplet, Expand, Grid2x2, Image, Maximize, Monitor, RectangleHorizontal, RotateCcw, SlidersHorizontal, SquareDashed, Film, StretchHorizontal, Sun, SunMoon, TriangleAlert } from 'lucide-react';
+import { GroupTitle, Note, SecondaryButton, Select, SettingRow, Slider, Switch, type Option } from '../components/ui';
 import { useApp } from '../state/app';
 import { activePreset, presetChange, type PresetId } from '../lib/presets';
 import type { DisplayInfo } from '../lib/types';
 
 const SCALES = [1, 1.5, 2, 2.5, 3, 4, 5, 6];
+/** Shade Boost value that leaves the picture untouched (`IMAGE_NEUTRAL` in gow-core). */
+export const IMAGE_NEUTRAL = 50;
+const IMAGE_ADJUSTMENTS = [
+  { key: 'brightness', icon: Sun },
+  { key: 'contrast', icon: Contrast },
+  { key: 'gamma', icon: SunMoon },
+  { key: 'saturation', icon: Droplet },
+] as const;
 /** `Settings::default` in gow-core: the multiple the option list marks as the default. */
 const DEFAULT_SCALE = '2';
 /**
@@ -216,6 +224,20 @@ export function GraphicsPage() {
       </SettingRow>
       <SettingRow icon={Film} title={t('progressive')} description={t('progressiveDesc')}>
         <Switch label={t('progressive')} checked={settings.progressive480p} onChange={(progressive480p) => patch({ progressive480p })} />
+      </SettingRow>
+      <GroupTitle>{t('groupImageAdjustment')}</GroupTitle>
+      {IMAGE_ADJUSTMENTS.map(({ key, icon }) => (
+        <SettingRow key={key} icon={icon} title={t(key)} description={t(`${key}Desc`)}>
+          <Slider label={t(key)} from={0} to={100} step={1} value={settings[key]} onChange={(value) => patch({ [key]: value })} />
+        </SettingRow>
+      ))}
+      <SettingRow icon={RotateCcw} title={t('imageReset')} description={t('imageResetDesc')}>
+        <SecondaryButton
+          disabled={IMAGE_ADJUSTMENTS.every(({ key }) => settings[key] === IMAGE_NEUTRAL)}
+          onClick={() => patch({ brightness: IMAGE_NEUTRAL, contrast: IMAGE_NEUTRAL, gamma: IMAGE_NEUTRAL, saturation: IMAGE_NEUTRAL })}
+        >
+          {t('imageResetButton')}
+        </SecondaryButton>
       </SettingRow>
     </div>
   );

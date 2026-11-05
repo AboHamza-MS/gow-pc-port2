@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import App from '../App';
@@ -38,5 +38,22 @@ describe('graphics presets in the Graphics tab', () => {
     expect(screen.getByRole('option', { name: 'Custom' })).toHaveAttribute('aria-disabled', 'true');
     await user.click(screen.getByRole('option', { name: /^Performance/ }));
     expect(await screen.findByRole('combobox', { name: 'Graphics preset' })).toHaveTextContent('Performance');
+  });
+});
+
+describe('image adjustment in the Graphics tab', () => {
+  it('starts at 50 with Reset disabled, writes a moved slider and resets all four to 50', async () => {
+    const { user, patch } = await openGraphics();
+    const reset = screen.getByRole('button', { name: 'Reset' });
+    expect(reset).toBeDisabled();
+    for (const name of ['Brightness', 'Contrast', 'Gamma', 'Saturation']) {
+      expect(screen.getByRole('slider', { name })).toHaveValue('50');
+    }
+    fireEvent.change(screen.getByRole('slider', { name: 'Gamma' }), { target: { value: '70' } });
+    await waitFor(() => expect(patch).toHaveBeenCalledWith({ gamma: 70 }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reset' })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: 'Reset' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith({ brightness: 50, contrast: 50, gamma: 50, saturation: 50 }));
+    expect(await screen.findByRole('slider', { name: 'Gamma' })).toHaveValue('50');
   });
 });

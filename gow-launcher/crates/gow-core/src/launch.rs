@@ -252,6 +252,21 @@ pub fn build_environment(ctx: &LaunchContext<'_>, inherited: impl Fn(&str) -> Op
     let sharpness = settings.sharpness.clamp(0.0, 1.0);
     plan.insert("PC_SHARPNESS", fixed(2.0 * (1.0 - sharpness), 2));
     plan.flag("PC_FXAA", settings.fxaa, None);
+    // Shade Boost (gs_host_present.cpp), 0..100: only a value that changes the picture is sent, so 50 leaves the shader
+    // exactly as it was.
+    for (name, value) in [
+        ("PC_BRIGHTNESS", settings.brightness),
+        ("PC_CONTRAST", settings.contrast),
+        ("PC_GAMMA", settings.gamma),
+        ("PC_SATURATION", settings.saturation),
+    ] {
+        let value = value.clamp(0, 100);
+        if value == crate::settings::IMAGE_NEUTRAL {
+            plan.remove(name);
+        } else {
+            plan.insert(name, value.to_string());
+        }
+    }
     // Forced progressive 480p (gow_video.cpp): on by default (sharp image); off = the game's interlaced mode.
     plan.flag("GOW_PROGRESSIVE", settings.progressive480p, Some("0"));
     // Waffle's runtime scaling (gs_host_present.cpp). "fsr" = bicubic with enhancement (GOW_SHARPEN from 0 to 0.5
@@ -472,6 +487,10 @@ mod tests {
             "GOW_PAD_DEVICE",
             "GOW_PAD_LIST_FILE",
             "GOW_PAD_SDL_MAPPING",
+            "PC_BRIGHTNESS",
+            "PC_CONTRAST",
+            "PC_GAMMA",
+            "PC_SATURATION",
         ] {
             assert!(plan.remove.contains(name), "{name} should be removed");
         }
@@ -573,6 +592,19 @@ mod tests {
         assert_eq!(value(&plan(&fixture, 2.0), "GOW_GS_EARLY_FINISH"), Some("1"));
         fixture.settings.early_finish = false;
         assert_eq!(value(&plan(&fixture, 2.0), "GOW_GS_EARLY_FINISH"), Some("0"));
+    }
+
+    #[test]
+    fn image_adjustment_is_sent_only_when_it_changes_the_picture() {
+        let mut fixture = fixture();
+        fixture.settings.brightness = 65;
+        fixture.settings.gamma = 140; // out of range in a hand-edited file
+        fixture.settings.saturation = -3;
+        let plan = plan(&fixture, 2.0);
+        assert_eq!(value(&plan, "PC_BRIGHTNESS"), Some("65"));
+        assert_eq!(value(&plan, "PC_GAMMA"), Some("100"));
+        assert_eq!(value(&plan, "PC_SATURATION"), Some("0"));
+        assert!(value(&plan, "PC_CONTRAST").is_none() && plan.remove.contains("PC_CONTRAST"));
     }
 
     #[test]

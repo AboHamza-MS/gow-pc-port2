@@ -23,6 +23,7 @@ If you just want to play, set **Graphics → render resolution 2×** and **Perfo
 | Sharpness | 0.8 | Only for Bicubic: how much contrast-adaptive sharpening is applied |
 | Anti-aliasing (FXAA) | On | Smooths jagged edges before upscaling |
 | Progressive scan (480p) | On | The game's sharp 480p mode. Off uses its interlaced mode with the anti-flicker filter (softer) |
+| Image adjustment: Brightness, Contrast, Gamma, Saturation | 50 | PCSX2-style Shade Boost on the final picture, 0 to 100, where 50 leaves the image exactly as the game draws it. Gamma above 50 brightens the mid-tones without washing out black, which helps the dark scenes on PC monitors. **Reset** puts all four back at 50. It runs in the same pass as FXAA and upscaling, so it costs practically nothing |
 
 ### Textures
 

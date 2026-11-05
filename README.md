@@ -62,7 +62,7 @@ game's own recompiled code and replaces the libraries that code calls with nativ
 ## Features
 
 - **Native renderer**: OpenGL 4.6, GPU render targets, internal resolution 1×–6×, bicubic (with sharpening),
-  bilinear or pixel upscaling, FXAA, 480p progressive mode.
+  bilinear or pixel upscaling, FXAA, 480p progressive mode, brightness/contrast/gamma/saturation adjustment.
 - **Widescreen (Hor+)**: 16:9, 16:10, 21:9 (experimental) and 32:9 (very experimental: stretched HUD and menus) using PCSX2's patch. Switch it off for the game's original 4:3.
 - **Movies**: MPEG-2 decoded natively, with sound, including the game's own widescreen versions.
 - **Controls**: remappable keyboard and mouse, any gamepad, PS2 or modern layout, per-button swaps, vibration on
