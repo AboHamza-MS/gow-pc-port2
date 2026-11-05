@@ -14,14 +14,14 @@ Last reviewed: October 2026, against the code in this repository.
 | Played and measured | Yes | Yes, but not re-measured recently |
 | Automated coverage of the runtime or the installers | **None** | **None** |
 | Launcher and setup wizard | Launcher + wizard are the main path | Launcher builds; the wizard drives `install.sh` but has never run on a real Linux machine |
-| Rumble | Yes | No |
+| Rumble | Yes | Yes (`evdev` `FF_RUMBLE`) |
 | Save-file validation | Loading and saving verified; a **hang after saving** is open (see below) | Not re-verified recently |
 
 > [!WARNING]
 > **Linux is experimental.** Everything needed is in the repository (`install.sh`, the GLFW/GL presentation path,
 > `run_gow.sh`, the `.deb`/AppImage packaging and the loader/scheduler work), and the game builds and runs there. What
 > is missing is proof: no CI job compiles the runtime or runs an installer on any platform, the latest Linux
-> builds have not been measured, vibration is not implemented, the launcher's setup wizard drives
+> builds have not been measured, the launcher's setup wizard drives
 > `install.sh` with its own arguments and `--check-deps` (unit-tested, never run on a real Linux machine), and the Windows
 > installer is the only one that records `game-elf.sha256` for the launcher's fingerprint check. Don't treat a Linux
 > report as a supported configuration yet.
@@ -39,7 +39,7 @@ Last reviewed: October 2026, against the code in this repository.
 - **Sound** runs on a native sound engine fed by the game's own IOP libraries; there is no SPU2 emulation.
 - **Memory card** is a PCSX2-compatible image; loading and saving work, with thumbnails and dates.
 - **Input**: keyboard and mouse with a full remappable layout, gamepads with the PS2 or the modern layout, vibration on
-  Windows.
+  Windows and Linux.
 - **PC features**: cheat menu (F2), target lock (Alt), agile combat, custom texture packs, RetroAchievements,
   background optimization, launcher in English and Brazilian Portuguese.
 - **Verification**: the recompiler's output is compared byte for byte against PS2Recomp's C++ recompiler, and the GS,
@@ -72,7 +72,7 @@ Last reviewed: October 2026, against the code in this repository.
 - **Windows Release build:** the default installer configuration (no whole-program optimization, AVX2 off) has never
   been compared in game against the faster development build. Numbers measured in a development build may
   not carry over.
-- **Linux:** no recent measurement, no vibration, and the launcher's setup wizard has never run on a real Linux machine.
+- **Linux:** no recent measurement, and the launcher's setup wizard has never run on a real Linux machine.
   The script is the reference way to install.
 - **Portable zip:** assembled by the release workflow (the launcher, its `kit/` and a README), and the workflow checks
   that the kit is complete. It has not been run from a published release yet, so the first one is its first test. It

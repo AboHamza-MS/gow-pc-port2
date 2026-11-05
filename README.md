@@ -66,7 +66,7 @@ game's own recompiled code and replaces the libraries that code calls with nativ
 - **Widescreen (Hor+)**: 16:9, 16:10, 21:9 (experimental) and 32:9 (very experimental: stretched HUD and menus) using PCSX2's patch. Switch it off for the game's original 4:3.
 - **Movies**: MPEG-2 decoded natively, with sound, including the game's own widescreen versions.
 - **Controls**: remappable keyboard and mouse, any gamepad, PS2 or modern layout, per-button swaps, vibration on
-  Windows.
+  Windows and Linux.
 - **Quality of life**: cheat menu (**F2**, nine cheats), target lock (**Alt**), agile combat, overlay with FPS, GPU, CPU and RAM (each one optional), fullscreen.
 - **Saves**: a PCSX2-compatible `Mcd001.ps2` memory card. Cards move between the two in either direction.
 - **Custom textures**: PCSX2 replacement packs work, and the launcher can download the community pack.
@@ -85,7 +85,7 @@ game's own recompiled code and replaces the libraries that code calls with nativ
 > **Linux is experimental.** The Linux path is in the repository (`install.sh`, the GLFW/GL presentation path,
 > `run_gow.sh`, the `.deb`/AppImage packaging), but it hasn't been validated to the same level: no CI job builds or
 > tests the runtime on any platform, the launcher's setup wizard drives `install.sh` on Linux but has never run on a real
-> Linux machine, vibration is missing, and recent Linux builds haven't been measured. Treat it as prepared, not supported.
+> Linux machine, and recent Linux builds haven't been measured. Treat it as prepared, not supported.
 > [`docs/STATUS.md`](docs/STATUS.md) has the details, area by area.
 
 ## Contents

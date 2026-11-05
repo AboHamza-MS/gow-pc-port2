@@ -305,4 +305,174 @@ bool ps2PadWindowsRumble(uint8_t large, bool small)
     worker->wake.notify_one();
     return true;
 }
+#elif defined(__linux__)
+// GOW-Port: Linux gamepad rumble through kernel evdev force-feedback (FF_RUMBLE on /dev/input/event*).
+// Covers Xbox (xpad), Sony DualShock 4 / DualSense (hid-playstation / hid-sony), Nintendo, 8BitDo and Steam Virtual
+// Gamepads without external libraries.
+#include <chrono>
+#include <cctype>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <dirent.h>
+#include <fcntl.h>
+#include <linux/input.h>
+#include <string>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#include <vector>
+
+namespace
+{
+constexpr uint16_t kRumbleReplayLengthMs = 4000u;
+
+struct LinuxPad
+{
+    int fd = -1;
+    int effectId = -1;
+};
+
+bool testBit(int bit, const unsigned long *bits)
+{
+    constexpr size_t kBitsPerLong = sizeof(unsigned long) * 8u;
+    return ((bits[static_cast<size_t>(bit) / kBitsPerLong] >> (static_cast<size_t>(bit) % kBitsPerLong)) & 1ul) != 0ul;
+}
+
+bool isEventDeviceName(const char *name)
+{
+    if (std::strncmp(name, "event", 5) != 0 || name[5] == '\0')
+        return false;
+    for (const char *p = name + 5; *p != '\0'; ++p)
+        if (!std::isdigit(static_cast<unsigned char>(*p)))
+            return false;
+    return true;
+}
+
+std::vector<LinuxPad> openLinuxPads()
+{
+    std::vector<LinuxPad> pads;
+    DIR *dir = opendir("/dev/input");
+    if (!dir)
+        return pads;
+
+    while (const dirent *entry = readdir(dir))
+    {
+        if (!isEventDeviceName(entry->d_name))
+            continue;
+        const std::string path = std::string("/dev/input/") + entry->d_name;
+        const int fd = open(path.c_str(), O_RDWR | O_CLOEXEC | O_NONBLOCK);
+        if (fd < 0)
+            continue;
+
+        unsigned long ffBits[(FF_MAX + sizeof(unsigned long) * 8u) / (sizeof(unsigned long) * 8u)]{};
+        if (ioctl(fd, EVIOCGBIT(EV_FF, sizeof(ffBits)), ffBits) < 0 || !testBit(FF_RUMBLE, ffBits))
+        {
+            close(fd);
+            continue;
+        }
+
+        ff_effect effect{};
+        effect.type = FF_RUMBLE;
+        effect.id = -1;
+        effect.replay.length = kRumbleReplayLengthMs;
+        effect.replay.delay = 0;
+        if (ioctl(fd, EVIOCSFF, &effect) < 0 || effect.id < 0)
+        {
+            close(fd);
+            continue;
+        }
+
+        char name[128] = "Gamepad";
+        if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) < 0 || name[0] == '\0')
+            std::snprintf(name, sizeof(name), "Gamepad");
+        std::fprintf(stderr, "[pad] rumble: %s (%s)\n", name, path.c_str());
+        pads.push_back({fd, effect.id});
+    }
+    closedir(dir);
+    return pads;
+}
+
+bool sendLinuxRumble(LinuxPad &pad, uint16_t strong, uint16_t weak, uint16_t lengthMs = kRumbleReplayLengthMs)
+{
+    const bool active = strong != 0u || weak != 0u;
+    if (active)
+    {
+        ff_effect effect{};
+        effect.type = FF_RUMBLE;
+        effect.id = static_cast<int16_t>(pad.effectId);
+        effect.u.rumble.strong_magnitude = strong;
+        effect.u.rumble.weak_magnitude = weak;
+        effect.replay.length = lengthMs;
+        effect.replay.delay = 0;
+        if (ioctl(pad.fd, EVIOCSFF, &effect) < 0)
+            return false;
+    }
+
+    input_event play{};
+    play.type = EV_FF;
+    play.code = static_cast<uint16_t>(pad.effectId);
+    play.value = active ? 1 : 0;
+    return write(pad.fd, &play, sizeof(play)) == static_cast<ssize_t>(sizeof(play));
+}
+} // namespace
+
+bool ps2PadLinuxRumble(uint8_t large, bool small)
+{
+    static std::vector<LinuxPad> pads;
+    static std::chrono::steady_clock::time_point lastScan{};
+    static std::chrono::steady_clock::time_point lastPulseStart{};
+    static uint16_t lastStrong = 0u, lastWeak = 0u;
+    static bool scannedOnce = false;
+
+    const auto now = std::chrono::steady_clock::now();
+    uint16_t strong = large ? static_cast<uint16_t>(16384u + large * 192u) : (small ? 24576u : 0u);
+    uint16_t weak = (small || large > 0u) ? 0xFFFFu : 0u;
+    uint16_t lengthMs = kRumbleReplayLengthMs;
+
+    if (strong != 0u || weak != 0u)
+    {
+        if (lastStrong == 0u && lastWeak == 0u)
+            lastPulseStart = now;
+        lastStrong = strong;
+        lastWeak = weak;
+    }
+    else if ((lastStrong != 0u || lastWeak != 0u) && now - lastPulseStart < std::chrono::milliseconds(90))
+    {
+        // Let 1-4 frame pulses finish spinning (~90 ms) before the kernel stops the motor.
+        strong = lastStrong;
+        weak = lastWeak;
+        lengthMs = 80u;
+        lastStrong = lastWeak = 0u;
+    }
+    else
+    {
+        lastStrong = lastWeak = 0u;
+    }
+
+    if (pads.empty() && (strong != 0u || weak != 0u))
+    {
+        if (!scannedOnce || now - lastScan >= std::chrono::seconds(2))
+        {
+            scannedOnce = true;
+            lastScan = now;
+            pads = openLinuxPads();
+        }
+    }
+
+    bool any = false;
+    for (size_t i = 0; i < pads.size();)
+    {
+        if (sendLinuxRumble(pads[i], strong, weak, lengthMs))
+        {
+            any = true;
+            ++i;
+        }
+        else
+        {
+            close(pads[i].fd); // unplugged
+            pads.erase(pads.begin() + static_cast<std::ptrdiff_t>(i));
+        }
+    }
+    return any;
+}
 #endif
