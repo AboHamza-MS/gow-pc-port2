@@ -79,6 +79,11 @@ export function PerformancePage() {
       <SettingRow icon={RefreshCw} title={t('vsync')} description={t('vsyncDesc')}>
         <Switch label={t('vsync')} checked={settings.vsync} onChange={(vsync) => patch({ vsync })} />
       </SettingRow>
+      {settings.vsync && (
+        <Note tone="warn" title={t('vsyncWarningTitle')}>
+          {t('vsyncWarning')}
+        </Note>
+      )}
       <SettingRow icon={Activity} title={t('showFps')} description={t('showFpsDesc')}>
         <Switch label={t('showFps')} checked={settings.showFps} onChange={(showFps) => patch({ showFps })} />
       </SettingRow>
