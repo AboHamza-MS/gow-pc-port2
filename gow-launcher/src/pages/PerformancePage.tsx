@@ -4,9 +4,9 @@ import { GroupTitle, Note, ProgressBar, SecondaryButton, Select, SettingRow, Swi
 import { useApp } from '../state/app';
 
 /** Highest internal scale the launcher offers (`MAX_SCALE` in gow-core). */
-export const MAX_SCALE = 10;
+export const MAX_SCALE = 8;
 
-/** Internal scale requested: "auto" and anything above 10x fall back to 2x (mirrors `Settings::selected_scale`). */
+/** Internal scale requested: "auto" and anything above 8x fall back to 2x (mirrors `Settings::selected_scale`). */
 export function selectedScale(internalResolution: string): number {
   const n = parseFloat(internalResolution);
   return internalResolution === 'auto' || Number.isNaN(n) || n > MAX_SCALE ? 2 : Math.max(1, n);

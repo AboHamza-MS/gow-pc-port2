@@ -33,7 +33,7 @@ Last reviewed: October 2026, against the code in this repository.
 ## What works
 
 - **The whole game is recompiled**, not emulated: about 6,400 functions of `SCUS_973.99` become C++ and run natively.
-- **Rendering** is a native OpenGL renderer with GPU render targets, internal resolution 1×–10× (2× recommended),
+- **Rendering** is a native OpenGL renderer with GPU render targets, internal resolution 1×–8× (2× recommended),
   bicubic/bilinear/pixel scaling, FXAA, 480p progressive mode, Hor+ widescreen (4:3, 16:9, 16:10, 21:9 experimental, 32:9 very experimental).
 - **Movies** play natively with their sound (MPEG-2 through libmpeg2), including the game's widescreen `.PSW` versions.
 - **Sound** runs on a native sound engine fed by the game's own IOP libraries; there is no SPU2 emulation.

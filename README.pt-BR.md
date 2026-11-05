@@ -42,7 +42,7 @@ unidade vetorial, processador de I/O, som, controle, cartão de memória - é im
 interpreta o código do jogo em tempo de execução.
 
 O resultado é o jogo na lógica original de 60 Hz (ou num limite de 120 FPS, ou no experimental de 240, na mesma velocidade), com
-renderizador OpenGL de 1× a 10× de resolução interna, vídeos
+renderizador OpenGL de 1× a 8× de resolução interna, vídeos
 nativos com som, um launcher com ajustes, teclado e mouse, menu de cheats, mira travada, widescreen, packs de texturas
 personalizadas e RetroAchievements.
 
@@ -63,7 +63,7 @@ nativas das bibliotecas que ele chama.
 
 ## Recursos
 
-- **Renderizador nativo** - OpenGL 4.6, render targets na GPU, resolução interna de 1× a 10×, upscaling bicúbico (com
+- **Renderizador nativo** - OpenGL 4.6, render targets na GPU, resolução interna de 1× a 8×, upscaling bicúbico (com
   nitidez), bilinear ou pixel, FXAA, modo progressivo 480p, ajuste de brilho/contraste/gama/saturação.
 - **Widescreen (Hor+)** - 16:9, 16:10, 21:9 (experimental) e 32:9 (muito experimental: HUD e menus esticados) pelo patch do PCSX2, com chave; desligado mostra o 4:3 original.
 - **Vídeos** - MPEG-2 decodificado nativamente, com som, incluindo as versões widescreen do próprio jogo.

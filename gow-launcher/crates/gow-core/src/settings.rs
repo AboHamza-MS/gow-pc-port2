@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 pub const SETTINGS_VERSION: u32 = 13;
 
 /// Highest internal GS scale the launcher offers (the runtime also keeps it within the GPU's texture limit).
-pub const MAX_SCALE: f64 = 10.0;
+pub const MAX_SCALE: f64 = 8.0;
 
 /// Value of the four Shade Boost settings that leaves the picture as the game draws it.
 pub const IMAGE_NEUTRAL: i32 = 50;
@@ -281,7 +281,7 @@ impl Settings {
         }
     }
 
-    /// Internal GS scale actually requested: "auto" and anything above 10 fall back to 2x.
+    /// Internal GS scale actually requested: "auto" and anything above 8 fall back to 2x.
     pub fn selected_scale(&self) -> f64 {
         match self.internal_resolution.parse::<f64>() {
             Ok(n) if self.internal_resolution != "auto" && n <= MAX_SCALE => n.max(1.0),
@@ -463,8 +463,8 @@ mod tests {
     fn scale_falls_back_to_two() {
         let scale = |text: &str| Settings { internal_resolution: text.into(), ..Settings::default() }.selected_scale();
         assert_eq!(scale("auto"), 2.0);
-        assert_eq!(scale("12"), 2.0);
-        assert_eq!(scale("10"), 10.0);
+        assert_eq!(scale("10"), 2.0);
+        assert_eq!(scale("9"), 2.0);
         assert_eq!(scale("8"), 8.0);
         assert_eq!(scale("6"), 6.0);
         assert_eq!(scale("3"), 3.0);

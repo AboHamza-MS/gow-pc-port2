@@ -41,7 +41,7 @@ is then compiled into a normal PC program. The PlayStation 2 hardware around it 
 processor, sound, pad, memory card) is implemented natively. Nothing interprets the game's code at run time.
 
 On top of that you get the original 60 Hz game logic (or a 120 FPS limit, or an experimental 240, at the same speed), an
-OpenGL renderer with 1×–10× internal resolution, native movies
+OpenGL renderer with 1×–8× internal resolution, native movies
 with sound, a launcher with settings, keyboard and mouse support, a cheat menu, target lock, widescreen, custom texture
 packs and RetroAchievements.
 
@@ -61,7 +61,7 @@ game's own recompiled code and replaces the libraries that code calls with nativ
 
 ## Features
 
-- **Native renderer**: OpenGL 4.6, GPU render targets, internal resolution 1×–10×, bicubic (with sharpening),
+- **Native renderer**: OpenGL 4.6, GPU render targets, internal resolution 1×–8×, bicubic (with sharpening),
   bilinear or pixel upscaling, FXAA, 480p progressive mode, brightness/contrast/gamma/saturation adjustment.
 - **Widescreen (Hor+)**: 16:9, 16:10, 21:9 (experimental) and 32:9 (very experimental: stretched HUD and menus) using PCSX2's patch. Switch it off for the game's original 4:3.
 - **Movies**: MPEG-2 decoded natively, with sound, including the game's own widescreen versions.

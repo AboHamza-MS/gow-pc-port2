@@ -278,7 +278,7 @@ pub fn build_environment(ctx: &LaunchContext<'_>, inherited: impl Fn(&str) -> Op
         plan.insert("GOW_SCALER", "bilinear");
         plan.insert("GOW_SHARPEN", "0");
     }
-    // Internal GS resolution, 1..10 (recommended 2x; from 3x up it needs a strong GPU, and the runtime keeps the render
+    // Internal GS resolution, 1..8 (recommended 2x; from 3x up it needs a strong GPU, and the runtime keeps the render
     // targets within the GPU's texture limit).
     let scale = ctx.scale.clamp(1.0, crate::settings::MAX_SCALE);
     plan.insert("PS2X_GS_SCALE", fixed(scale, 1));
@@ -697,8 +697,8 @@ mod tests {
         assert_eq!(value(&plan(&fixture, 3.0), "GOW_PRESENT_MIN_INTERVAL_US"), Some("13333"));
         fixture.settings.fps_limit = 240;
         assert_eq!(value(&plan(&fixture, 2.0), "PC_LOGIC_FPS"), Some("240"));
-        assert_eq!(value(&plan(&fixture, 9.0), "PS2X_GS_SCALE"), Some("9.0"));
-        assert_eq!(value(&plan(&fixture, 14.0), "PS2X_GS_SCALE"), Some("10.0"));
+        assert_eq!(value(&plan(&fixture, 7.0), "PS2X_GS_SCALE"), Some("7.0"));
+        assert_eq!(value(&plan(&fixture, 10.0), "PS2X_GS_SCALE"), Some("8.0"));
     }
 
     #[test]

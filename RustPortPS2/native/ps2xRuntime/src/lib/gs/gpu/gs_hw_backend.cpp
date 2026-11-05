@@ -891,7 +891,7 @@ struct GSHwBackend::Impl
         }
         if (const char *s = std::getenv("PS2X_GS_HW_SCALE"))
             scale = std::max(1.0f, static_cast<float>(std::atof(s)));
-        // GOW-Port: the launcher offers up to 10x. A render target is fbw * 64 PS2 pixels wide (God of War uses fbw <= 10,
+        // GOW-Port: the launcher offers up to 8x. A render target is fbw * 64 PS2 pixels wide (God of War uses fbw <= 10,
         // 640 px) and 512 tall; keep a 1024 x 512 target within the GPU's texture limit (16384 on most cards: 16x).
         {
             GLint maxTexture = 0;
