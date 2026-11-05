@@ -18,7 +18,7 @@ If you just want to play, set **Graphics → render resolution 2×** and **Perfo
 | Aspect ratio | Your display's | 4:3, 16:9, 16:10, 21:9 (ultrawide, experimental) or 32:9 (super ultrawide, very experimental). 32:9 is picked by default on displays such as 5120×1440 and 3840×1080. At 32:9 the HUD is stretched across the whole width and a higher internal resolution (3× or more) keeps the image sharp |
 | Resolution | Native | Fullscreen always uses the display's native mode; this is the initial window size |
 | Graphics preset | Balanced | **Performance** (1×, Bilinear, no FXAA), **Balanced** (2×, Bilinear, FXAA) or **Quality** (3×, Bicubic at 0.8, FXAA). It sets only render resolution, upscaling, sharpness and FXAA, and shows **Custom** as soon as you change one of them by hand. It changes how heavy the picture is for your graphics card, not the speed of the game itself |
-| Render resolution | 2× | Internal render scale, 1× to 6×. 2× is recommended: **from 3× up the game gets heavy**, and 4×–6× are experimental |
+| Render resolution | 2× | Internal render scale, 1× to 10×. 2× is recommended: **from 3× up the game gets heavy**, 4×–6× need a powerful GPU and 7×–10× a high-end one with plenty of video memory |
 | Upscaling | Bilinear (soft) | How the image is fitted to the screen: **Bicubic (sharp)** (bicubic + contrast-adaptive sharpening), **Bilinear (soft)** or **Pixel**. The "Pixel" option currently resolves to a bilinear stretch, not nearest-neighbour. If the render is larger than the screen it is downsampled by area averaging |
 | Sharpness | 0.8 | Only for Bicubic: how much contrast-adaptive sharpening is applied |
 | Anti-aliasing (FXAA) | On | Smooths jagged edges before upscaling |
@@ -41,9 +41,9 @@ A pack applies the next time the game starts. [`TEXTURES.md`](TEXTURES.md) expla
 | Control | Default | What it does |
 |---|---|---|
 | Graphics card | Automatic | On Windows: Power saving (integrated) or High performance (dedicated); on Linux the launcher sets the PRIME variables. The game always renders on the card that drives the window, so a dedicated GPU is much faster |
-| FPS limit | 60 | The game's real frame rate. 60 is the native rate; **120 and 240 are experimental**: the game logic runs at that rate with the game kept at normal speed (smoother, never faster). The window refreshes at the monitor's rate. Settings from older versions go back to 60 once |
+| FPS limit | 60 | The game's real frame rate. 60 is the native rate, 120 runs the game smoother and **240 is experimental**: the game logic runs at that rate with the game kept at normal speed (smoother, never faster). The window refreshes at the monitor's rate. Settings from older versions go back to 60 once |
 | Vertical sync | Off | Prevents tearing; locks the presentation to the display refresh. **Not recommended**: a frame that misses a refresh waits for the next one, which shows as stutter and input lag. Leave it off unless tearing bothers you and your display has no FreeSync/G-Sync; turning it on shows a warning |
-| FPS counter | Off | Shows the game's real frame rate in a corner (never above the FPS limit) |
+| In-game overlay: FPS counter, GPU, CPU, RAM | Off | One switch per line of the overlay in the corner of the screen: the game's real frame rate (never above the FPS limit), GPU usage, temperature and video memory, CPU usage and clock, and the RAM the game uses. Values the system does not report are not drawn. Whoever had the old FPS switch on keeps all four |
 | Background optimization | On | Recompiles the parts of the game you have reached, in the background, after you close the game |
 | Also while playing | **Off** | Rebuilds with the game open. It competes for the CPU and freezes the picture for tens of seconds, so leave it off unless you are debugging |
 | Optimize now | - | Runs one optimization pass immediately |

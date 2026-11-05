@@ -41,8 +41,8 @@ Rust e depois compilado como um programa de PC comum. O hardware do PlayStation 
 unidade vetorial, processador de I/O, som, controle, cartão de memória - é implementado de forma nativa. Nada
 interpreta o código do jogo em tempo de execução.
 
-O resultado é o jogo na lógica original de 60 Hz (ou num limite experimental de 120/240 FPS na mesma velocidade), com
-renderizador OpenGL de 1× a 6× de resolução interna, vídeos
+O resultado é o jogo na lógica original de 60 Hz (ou num limite de 120 FPS, ou no experimental de 240, na mesma velocidade), com
+renderizador OpenGL de 1× a 10× de resolução interna, vídeos
 nativos com som, um launcher com ajustes, teclado e mouse, menu de cheats, mira travada, widescreen, packs de texturas
 personalizadas e RetroAchievements.
 
@@ -63,13 +63,13 @@ nativas das bibliotecas que ele chama.
 
 ## Recursos
 
-- **Renderizador nativo** - OpenGL 4.6, render targets na GPU, resolução interna de 1× a 6×, upscaling bicúbico (com
+- **Renderizador nativo** - OpenGL 4.6, render targets na GPU, resolução interna de 1× a 10×, upscaling bicúbico (com
   nitidez), bilinear ou pixel, FXAA, modo progressivo 480p, ajuste de brilho/contraste/gama/saturação.
 - **Widescreen (Hor+)** - 16:9, 16:10, 21:9 (experimental) e 32:9 (muito experimental: HUD e menus esticados) pelo patch do PCSX2, com chave; desligado mostra o 4:3 original.
 - **Vídeos** - MPEG-2 decodificado nativamente, com som, incluindo as versões widescreen do próprio jogo.
 - **Controles** - teclado e mouse remapeáveis, qualquer controle, layout PS2 ou moderno, troca por botão, vibração no
   Windows.
-- **Qualidade de vida** - menu de cheats (**F2**, nove cheats), mira travada (**Alt**), combate ágil, contador de FPS,
+- **Qualidade de vida** - menu de cheats (**F2**, nove cheats), mira travada (**Alt**), combate ágil, informações na tela com FPS, GPU, CPU e RAM (cada uma opcional),
   tela cheia.
 - **Saves** - cartão `Mcd001.ps2` compatível com o PCSX2, nos dois sentidos.
 - **Texturas personalizadas** - packs de substituição do PCSX2, com o pack da comunidade baixável pelo launcher.
@@ -182,7 +182,7 @@ O resto - lista completa de cheats, regras da mira travada, combate ágil, cart�
 ## Desempenho
 
 O jogo roda a 60 FPS por padrão, a taxa do próprio PS2, sempre na velocidade real: quadros atrasados são descartados,
-nunca desacelerados. Os limites de FPS **experimentais** do launcher (120 e 240) rodam a lógica do jogo nessa taxa, mais
+nunca desacelerados. O limite de 120 FPS do launcher e o de 240 (**experimental**) rodam a lógica do jogo nessa taxa, mais
 fluido mas nunca mais rápido; a janela atualiza na taxa do monitor.
 
 - **Resolução interna 2× é o ponto ideal.** 3× ou mais é pesado e, em placas intermediárias, pode travar a apresentação.

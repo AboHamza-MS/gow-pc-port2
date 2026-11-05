@@ -5,7 +5,10 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 12;
+pub const SETTINGS_VERSION: u32 = 13;
+
+/// Highest internal GS scale the launcher offers (the runtime also keeps it within the GPU's texture limit).
+pub const MAX_SCALE: f64 = 10.0;
 
 /// Value of the four Shade Boost settings that leaves the picture as the game draws it.
 pub const IMAGE_NEUTRAL: i32 = 50;
@@ -37,7 +40,12 @@ pub struct Settings {
     pub internal_resolution: String,
     pub fps_limit: i32,
     pub vsync: bool,
+    /// In-game OSD, one switch per part: the FPS counter (`PC_SHOW_FPS`), GPU usage, temperature and video memory
+    /// (`PC_SHOW_GPU`), CPU usage and clock (`PC_SHOW_CPU`) and the game's RAM (`PC_SHOW_RAM`).
     pub show_fps: bool,
+    pub show_gpu: bool,
+    pub show_cpu: bool,
+    pub show_ram: bool,
     /// Early FINISH (`GOW_GS_EARLY_FINISH`): the game prepares the next frame while the current one is still drawn.
     pub early_finish: bool,
     pub elf: String,
@@ -108,6 +116,9 @@ impl Default for Settings {
             fps_limit: 60,
             vsync: false,
             show_fps: false,
+            show_gpu: false,
+            show_cpu: false,
+            show_ram: false,
             early_finish: true,
             elf: String::new(),
             iso: String::new(),
@@ -252,6 +263,16 @@ impl Settings {
             self.fps_limit = 60;
             self.settings_version = 12;
         }
+        if self.settings_version < 13 {
+            // The FPS switch used to show the whole OSD (GPU, CPU, RAM too); now each part has its own. Whoever had it on
+            // keeps seeing everything.
+            if self.show_fps {
+                self.show_gpu = true;
+                self.show_cpu = true;
+                self.show_ram = true;
+            }
+            self.settings_version = 13;
+        }
         if self.language != "pt-BR" && self.language != "en" {
             self.language = if prefers_portuguese { "pt-BR".into() } else { "en".into() };
         }
@@ -260,10 +281,10 @@ impl Settings {
         }
     }
 
-    /// Internal GS scale actually requested: "auto" and anything above 6 fall back to 2x.
+    /// Internal GS scale actually requested: "auto" and anything above 10 fall back to 2x.
     pub fn selected_scale(&self) -> f64 {
         match self.internal_resolution.parse::<f64>() {
-            Ok(n) if self.internal_resolution != "auto" && n <= 6.0 => n.max(1.0),
+            Ok(n) if self.internal_resolution != "auto" && n <= MAX_SCALE => n.max(1.0),
             _ => 2.0,
         }
     }
@@ -295,6 +316,9 @@ impl Settings {
         self.fps_limit = 60;
         self.vsync = false;
         self.show_fps = false;
+        self.show_gpu = false;
+        self.show_cpu = false;
+        self.show_ram = false;
         self.skip_videos = true;
         self.fast_boot = false;
         self.dmc5_controls = false;
@@ -376,6 +400,20 @@ mod tests {
     }
 
     #[test]
+    fn version_thirteen_keeps_the_whole_osd_for_whoever_had_the_fps_switch_on() {
+        let mut shown = Settings { settings_version: 12, show_fps: true, ..Settings::default() };
+        shown.migrate(false, &DisplayInfo::default());
+        assert!(shown.show_fps && shown.show_gpu && shown.show_cpu && shown.show_ram);
+        let mut hidden = Settings { settings_version: 12, ..Settings::default() };
+        hidden.migrate(false, &DisplayInfo::default());
+        assert!(!hidden.show_fps && !hidden.show_gpu && !hidden.show_cpu && !hidden.show_ram);
+        // After the migration the parts are independent: FPS alone stays alone.
+        let mut fps_only = Settings { settings_version: 13, show_fps: true, ..Settings::default() };
+        fps_only.migrate(false, &DisplayInfo::default());
+        assert!(fps_only.show_fps && !fps_only.show_gpu && !fps_only.show_cpu && !fps_only.show_ram);
+    }
+
+    #[test]
     fn a_current_file_is_left_alone() {
         let mut settings = Settings {
             settings_version: SETTINGS_VERSION,
@@ -425,7 +463,9 @@ mod tests {
     fn scale_falls_back_to_two() {
         let scale = |text: &str| Settings { internal_resolution: text.into(), ..Settings::default() }.selected_scale();
         assert_eq!(scale("auto"), 2.0);
-        assert_eq!(scale("8"), 2.0);
+        assert_eq!(scale("12"), 2.0);
+        assert_eq!(scale("10"), 10.0);
+        assert_eq!(scale("8"), 8.0);
         assert_eq!(scale("6"), 6.0);
         assert_eq!(scale("3"), 3.0);
         assert_eq!(scale("0.5"), 1.0);

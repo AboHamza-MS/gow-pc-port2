@@ -33,7 +33,7 @@ Last reviewed: October 2026, against the code in this repository.
 ## What works
 
 - **The whole game is recompiled**, not emulated: about 6,400 functions of `SCUS_973.99` become C++ and run natively.
-- **Rendering** is a native OpenGL renderer with GPU render targets, internal resolution 1×–6× (2× recommended),
+- **Rendering** is a native OpenGL renderer with GPU render targets, internal resolution 1×–10× (2× recommended),
   bicubic/bilinear/pixel scaling, FXAA, 480p progressive mode, Hor+ widescreen (4:3, 16:9, 16:10, 21:9 experimental, 32:9 very experimental).
 - **Movies** play natively with their sound (MPEG-2 through libmpeg2), including the game's widescreen `.PSW` versions.
 - **Sound** runs on a native sound engine fed by the game's own IOP libraries; there is no SPU2 emulation.
@@ -49,7 +49,7 @@ Last reviewed: October 2026, against the code in this repository.
 
 | Area | Limitation |
 |---|---|
-| Frame rate | 60 FPS by default, the PS2's own rate. The **experimental** 120 and 240 FPS limits run the game logic at that rate with the game kept at real-time speed; actions timed in frames (QTEs, combo windows) are not verified there yet. Heavy scenes on integrated GPUs drop below 60 |
+| Frame rate | 60 FPS by default, the PS2's own rate. The 120 FPS limit and the **experimental** 240 run the game logic at that rate with the game kept at real-time speed; actions timed in frames (QTEs, combo windows) are not fully verified there yet. Heavy scenes on integrated GPUs drop below 60 |
 | Multi-threading | The VU1 thread is the CPU bottleneck in combat. The optimization pass converts more of it to native code over time. Since 0.3.2 early FINISH lets the game prepare the next frame while the VU1 draws the current one (+17% in the reference fight at the 120 FPS limit; Performance → Early FINISH turns it off) |
 | Window | At 3× and above, presentation can stall behind the GPU on mid-range cards; the launcher caps presentation at 60 FPS there |
 | Widescreen | With Hor+ on, the HUD and 2D screens are stretched horizontally (the PCSX2 patch does not correct them), more the wider the aspect |

@@ -195,7 +195,7 @@ async function createTauriApi(): Promise<Api> {
 export const defaultSettings: Settings = {
   language: '', gpu: 'auto', displayMode: 'fullscreen', widthPx: 1280, heightPx: 800, aspectMode: '', widescreen: true, stretch: false,
   filter: 'bilinear', sharpness: 0.8, fxaa: true, brightness: 50, contrast: 50, gamma: 50, saturation: 50, progressive480p: true, internalResolution: '2', fpsLimit: 60,
-  vsync: false, showFps: false, earlyFinish: true, elf: '', iso: '', executable: '', skipVideos: true, fastBoot: false, customTextures: false, asyncTextures: true,
+  vsync: false, showFps: false, showGpu: false, showCpu: false, showRam: false, earlyFinish: true, elf: '', iso: '', executable: '', skipVideos: true, fastBoot: false, customTextures: false, asyncTextures: true,
   settingsVersion: 0, dmc5Controls: false, padButtons: '', padMap: '', padDevice: '', padDeviceName: '', padSdlMap: '', cancelAnimations: true, escQuits: false,
   minimizeOnPlay: true, secondsPlayed: 0, lastSession: 0, keys: '', cheats: '', cheatsShortcut: '',
   retroAchievementsEnabled: false, retroAchievementsUser: '',
@@ -292,7 +292,7 @@ export function createMockApi(
       arguments: { play: false, wizard: false },
     }),
     patchSettings: async (patch) => merge(patch),
-    resetGameOptions: async () => merge({ gpu: 'auto', displayMode: 'fullscreen', filter: 'bilinear', sharpness: 0.8, fxaa: true, brightness: 50, contrast: 50, gamma: 50, saturation: 50, internalResolution: '2', fpsLimit: 60, vsync: false, showFps: false, earlyFinish: true, cheats: '', cheatsShortcut: '' }),
+    resetGameOptions: async () => merge({ gpu: 'auto', displayMode: 'fullscreen', filter: 'bilinear', sharpness: 0.8, fxaa: true, brightness: 50, contrast: 50, gamma: 50, saturation: 50, internalResolution: '2', fpsLimit: 60, vsync: false, showFps: false, showGpu: false, showCpu: false, showRam: false, earlyFinish: true, cheats: '', cheatsShortcut: '' }),
     gameStatus: async () => status(),
     detectPaths: async () => settings,
     detectedIso: async () => '',

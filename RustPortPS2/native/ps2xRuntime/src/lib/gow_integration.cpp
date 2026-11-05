@@ -203,6 +203,9 @@ namespace
     // stays idle (buttons released, sticks centered, no pressure).
     void reapplyWidescreenAspect(uint8_t *rdram); // further below, next to the widescreen code
 
+    // GOW-Port: which parts of the OSD are shown (PC_SHOW_FPS, PC_SHOW_GPU, PC_SHOW_CPU, PC_SHOW_RAM; launcher).
+    gow_osd::Show g_osdShow{false, false, false, false};
+
     // GOW-Port: game frames per second (PC_SHOW_FPS=1): entries to the frame function, 0x1837B8 (the one from
     // GOW_PERF_FRAME_PC). Resumes after a checkpoint (ctx->pc different from the entry) don't count.
     constexpr uint32_t kGameFrameFunction = 0x001837B8u;
@@ -347,7 +350,7 @@ namespace
         // function, which follow the launcher's FPS limit, PC_LOGIC_FPS), plus GPU, CPU and RAM when the system gives them.
         // The new pictures on screen (newFps), the window refresh (windowFps, the monitor's rate) and the 1 % low stay in
         // the [gow-osd] log line only.
-        gow_osd::draw(x, y, h, gameFps, -1, -1, -1);
+        gow_osd::draw(x, y, h, gameFps, -1, -1, -1, g_osdShow);
     }
     constexpr uint32_t kGowPad2Read = 0x0027B9F0u;
     PS2Runtime::RecompiledFunction g_gowPad2Read = nullptr;
@@ -676,7 +679,8 @@ void gowIntegrationInstall(PS2Runtime &runtime, const std::string &elfPath)
         }
     }
     g_gameFrameLimit = envLong("PC_GAME_FPS", 60, 30, 60) <= 30 ? 30 : 60;
-    if ((g_gameFrameLimit == 30 || envFlag("PC_SHOW_FPS", false)) && runtime.hasFunction(kGameFrameFunction))
+    g_osdShow = {envFlag("PC_SHOW_FPS", false), envFlag("PC_SHOW_GPU", false), envFlag("PC_SHOW_CPU", false), envFlag("PC_SHOW_RAM", false)};
+    if ((g_gameFrameLimit == 30 || g_osdShow.any()) && runtime.hasFunction(kGameFrameFunction))
         if (PS2Runtime::RecompiledFunction actual = runtime.lookupFunction(kGameFrameFunction))
         {
             g_gameFrameFunction = actual;
@@ -819,6 +823,6 @@ void gowFrameDraw(float x, float y, float w, float h, uint64_t presentedSequence
     gowTargetingDraw(x, y, w, h);
     gowCheatsMenuDraw();
     gowRetroAchievementsDraw();
-    if (g_gameFrameFunction)
+    if (g_gameFrameFunction && g_osdShow.any()) // GOW-Port: a 30 FPS limit installs the hook without asking for the OSD
         drawFps(x, y, h, presentedSequence, hasSharedFrame);
 }

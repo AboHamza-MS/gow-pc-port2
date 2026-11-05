@@ -57,3 +57,25 @@ describe('image adjustment in the Graphics tab', () => {
     expect(await screen.findByRole('slider', { name: 'Gamma' })).toHaveValue('50');
   });
 });
+
+describe('render resolution and the in-game overlay', () => {
+  it('offers render resolutions up to 10x', async () => {
+    const { user, patch } = await openGraphics();
+    await user.click(screen.getByRole('combobox', { name: 'Render resolution' }));
+    expect(screen.getAllByRole('option', { name: /^\d+(\.5)?×|^Native/ })).toHaveLength(12);
+    await user.click(screen.getByRole('option', { name: /^10×/ }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith({ internalResolution: '10' }));
+  });
+
+  it('has one switch per part of the overlay on the Performance tab', async () => {
+    const { user, patch } = await openGraphics();
+    await user.click(screen.getByRole('button', { name: /Performance/ }));
+    for (const name of ['FPS counter', 'GPU', 'CPU', 'RAM']) {
+      expect(await screen.findByRole('switch', { name })).not.toBeChecked();
+    }
+    await user.click(screen.getByRole('switch', { name: 'CPU' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith({ showCpu: true }));
+    expect(screen.getByRole('switch', { name: 'FPS counter' })).not.toBeChecked();
+    expect(screen.queryByText(/120 FPS \(experimental\)/)).not.toBeInTheDocument();
+  });
+});

@@ -278,8 +278,9 @@ pub fn build_environment(ctx: &LaunchContext<'_>, inherited: impl Fn(&str) -> Op
         plan.insert("GOW_SCALER", "bilinear");
         plan.insert("GOW_SHARPEN", "0");
     }
-    // Internal GS resolution, 1..6 (4x playable, 5x experimental, 6x practically unplayable; recommended 2x).
-    let scale = ctx.scale.clamp(1.0, 6.0);
+    // Internal GS resolution, 1..10 (recommended 2x; from 3x up it needs a strong GPU, and the runtime keeps the render
+    // targets within the GPU's texture limit).
+    let scale = ctx.scale.clamp(1.0, crate::settings::MAX_SCALE);
     plan.insert("PS2X_GS_SCALE", fixed(scale, 1));
     plan.insert("PS2X_GS_HW_SCALE", fixed(scale, 1)); // Waffle's renderer reads the scale from here
     plan.insert("PC_FALLBACK_SMOOTHNESS", "0");
@@ -303,6 +304,9 @@ pub fn build_environment(ctx: &LaunchContext<'_>, inherited: impl Fn(&str) -> Op
     keep_inherited(&mut plan, "GOW_PRESENT_MIN_INTERVAL_US", &(800_000 / fps).to_string());
     plan.flag("PC_VSYNC", settings.vsync, None);
     plan.flag("PC_SHOW_FPS", settings.show_fps, None);
+    plan.flag("PC_SHOW_GPU", settings.show_gpu, None);
+    plan.flag("PC_SHOW_CPU", settings.show_cpu, None);
+    plan.flag("PC_SHOW_RAM", settings.show_ram, None);
     // Early FINISH is on in the runtime by default; "0" turns it off.
     plan.flag("GOW_GS_EARLY_FINISH", settings.early_finish, Some("0"));
 
@@ -480,6 +484,9 @@ mod tests {
             "GOW_FAST_BOOT",
             "PC_VSYNC",
             "PC_SHOW_FPS",
+            "PC_SHOW_GPU",
+            "PC_SHOW_CPU",
+            "PC_SHOW_RAM",
             "PC_CHEATS",
             "GOW_ISO",
             "PC_PAD_FACE_MAP",
@@ -587,6 +594,16 @@ mod tests {
     }
 
     #[test]
+    fn each_part_of_the_osd_has_its_own_variable() {
+        let mut fixture = fixture();
+        fixture.settings.show_cpu = true;
+        fixture.settings.show_ram = true;
+        let plan = plan(&fixture, 2.0);
+        assert_eq!((value(&plan, "PC_SHOW_CPU"), value(&plan, "PC_SHOW_RAM")), (Some("1"), Some("1")));
+        assert!(plan.remove.contains("PC_SHOW_FPS") && plan.remove.contains("PC_SHOW_GPU"));
+    }
+
+    #[test]
     fn early_finish_is_on_by_default_and_can_be_turned_off() {
         let mut fixture = fixture();
         assert_eq!(value(&plan(&fixture, 2.0), "GOW_GS_EARLY_FINISH"), Some("1"));
@@ -677,7 +694,8 @@ mod tests {
         assert_eq!(value(&plan(&fixture, 3.0), "GOW_PRESENT_MIN_INTERVAL_US"), Some("13333"));
         fixture.settings.fps_limit = 240;
         assert_eq!(value(&plan(&fixture, 2.0), "PC_LOGIC_FPS"), Some("240"));
-        assert_eq!(value(&plan(&fixture, 9.0), "PS2X_GS_SCALE"), Some("6.0"));
+        assert_eq!(value(&plan(&fixture, 9.0), "PS2X_GS_SCALE"), Some("9.0"));
+        assert_eq!(value(&plan(&fixture, 14.0), "PS2X_GS_SCALE"), Some("10.0"));
     }
 
     #[test]
