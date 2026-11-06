@@ -26,6 +26,7 @@ install.cmd -Iso "D:\God of War.iso" -FastDev        # RelWithDebInfo, logs on, 
 
 ```bash
 ./install.sh "/path/God of War.iso"
+./install.sh --compiler clang --pgo on               # Clang build with PGO training + optimization pass
 ./install.sh --optimize 300                          # repeat the capture pass for 300 s
 ```
 

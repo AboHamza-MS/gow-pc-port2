@@ -7,7 +7,12 @@ static bool gowUsePcsx2Vu1(); // GOW_VU1_PCSX2=1, defined before PS2Runtime::ini
 #include "runtime/ps2_perf.h"
 #include "gow_frame_metrics.h" // GOW-Port: GOW_FRAME_DIAG
 #if defined(PS2X_PGO_GENERATE)
+#include <csignal>
 extern "C" int __llvm_profile_write_file(void); // GOW-Port: clang's profile runtime (instrumented builds only)
+#if defined(__linux__)
+static volatile std::sig_atomic_t g_pgoStopSignal = 0;
+static void gowPgoSignalHandler(int) { g_pgoStopSignal = 1; }
+#endif
 #endif
 #include "ps2_stubs.h"
 #include "ps2_syscalls.h"
@@ -2610,6 +2615,11 @@ void PS2Runtime::HandleIntegerOverflow(R5900Context *ctx)
 void PS2Runtime::run()
 {
     m_stopRequested.store(false, std::memory_order_relaxed);
+#if defined(PS2X_PGO_GENERATE) && defined(__linux__)
+    g_pgoStopSignal = 0;
+    std::signal(SIGTERM, gowPgoSignalHandler);
+    std::signal(SIGINT, gowPgoSignalHandler);
+#endif
     ps2_stubs::resetSifState();
     resetIop();
     ps2_stubs::resetAudioStubState();
@@ -2727,19 +2737,27 @@ void PS2Runtime::run()
         if (ps2_perf::countFrames()) ps2_perf::hostFrames.fetch_add(1, std::memory_order_relaxed);
         ps2_perf::report();
 
+#if defined(PS2X_PGO_GENERATE) && defined(__linux__)
+        if (g_pgoStopSignal)
+        {
+            requestStop();
+            break;
+        }
+#endif
         if (WindowShouldClose())
         {
-#if defined(PS2X_PGO_GENERATE)
-            // GOW-Port: an instrumented (PGO training) build writes its profile as soon as the window is asked to close: the
-            // shutdown below waits for the game thread and can be cut short, and the profile runtime only writes at a normal
-            // process exit otherwise. The exit hook may write it again later, over the same file.
-            std::fprintf(stderr, "[gow-pgo] profile written: %s\n", __llvm_profile_write_file() == 0 ? "yes" : "FAILED");
-#endif
             RUNTIME_LOG("[run] window close requested, breaking out of loop");
             requestStop();
             break;
         }
     }
+
+#if defined(PS2X_PGO_GENERATE)
+    // GOW-Port: an instrumented (PGO training) build writes its profile as soon as the run loop ends (WindowShouldClose,
+    // ESC requestStop, or SIGTERM from timeout on Linux): the shutdown below waits for the game thread and can be cut short,
+    // and the profile runtime only writes at a normal process exit otherwise. The exit hook may write it again later, over the same file.
+    std::fprintf(stderr, "[gow-pgo] profile written: %s\n", __llvm_profile_write_file() == 0 ? "yes" : "FAILED");
+#endif
 
     requestStop();
     if (gameThread.joinable())
