@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+pub use crate::activity::{unix_ms, BuildActivity};
 use crate::game::EXECUTABLE_NAME;
 use crate::installer::ninja_progress;
 use crate::rebuild;
@@ -50,11 +51,89 @@ pub struct OptimizerSnapshot {
     pub profile_ready: bool,
     /// This installation can have one: Windows, built with clang.
     pub profile_supported: bool,
+    /// Where "Optimize now" is (`none` when it is not running).
+    pub profile_stage: ProfileStage,
+    /// The installation holds the instrumented training build (see [`is_instrumented`]): left behind by an "Optimize now"
+    /// that was interrupted. It is several times slower than any other build, so the launcher does not open it and rebuilds
+    /// the game by itself as soon as it can.
+    pub instrumented: bool,
+    /// What the build in progress is doing, for the details window (empty when nothing runs).
+    pub activity: BuildActivity,
+}
+
+/// GOW-Port: the stages of "Optimize now", from the installer's own step lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProfileStage {
+    None,
+    /// The instrumented build (the PC can be used).
+    Building,
+    /// The game is open by itself recording the profile: nothing may touch the keyboard, mouse or controller.
+    Training,
+    /// The build that uses the profile (the PC can be used, the game must not be opened).
+    Finishing,
+}
+
+/// The stage after one line of the installer's output during "Optimize now" (see `install.ps1`: `Step` prints `==> ...`).
+pub fn profile_stage_after(current: ProfileStage, line: &str) -> ProfileStage {
+    let Some(step) = line.trim_start().strip_prefix("==> ") else {
+        return current;
+    };
+    if step.starts_with("Optimization:") {
+        ProfileStage::Training
+    } else if step.starts_with("Building the game") {
+        if current == ProfileStage::Training {
+            ProfileStage::Finishing
+        } else {
+            ProfileStage::Building
+        }
+    } else {
+        current
+    }
 }
 
 /// GOW-Port: the speed profile (clang PGO) of an installation, trained on this PC by install.ps1 -Pgo on and never shipped.
 pub fn profile_path(destination: &Path) -> PathBuf {
     destination.join("build").join("pgo").join("gow.profdata")
+}
+
+/// GOW-Port: whether the executable at `path` is the instrumented build of the speed-profile training (clang
+/// `-fprofile-instr-generate`): its PE image carries LLVM's profile counter sections (`.lprfc`, `.lprfd`). Every branch of
+/// that build updates a counter, so the game runs several times slower (CPU saturated, GPU idle, the logic below 60 Hz):
+/// it exists only for the 4 minutes of training and must never reach the player. Only the headers are read.
+pub fn is_instrumented(path: &Path) -> bool {
+    use std::io::Read;
+    let mut header = Vec::with_capacity(8192);
+    let Ok(file) = File::open(path) else { return false };
+    if file.take(8192).read_to_end(&mut header).is_err() {
+        return false;
+    }
+    pe_section_names(&header).iter().any(|name| name == ".lprfc" || name == ".lprfd")
+}
+
+/// The section names of a PE image from its first bytes (empty when it is not one, or the table lies beyond them).
+fn pe_section_names(image: &[u8]) -> Vec<String> {
+    let u16_at = |offset: usize| image.get(offset..offset + 2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize);
+    let u32_at =
+        |offset: usize| image.get(offset..offset + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize);
+    if image.get(0..2) != Some(b"MZ") {
+        return Vec::new();
+    }
+    let Some(pe) = u32_at(0x3c) else { return Vec::new() };
+    if image.get(pe..pe + 4) != Some(b"PE\0\0") {
+        return Vec::new();
+    }
+    let (Some(count), Some(optional)) = (u16_at(pe + 6), u16_at(pe + 20)) else { return Vec::new() };
+    let table = pe + 24 + optional;
+    (0..count)
+        .map_while(|index| image.get(table + 40 * index..table + 40 * index + 8))
+        .map(|name| String::from_utf8_lossy(name).trim_end_matches('\0').to_string())
+        .collect()
+}
+
+/// Whether the installation holds the instrumented build, in the build folder or in the copy the game runs from.
+pub fn installation_instrumented(destination: &Path) -> bool {
+    is_instrumented(&compiled_executable(destination)) || is_instrumented(&active_executable(destination))
 }
 
 /// Whether the installation's build is made with clang (the only compiler install.ps1 trains a profile for), from its CMake
@@ -135,6 +214,11 @@ pub fn sync_active_executable(destination: &Path, game_running: bool) -> bool {
     let Ok(build_meta) = fs::metadata(&build) else {
         return false;
     };
+    // GOW-Port: the training build of an interrupted "Optimize now" stays in the build folder; it is never the one to play
+    // (the timer rebuilds the game instead, see `Optimizer::check`).
+    if is_instrumented(&build) {
+        return false;
+    }
     if let Ok(active_meta) = fs::metadata(&active) {
         if active_meta.len() == build_meta.len() && active_meta.modified().ok() == build_meta.modified().ok() {
             return false;
@@ -175,6 +259,8 @@ struct State {
     resume_after_game: bool,
     /// The current run is "Optimize now" (it opens the game by itself): a game started by the player cancels it, for good.
     profiling: bool,
+    profile_stage: ProfileStage,
+    activity: BuildActivity,
 }
 
 type Notify = Arc<dyn Fn(&OptimizerSnapshot) + Send + Sync>;
@@ -195,6 +281,9 @@ impl State {
 
     fn snapshot(&self) -> OptimizerSnapshot {
         let compiling = self.run.is_some();
+        let profiling = compiling && self.profiling;
+        // During "Optimize now" the training build is expected in the build folder: it is not a leftover yet.
+        let instrumented = !profiling && self.destination.as_deref().is_some_and(installation_instrumented);
         OptimizerSnapshot {
             configured: self.configured(),
             compiling,
@@ -206,9 +295,13 @@ impl State {
                 (self.compiled as f64 / self.captured as f64).min(1.0)
             },
             build_progress: self.build_progress,
-            profiling: compiling && self.profiling,
-            profile_ready: self.destination.as_deref().is_some_and(|d| profile_path(d).is_file()),
+            profiling,
+            // A profile only counts once a build that uses it is the one installed.
+            profile_ready: !instrumented && self.destination.as_deref().is_some_and(|d| profile_path(d).is_file()),
             profile_supported: self.destination.as_deref().is_some_and(profile_supported),
+            profile_stage: if profiling { self.profile_stage } else { ProfileStage::None },
+            instrumented,
+            activity: if compiling { self.activity.clone() } else { BuildActivity::default() },
             status: if !self.configured() {
                 OptimizerStatus::Disabled
             } else if compiling {
@@ -272,6 +365,8 @@ impl Optimizer {
                 stopping: false,
                 resume_after_game: false,
                 profiling: false,
+                profile_stage: ProfileStage::None,
+                activity: BuildActivity::default(),
             })),
             script: Arc::new(Mutex::new(None)),
             log_file,
@@ -467,29 +562,23 @@ impl Optimizer {
     pub fn check(&self) {
         let start = {
             let mut state = self.state.lock().unwrap();
-            if !state.configured() {
+            // GOW-Port: an "Optimize now" that was interrupted (the launcher closed, a crash, a failed build) leaves the
+            // instrumented training build behind. With the game closed and nothing running it is rebuilt at once, whether or not
+            // the background optimization is on: the installer reuses the profile if the training finished, otherwise it builds
+            // the game without one. A build that failed waits like any other before trying again.
+            let waiting = state.last_failure.is_some_and(|t| t.elapsed() < WAIT_AFTER_FAILURE);
+            let leftover = state.run.is_none()
+                && !state.game_running
+                && !waiting
+                && state.destination.as_deref().is_some_and(|d| is_instrumented(&compiled_executable(d)));
+            if leftover {
+                state.last_failure = None;
+                state.captured = state.destination.as_deref().map_or(0, count_captures);
+                true
+            } else if !state.configured() {
                 return;
-            }
-            state.captured = state.destination.as_deref().map_or(0, count_captures);
-            if state.run.is_some() {
-                false
             } else {
-                if !state.game_running {
-                    if let Some(destination) = state.destination.clone() {
-                        sync_active_executable(&destination, false);
-                    }
-                }
-                let pending = state.captured.saturating_sub(state.compiled);
-                // GOW-Port (0.3.0): a build of 0.2.x is only redone when the player asks (it is deleted and built from
-                // scratch, and the interface warns about that first).
-                let legacy = state.destination.as_deref().is_some_and(rebuild::legacy_build);
-                !legacy
-                    && should_rebuild(
-                        pending,
-                        state.game_running,
-                        state.during_game,
-                        state.last_failure.map(|t| t.elapsed()),
-                    )
+                Self::check_configured(&mut state)
             }
         };
         self.changed();
@@ -498,13 +587,53 @@ impl Optimizer {
         }
     }
 
+    /// The rest of [`Self::check`], for an installation whose background optimization is on: whether a rebuild starts now.
+    fn check_configured(state: &mut State) -> bool {
+        state.captured = state.destination.as_deref().map_or(0, count_captures);
+        if state.run.is_some() {
+            return false;
+        }
+        if !state.game_running {
+            if let Some(destination) = state.destination.clone() {
+                sync_active_executable(&destination, false);
+            }
+        }
+        let pending = state.captured.saturating_sub(state.compiled);
+        // GOW-Port (0.3.0): a build of 0.2.x is only redone when the player asks (it is deleted and built from
+        // scratch, and the interface warns about that first).
+        let legacy = state.destination.as_deref().is_some_and(rebuild::legacy_build);
+        !legacy
+            && should_rebuild(pending, state.game_running, state.during_game, state.last_failure.map(|t| t.elapsed()))
+    }
+
     /// Spawns the timer thread: a check every [`CHECK_INTERVAL`] while the optimizer lives.
     pub fn spawn_timer(&self) {
         let optimizer = self.clone();
-        std::thread::spawn(move || loop {
-            std::thread::sleep(CHECK_INTERVAL);
-            optimizer.check();
+        std::thread::spawn(move || {
+            // GOW-Port: the first check comes a few seconds after start-up, so a training build left by an interrupted
+            // "Optimize now" starts being rebuilt as soon as the launcher opens instead of half a minute later.
+            std::thread::sleep(Duration::from_secs(3));
+            loop {
+                optimizer.check();
+                std::thread::sleep(CHECK_INTERVAL);
+            }
         });
+    }
+
+    /// GOW-Port: the player cancelled "Optimize now" (its game included, a child of the installer). Like a game the player
+    /// opens, it is not started again by itself; if its training build was already made, the check that follows the stop
+    /// rebuilds the game without it. Returns `false` when "Optimize now" was not running.
+    pub fn cancel_profile(&self) -> bool {
+        let mut state = self.state.lock().unwrap();
+        if !state.profiling || state.run.is_none() {
+            return false;
+        }
+        state.stopping = true;
+        state.resume_after_game = false;
+        if let Some(run) = state.run.as_ref() {
+            run.kill_tree();
+        }
+        true
     }
 
     fn fail(&self) {
@@ -533,6 +662,8 @@ impl Optimizer {
             state.compiled_at_startup = state.captured;
             state.build_progress = -1.0;
             state.has_error = false;
+            state.profile_stage = if profile { ProfileStage::Building } else { ProfileStage::None };
+            state.activity = BuildActivity::started(unix_ms());
             (destination, state.game_running)
         };
         if let Some(parent) = self.log_file.parent() {
@@ -601,6 +732,23 @@ impl Optimizer {
             ScriptOptions { script, arguments, below_normal_priority: true },
             move |line| {
                 let _ = writeln!(log.lock().unwrap(), "{line}");
+                // Published by the sampler below, once a second: a burst of lines does not flood the interface.
+                on_line.state.lock().unwrap().activity.after_line(line, unix_ms());
+                if profile {
+                    let moved = {
+                        let mut state = on_line.state.lock().unwrap();
+                        let next = profile_stage_after(state.profile_stage, line);
+                        let moved = next != state.profile_stage;
+                        if moved {
+                            state.profile_stage = next;
+                            state.build_progress = -1.0;
+                        }
+                        moved
+                    };
+                    if moved {
+                        on_line.changed();
+                    }
+                }
                 if let Some(fraction) = ninja_progress(line) {
                     let publish = {
                         let mut state = on_line.state.lock().unwrap();
@@ -619,15 +767,34 @@ impl Optimizer {
         );
         match result {
             Ok(run) => {
+                let pid = run.pid();
                 {
                     let mut state = self.state.lock().unwrap();
                     state.run = Some(run);
                     state.profiling = profile;
                 }
                 self.changed();
+                self.spawn_sampler(pid);
             }
             Err(_) => self.fail(),
         }
+    }
+
+    /// GOW-Port (issue #32): while the run with this PID lives, reads once a second how much processor its tree used and
+    /// publishes the snapshot, which carries the lines that arrived meanwhile. Ends by itself with the run.
+    fn spawn_sampler(&self, pid: u32) {
+        let optimizer = self.clone();
+        crate::activity::spawn_tree_sampler(pid, move |percent| {
+            {
+                let mut state = optimizer.state.lock().unwrap();
+                if state.run.as_ref().map(ScriptRun::pid) != Some(pid) {
+                    return false;
+                }
+                state.activity.after_sample(percent, unix_ms());
+            }
+            optimizer.changed();
+            true
+        });
     }
 
     fn finished(&self, code: Option<i32>, destination: &Path, kit: Option<&Path>) {
@@ -636,6 +803,7 @@ impl Optimizer {
             let stopped = state.stopping;
             state.stopping = false;
             state.profiling = false;
+            state.profile_stage = ProfileStage::None;
             stopped
         };
         if stopped {
@@ -648,6 +816,13 @@ impl Optimizer {
             }
             self.changed();
             self.resume_after_game();
+            // GOW-Port: a stopped "Optimize now" may leave its training build behind: the check rebuilds it without waiting
+            // for the timer (it waits for the game to close, if that is what stopped it).
+            let again = self.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(2));
+                again.check();
+            });
             return;
         }
         let succeeded = code == Some(0) && compiled_executable(destination).is_file();
@@ -772,6 +947,126 @@ mod tests {
         assert_eq!(fs::read(directory.path().join("active").join(EXECUTABLE_NAME)).unwrap(), b"v1");
         assert!(!sync_active_executable(directory.path(), false));
         assert_eq!(fs::read(directory.path().join("active").join(EXECUTABLE_NAME)).unwrap(), b"version two");
+    }
+
+    /// A minimal PE image (headers only) with these section names, like the start of a real executable.
+    fn pe_image(sections: &[&str]) -> Vec<u8> {
+        let mut image = vec![0u8; 0x400];
+        image[0..2].copy_from_slice(b"MZ");
+        let pe = 0x80usize;
+        image[0x3c..0x40].copy_from_slice(&(pe as u32).to_le_bytes());
+        image[pe..pe + 4].copy_from_slice(b"PE\0\0");
+        image[pe + 6..pe + 8].copy_from_slice(&(sections.len() as u16).to_le_bytes());
+        let optional = 0xf0usize;
+        image[pe + 20..pe + 22].copy_from_slice(&(optional as u16).to_le_bytes());
+        let table = pe + 24 + optional;
+        for (index, name) in sections.iter().enumerate() {
+            image[table + 40 * index..table + 40 * index + name.len()].copy_from_slice(name.as_bytes());
+        }
+        image
+    }
+
+    #[test]
+    fn the_training_build_is_told_apart_by_its_profile_sections() {
+        let directory = tempfile::tempdir().unwrap();
+        // The sections of the real builds of 0.3.0: clang with the profile, then the instrumented training build.
+        let normal = directory.path().join("normal.exe");
+        fs::write(&normal, pe_image(&[".text", ".rdata", ".buildid", ".data", ".pdata", ".tls", ".rsrc", ".reloc"]))
+            .unwrap();
+        let training = directory.path().join("training.exe");
+        let sections =
+            [".text", ".rdata", ".buildid", ".data", ".pdata", ".lprfb", ".lprfc", ".lprfd", ".lprfn", ".tls"];
+        fs::write(&training, pe_image(&sections)).unwrap();
+        assert!(!is_instrumented(&normal));
+        assert!(is_instrumented(&training));
+        // Not a PE image, an empty file, a missing file, a truncated header: never instrumented, never a panic.
+        let other = directory.path().join("other.exe");
+        fs::write(&other, b"\x7fELF and so on").unwrap();
+        assert!(!is_instrumented(&other));
+        fs::write(&other, b"").unwrap();
+        assert!(!is_instrumented(&other));
+        assert!(!is_instrumented(&directory.path().join("missing.exe")));
+        fs::write(&other, &pe_image(&sections)[..0x90]).unwrap();
+        assert!(!is_instrumented(&other));
+    }
+
+    #[test]
+    fn the_training_build_never_becomes_the_active_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let build = directory.path().join("build/ps2xRuntime");
+        fs::create_dir_all(&build).unwrap();
+        fs::write(build.join(EXECUTABLE_NAME), pe_image(&[".text", ".data"])).unwrap();
+        register_installation(&build.join(EXECUTABLE_NAME), directory.path());
+        fs::write(build.join(EXECUTABLE_NAME), pe_image(&[".text", ".lprfc", ".lprfd", ".data"])).unwrap();
+        assert!(!sync_active_executable(directory.path(), false));
+        assert!(!is_instrumented(&directory.path().join("active").join(EXECUTABLE_NAME)));
+        assert!(installation_instrumented(directory.path()));
+        // The interface hears about it, and a profile on disk does not count as active meanwhile.
+        fs::create_dir_all(directory.path().join("build/pgo")).unwrap();
+        fs::write(profile_path(directory.path()), b"profile").unwrap();
+        let optimizer = quiet(directory.path());
+        optimizer.configure(&directory.path().to_string_lossy(), false, false, 0);
+        let snapshot = optimizer.snapshot();
+        assert!(snapshot.instrumented);
+        assert!(!snapshot.profile_ready);
+        assert_eq!(snapshot.profile_stage, ProfileStage::None);
+    }
+
+    #[test]
+    fn a_leftover_training_build_is_rebuilt_even_with_the_optimizer_off() {
+        let directory = tempfile::tempdir().unwrap();
+        let build = directory.path().join("build/ps2xRuntime");
+        fs::create_dir_all(&build).unwrap();
+        fs::write(build.join(EXECUTABLE_NAME), pe_image(&[".text", ".lprfc", ".lprfd"])).unwrap();
+        let optimizer = quiet(directory.path());
+        optimizer.configure(&directory.path().to_string_lossy(), false, false, 0);
+        // With the game open nothing starts.
+        optimizer.game_state_changed(true);
+        optimizer.check();
+        assert_eq!(optimizer.snapshot().status, OptimizerStatus::Disabled);
+        assert!(!optimizer.snapshot().compiling);
+        // Closed: the rebuild is attempted (`quiet` has no installer, so the attempt reports an error), then it waits.
+        optimizer.game_state_changed(false);
+        optimizer.check();
+        assert!(optimizer.state.lock().unwrap().has_error);
+    }
+
+    #[test]
+    fn the_profile_stages_follow_the_installer_steps() {
+        let mut stage = ProfileStage::Building;
+        for (line, expected) in [
+            ("==> Checking tools", ProfileStage::Building),
+            (
+                "==> Building the game with instrumentation for the speed profile (the first time takes a while)",
+                ProfileStage::Building,
+            ),
+            ("[512/1031] Building CXX object ps2xRuntime/foo.cpp.obj", ProfileStage::Building),
+            (
+                "==> Optimization: the game opens by itself for 240 s (do not touch the keyboard)",
+                ProfileStage::Training,
+            ),
+            ("-- PGO: using D:/GOW/build/pgo/gow.profdata", ProfileStage::Training),
+            ("==> Configuring the build", ProfileStage::Training),
+            ("==> Building the game with the speed profile (the first time takes a while)", ProfileStage::Finishing),
+            ("==> Done", ProfileStage::Finishing),
+        ] {
+            stage = profile_stage_after(stage, line);
+            assert_eq!(stage, expected, "after {line:?}");
+        }
+    }
+
+    #[test]
+    fn the_activity_is_only_published_while_a_build_runs() {
+        let directory = tempfile::tempdir().unwrap();
+        let optimizer = quiet(directory.path());
+        optimizer.state.lock().unwrap().activity.after_line("==> leftover", 1);
+        assert_eq!(optimizer.snapshot().activity, BuildActivity::default());
+    }
+
+    #[test]
+    fn cancelling_does_nothing_when_no_profile_runs() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(!quiet(directory.path()).cancel_profile());
     }
 
     #[test]

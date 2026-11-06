@@ -552,6 +552,9 @@ mod tests {
             profiling: false,
             profile_ready: false,
             profile_supported: false,
+            profile_stage: crate::optimizer::ProfileStage::None,
+            instrumented: false,
+            activity: crate::optimizer::BuildActivity::default(),
         }
     }
 

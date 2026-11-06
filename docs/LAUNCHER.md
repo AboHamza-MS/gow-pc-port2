@@ -47,12 +47,30 @@ A pack applies the next time the game starts. [`TEXTURES.md`](TEXTURES.md) expla
 | Background optimization | On | Recompiles the parts of the game you have reached, in the background, after you close the game |
 | Also while playing | **Off** | Rebuilds with the game open. It competes for the CPU and freezes the picture for tens of seconds, so leave it off unless you are debugging |
 | Optimize now | - | Runs one optimization pass immediately |
-| Speed profile | - | Windows, clang builds (0.3.0). **Optimize now** trains a speed profile (clang PGO) for this PC: the game opens by itself for about 4 minutes on a scripted fight (do not touch the keyboard), then the game is rebuilt with the profile, about 15 minutes in all. Pressing PLAY cancels it. The row shows **Active** once the build uses a profile. The profile is made from your game on your PC and never leaves it |
+| Speed profile | - | Windows, clang builds (0.3.0). **Optimize now** trains a speed profile (clang PGO) for this PC: the game opens by itself for about 4 minutes on a scripted fight (do not touch the keyboard), then the game is rebuilt with the profile, about 15 minutes in all. The launcher asks first, then locks itself (PLAY included) behind a window with the three steps until the end; it has a *Cancel* button. The row shows **Active** once the build uses a profile. The profile is made from your game on your PC and never leaves it |
 | Rebuild now | - | Only shown, as a note at the top of the tab, when this launcher carries game fixes your build does not have yet (see below) |
 
 **The speed-profile offer.** After an installation with clang, the first screen shows *Optimization available: more FPS* with
 **Optimize now** and **Later**. *Later* hides the notice on this PC; the Performance tab keeps the button. The installation
 itself does one build only, so the first game is ready as soon as possible, and the optimization never runs while you play.
+
+**An interrupted optimization.** The first step builds a test version of the game that counts what the code does; it runs
+several times slower and exists only for the 4 minutes of training. If the optimization stops halfway (the launcher closed,
+a crash, a failed build), the launcher never opens that version: PLAY shows *FINISHING*, the first screen says *Slow test
+version installed*, and the game is rebuilt the normal way by itself as soon as the launcher is open and the game closed
+(with the profile, if the training had finished). *Rebuild now* on that notice starts it at once.
+
+The launcher shows a loading spinner while it starts (finding the game can take a few seconds).
+
+**Is the build stuck or just slow?** Every build progress bar (the installation wizard, the rebuild notice, the
+Performance tab, *Optimize now*) has a **Details** button. The bar only moves when a file is done, and some steps
+(generating the native VU1 code, linking the game) print nothing for up to about 30 minutes each, so it can sit still
+while the build works. The details window says, live, whether the build's processes are using the processor (*Working:
+using 9.4 processor cores*), the current step, the file count, how long it has been running and since it last printed
+anything, the last file it finished and its last lines, with a button to open the full log (`install.log` in the wizard,
+`optimize.log` otherwise). Only when nothing has used the processor or been printed for 10 minutes does it say the build
+may be stuck. A download (the compiler, the portable CMake, Ninja or Git of a first installation) waits on the connection,
+so it is shown as *Downloading* and never called stuck.
 
 **Rebuilding after a launcher update.** A launcher update brings new game code (the runtime sources in its kit), but the
 game you play is a build made on your PC, so the fixes do not reach it by themselves. The launcher remembers which kit each

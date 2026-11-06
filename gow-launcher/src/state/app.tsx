@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { getApi, noUpdate, type Api } from '../lib/backend';
+import badgeUrl from '../assets/theme/badge.webp';
+import { getApi, idleActivity, noUpdate, type Api } from '../lib/backend';
 import { asLanguage, format, formatDuration, systemLocale, translate } from '../lib/i18n';
 import { gigabytes, nextOverall } from '../lib/texturePack';
 import type {
@@ -77,6 +78,12 @@ export interface AppContextValue {
   startRebuild: () => Promise<void>;
   /** Starts the speed-profile optimization ("Optimize now"): the game opens by itself, then a build uses the profile. */
   startProfile: () => Promise<void>;
+  /** "Optimize now" never starts with one click: this opens the dialog that says what will happen, which then starts it. */
+  profileConfirmOpen: boolean;
+  requestProfile: () => void;
+  closeProfileConfirm: () => void;
+  /** Cancels "Optimize now" (its game included); a training build already made is rebuilt into a normal one. */
+  cancelProfile: () => Promise<void>;
   /** The player answered "Later" to the offer on the first screen (kept on this PC; the Performance tab still offers it). */
   profileOfferDismissed: boolean;
   dismissProfileOffer: () => void;
@@ -94,7 +101,7 @@ const noRebuild: RebuildState = { needed: false, kit: '', built: '', announce: f
 
 const idleOptimizer: OptimizerSnapshot = {
   configured: false, compiling: false, captured: 0, compiled: 0, completionRatio: 1, buildProgress: -1, status: 'disabled',
-  profiling: false, profileReady: false, profileSupported: false,
+  profiling: false, profileReady: false, profileSupported: false, profileStage: 'none', instrumented: false, activity: idleActivity,
 };
 
 const PROFILE_OFFER_KEY = 'gow.profileOfferDismissed';
@@ -370,6 +377,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [api, notify]);
 
+  const [profileConfirmOpen, setProfileConfirmOpen] = useState(false);
+  const requestProfile = useCallback(() => setProfileConfirmOpen(true), []);
+  const closeProfileConfirm = useCallback(() => setProfileConfirmOpen(false), []);
+  const cancelProfile = useCallback(async () => {
+    await api?.profileCancel();
+  }, [api]);
+
   const [profileOfferDismissed, setProfileOfferDismissed] = useState(readProfileOfferDismissed);
   const dismissProfileOffer = useCallback(() => {
     setProfileOfferDismissed(true);
@@ -420,14 +434,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
       closeWizard: () => setWizardOpen(false), adoptSettings,
       textureInstall, installTexturePack, closeBlocked, keepInstalling, closeAnyway,
       update, updateBlocker, installUpdate, openUpdatePage, rebuild, rebuildBlocker, startRebuild, startProfile, profileOfferDismissed, dismissProfileOffer,
+      profileConfirmOpen, requestProfile, closeProfileConfirm, cancelProfile,
     };
   }, [
     api, boot, settings, patch, flush, reset, lang, t, f, duration, status, refreshStatus, detectPaths, gameRunning,
     optimizer, play, stop, toast, notify, error, showError, wizardOpen, adoptSettings,
     textureInstall, installTexturePack, closeBlocked, keepInstalling, closeAnyway,
     update, updateBlocker, installUpdate, openUpdatePage, rebuild, rebuildBlocker, startRebuild, startProfile, profileOfferDismissed, dismissProfileOffer,
+    profileConfirmOpen, requestProfile, closeProfileConfirm, cancelProfile,
   ]);
 
-  if (!value) return null;
+  // GOW-Port: until the backend has answered (settings, detected paths) the window shows a loader, not an empty frame.
+  if (!value) return <BootSplash />;
   return <Context.Provider value={value}>{children}</Context.Provider>;
+}
+
+/**
+ * GOW-Port: what the window shows while the launcher starts (finding the game can take a few seconds). The language is not
+ * known yet, so the text follows the system's, like the first choice of the settings.
+ */
+export function BootSplash() {
+  const lang = asLanguage(systemLocale().toLowerCase().startsWith('pt') ? 'pt-BR' : 'en');
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-5 bg-[#1a110b]" role="status" aria-live="polite" data-tauri-drag-region>
+      <img src={badgeUrl} alt="" width={56} height={56} className="pointer-events-none" />
+      <div className="h-9 w-9 animate-spin rounded-full border-[3px] border-[#5a3d22] border-t-[#e0b25c]" aria-hidden="true" />
+      <p className="font-title text-[15px] font-bold uppercase tracking-[0.18em] text-[#e7d6b4]">{translate(lang, 'bootLoading')}</p>
+    </div>
+  );
 }

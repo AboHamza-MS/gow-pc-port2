@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Check, FileArchive, FileCheck, FileDiff, FolderOpen, Languages, Loader2, Sparkles, Trophy } from 'lucide-react';
-import { Modal } from '../components/Shell';
+import { ActivityDetailsButton, Modal } from '../components/Shell';
 import { CheckDot, PrimaryButton, ProgressBar, SecondaryButton, TextInput } from '../components/ui';
 import type { ChdError, ChdOutcome, ChdPlan, DestinationValidation, InstallOutcome, InstallProgress, IsoValidation, PatchError, PatchOutcome, WizardInfo } from '../lib/types';
+import { idleActivity } from '../lib/backend';
 import { useApp } from '../state/app';
 import { destinationMessageKey, fileName, isChd, isoMessageKey, overallProgress, stageWeights } from './progress';
 
@@ -54,6 +55,8 @@ export function Wizard() {
   const [vu1MemoryLimitGb, setVu1MemoryLimitGb] = useState<4 | 8>(4);
   const [progress, setProgress] = useState(0);
   const [stage, setStage] = useState(-1);
+  // GOW-Port (issue #32): what the installation is doing, for the details window next to the bar.
+  const [activity, setActivity] = useState(idleActivity);
   const [seconds, setSeconds] = useState(0);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [cancellation, setCancellation] = useState('');
@@ -141,6 +144,7 @@ export function Wizard() {
       }),
       api.on('install-progress', (event: InstallProgress) => {
         setStage(event.stage);
+        setActivity(event.activity ?? idleActivity);
         // The bar only moves forward: the optimization stage rebuilds and resets ninja's counter.
         setProgress((previous) => Math.max(previous, overallProgress(event.stage, event.stageProgress, live.current.weights)));
       }),
@@ -651,7 +655,10 @@ export function Wizard() {
             <Lead>{t('wizCompilingText')}</Lead>
             <div className="flex items-baseline justify-between">
               <span className="text-[22px] font-bold text-gold-light">{Math.round(progress * 100)} %</span>
-              <span className="text-[13px] text-ink-muted">{f('wizTimeElapsed', duration(seconds))}</span>
+              <span className="flex items-center gap-2.5 text-[13px] text-ink-muted">
+                {f('wizTimeElapsed', duration(seconds))}
+                {activity.startedAtMs > 0 && <ActivityDetailsButton activity={activity} onOpenLog={() => void api.openInstallLog()} />}
+              </span>
             </div>
             <div className="gow-track h-[14px]" role="progressbar" aria-valuenow={Math.round(progress * 100)} aria-valuemin={0} aria-valuemax={100}>
               <div className="gow-track-fill h-full min-w-2.5 transition-[width] duration-300 ease-out" style={{ width: `${progress * 100}%` }} />

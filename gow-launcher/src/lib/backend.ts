@@ -2,7 +2,7 @@
 // in-memory mock stands in, so the interface can be developed and checked without the Tauri shell.
 
 import type {
-  Bootstrap, DestinationValidation, GameFinished, GameStatus, GamepadCaptured, InstallOutcome,
+  BuildActivity, Bootstrap, DestinationValidation, GameFinished, GameStatus, GamepadCaptured, InstallOutcome,
   ChdOutcome, ChdPlan, InstallProgress, IsoValidation, LiveState, PatchError, PatchOutcome, OptimizerSnapshot, PadDeviceList, RebuildState, Settings, TexturePackInfo, TexturePackOutcome, TexturePackProgress,
   UpdateMode, UpdateState, WizardInfo,
 } from './types';
@@ -94,6 +94,8 @@ export interface Api {
   /** Starts the speed-profile optimization: the game opens by itself for a few minutes, then a build uses the profile.
    * Rejects with a code (`busy:game`..., `notAvailable`) when it must not start. */
   profileStart(): Promise<void>;
+  /** Cancels "Optimize now" and the game it opened; `false` when it was not running. */
+  profileCancel(): Promise<boolean>;
   rebuildState(): Promise<RebuildState>;
   /** Starts the rebuild of the game from the kit's sources. Rejects with a code (`busy:game`...) when it must not start. */
   rebuildStart(): Promise<void>;
@@ -166,6 +168,7 @@ async function createTauriApi(): Promise<Api> {
     optimizerSnapshot: () => call('optimizer_snapshot'),
     optimizeNow: () => call('optimize_now'),
     profileStart: () => call('profile_start'),
+    profileCancel: () => call('profile_cancel'),
     rebuildState: () => call('rebuild_state'),
     rebuildStart: () => call('rebuild_start'),
     updateState: () => call('update_state'),
@@ -204,6 +207,51 @@ export const defaultSettings: Settings = {
   autoUpdate: false,
 };
 
+/** A build's activity while none runs (see `BuildActivity`). */
+export const idleActivity: BuildActivity = {
+  step: '', filesDone: 0, filesTotal: 0, lastFinished: '', recentLines: [], startedAtMs: 0, lastOutputMs: 0, cpuPercent: -1, lastBusyMs: 0,
+};
+
+/** The demo's build in progress (`?build=working|quiet|stuck`): a busy compile, a long silent step that still works, a stall. */
+export function demoActivity(kind: 'working' | 'quiet' | 'stuck' | 'download', now = Date.now()): BuildActivity {
+  const minute = 60_000;
+  if (kind === 'download') {
+    return {
+      step: 'Downloading the compiler (llvm-mingw 20261020, about 170 MB)', filesDone: 0, filesTotal: 0, lastFinished: '',
+      recentLines: ['==> Checking tools', 'Compiler: clang', '==> Downloading the compiler (llvm-mingw 20261020, about 170 MB)'],
+      startedAtMs: now - 3 * minute, lastOutputMs: now - 2 * minute, cpuPercent: 1, lastBusyMs: now - 2 * minute,
+    };
+  }
+  const step = 'Building the game (the first time takes a while: ~6,400 files; VU1 RAM profile: 4 GB)';
+  if (kind === 'working') {
+    return {
+      step, filesDone: 512, filesTotal: 1051,
+      lastFinished: 'Building CXX object ps2xRuntime/CMakeFiles/ps2EntryRunner.dir/runner/sub_00116EF0_0x116ef0.cpp.obj',
+      recentLines: [
+        '==> Building the game (the first time takes a while: ~6,400 files; VU1 RAM profile: 4 GB)',
+        '[510/1051] Building CXX object ps2xRuntime/CMakeFiles/ps2EntryRunner.dir/runner/sub_00111760_0x111760.cpp.obj',
+        '[511/1051] Building CXX object ps2xRuntime/CMakeFiles/ps2EntryRunner.dir/runner/sub_00116E78_0x116e78.cpp.obj',
+        '[512/1051] Building CXX object ps2xRuntime/CMakeFiles/ps2EntryRunner.dir/runner/sub_00116EF0_0x116ef0.cpp.obj',
+      ],
+      startedAtMs: now - 7 * minute, lastOutputMs: now - 2_000, cpuPercent: 940, lastBusyMs: now,
+    };
+  }
+  return {
+    step, filesDone: 1046, filesTotal: 1051,
+    lastFinished: 'Generating vu1_generated/program0.cpp, vu1_generated/program1.cpp',
+    recentLines: [
+      '[1045/1051] Building CXX object ps2xRuntime/CMakeFiles/ps2EntryRunner.dir/runner/sub_0023CA90_0x23ca90.cpp.obj',
+      '[generate_vu1] RAM budget 4096 MiB: sampling 4096 of 484087 captured micro-memories',
+      '[generate_vu1] 7800 pair functions, 2242 blocks, 6237 of 10331 FMACs with dead flags, 4096 images',
+      '[1046/1051] Generating vu1_generated/program0.cpp, vu1_generated/program1.cpp',
+    ],
+    startedAtMs: now - 31 * minute,
+    lastOutputMs: now - (kind === 'quiet' ? 14 : 25) * minute,
+    cpuPercent: kind === 'quiet' ? 100 : 0,
+    lastBusyMs: kind === 'quiet' ? now : now - 24 * minute,
+  };
+}
+
 export const noUpdate: UpdateState = { phase: 'idle', mode: 'automatic', version: '', pageUrl: '', done: 0, total: 0, error: '' };
 
 /** An update the mock backend offers, for development in a browser (`?update=automatic`) and for tests. */
@@ -237,6 +285,10 @@ export function createMockApi(
     language?: string;
     padDevices?: PadDeviceList | null;
     otherEdition?: boolean;
+    /** The demo of "Optimize now" (`?profile=` in a browser): a stage of the run, or the training build it can leave behind. */
+    profile?: 'building' | 'training' | 'finishing' | 'leftover';
+    /** The demo of a rebuild in progress (`?build=` in a browser), see `demoActivity`. */
+    build?: 'working' | 'quiet' | 'stuck';
   } = {},
 ): MockApi {
   const ready = options.ready ?? true;
@@ -273,10 +325,18 @@ export function createMockApi(
     ready,
   });
   let profileReady = false;
-  const snapshot = (): OptimizerSnapshot => ({
-    configured: ready, compiling: false, captured: 150, compiled: settings.optimizationCompiled, completionRatio: 0.8,
-    buildProgress: -1, status: 'idle', profiling: false, profileReady, profileSupported: ready,
-  });
+  let profileStage: OptimizerSnapshot['profileStage'] = options.profile && options.profile !== 'leftover' ? options.profile : 'none';
+  const instrumented = options.profile === 'leftover';
+  const snapshot = (): OptimizerSnapshot => {
+    const profiling = profileStage !== 'none';
+    const compiling = profiling || options.build !== undefined;
+    const activity = options.build ? demoActivity(options.build) : profiling ? demoActivity('working') : idleActivity;
+    return {
+      configured: ready, compiling, captured: 150, compiled: settings.optimizationCompiled, completionRatio: 0.8,
+      buildProgress: profileStage === 'training' ? -1 : compiling ? (activity.filesTotal ? activity.filesDone / activity.filesTotal : 0.42) : -1,
+      status: compiling ? 'compiling' : 'idle', profiling, profileReady, profileSupported: ready, profileStage, instrumented, activity,
+    };
+  };
   const merge = (patch: Partial<Settings>) => (settings = { ...settings, ...patch });
   const later = <T,>(value: T, ms = 0) => new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
 
@@ -298,6 +358,9 @@ export function createMockApi(
     detectedIso: async () => '',
     memoryCardDirectory: async (elf) => (elf ? elf.replace(/[\\/][^\\/]*$/, '') + '\\mc0' : ''),
     startGame: async () => {
+      // The same refusals as `start_game`.
+      if (profileStage !== 'none') throw { key: 'errorProfiling', detail: '' };
+      if (instrumented) throw { key: 'errorInstrumented', detail: 'C:\\GodOfWar-PC\\active\\gow-2005.exe' };
       running = true;
       emit('game-running', true);
       setTimeout(() => {
@@ -409,7 +472,10 @@ export function createMockApi(
     installStart: async () => {
       let stage = 0;
       const timer = setInterval(() => {
-        emit('install-progress', { stage, stageProgress: 0.5, recentLines: [`==> stage ${stage}`, '[12/340] Building CXX object'] });
+        emit('install-progress', {
+          stage, stageProgress: 0.5, recentLines: [`==> stage ${stage}`, '[12/340] Building CXX object'],
+          activity: demoActivity(stage < 2 ? 'download' : 'working'),
+        });
         if (++stage > 7) {
           clearInterval(timer);
           emit('install-done', { ok: true, cancelled: false, error: '', elf: 'C:\\GodOfWar-PC\\game\\SCUS_973.99', executable: 'C:\\GodOfWar-PC\\build\\ps2xRuntime\\gow-2005.exe', failureKind: null });
@@ -423,6 +489,12 @@ export function createMockApi(
     profileStart: async () => {
       profileReady = true;
       emit('optimizer', snapshot());
+    },
+    profileCancel: async () => {
+      const was = profileStage !== 'none';
+      profileStage = 'none';
+      emit('optimizer', snapshot());
+      return was;
     },
     rebuildState: async () => {
       const current = { ...rebuild, announce: rebuild.needed && !announced };
@@ -477,6 +549,9 @@ export function getApi(): Promise<Api> {
           rebuildNeeded: new URLSearchParams(window.location.search).get('rebuild') === 'needed',
           legacyBuild: new URLSearchParams(window.location.search).get('rebuild') === 'legacy',
           language: new URLSearchParams(window.location.search).get('lang') ?? undefined,
+          profile: (new URLSearchParams(window.location.search).get('profile') ?? undefined) as
+            | 'building' | 'training' | 'finishing' | 'leftover' | undefined,
+          build: (new URLSearchParams(window.location.search).get('build') ?? undefined) as 'working' | 'quiet' | 'stuck' | undefined,
         }),
       );
   return instance;

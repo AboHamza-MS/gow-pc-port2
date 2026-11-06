@@ -189,6 +189,34 @@ export interface OptimizerSnapshot {
   profileReady: boolean;
   /** This installation can have one (Windows, built with clang). */
   profileSupported: boolean;
+  /** Where "Optimize now" is: the instrumented build, the game open by itself recording, the build that uses the profile. */
+  profileStage: ProfileStage;
+  /**
+   * The installation holds the instrumented training build of an interrupted "Optimize now": several times slower than the
+   * game, so PLAY is refused and the optimizer rebuilds the game by itself.
+   */
+  instrumented: boolean;
+  /** What the build in progress is doing, for the details window (empty while nothing runs). */
+  activity: BuildActivity;
+}
+
+export type ProfileStage = 'none' | 'building' | 'training' | 'finishing';
+
+/**
+ * What a build in progress is doing (issue #32). Times are milliseconds since the Unix epoch on this PC, 0 = not yet.
+ * Ninja prints a file only when it is done, so a long step (native VU1 code, the link) prints nothing for minutes:
+ * `cpuPercent` (share of one core used by the build's processes over the last second, -1 unknown) is the sign of life.
+ */
+export interface BuildActivity {
+  step: string;
+  filesDone: number;
+  filesTotal: number;
+  lastFinished: string;
+  recentLines: string[];
+  startedAtMs: number;
+  lastOutputMs: number;
+  cpuPercent: number;
+  lastBusyMs: number;
 }
 
 export interface WizardInfo {
@@ -253,6 +281,8 @@ export interface InstallProgress {
   stage: number;
   stageProgress: number;
   recentLines: string[];
+  /** What the installation is doing, for the wizard's details window (issue #32). */
+  activity: BuildActivity;
 }
 export interface InstallOutcome {
   ok: boolean;
