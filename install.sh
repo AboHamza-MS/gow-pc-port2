@@ -2,13 +2,16 @@
 # PC Port - installer for Linux.
 #
 #   ./install.sh [path/to/God of War.iso (or .chd)] [--destination DIR] [--no-optimize] [--optimize [seconds]] [--jobs N]
-#                [--compiler g++|clang] [--vu1-memory-limit-gb N] [--normal-priority] [--install-deps] [--check-deps]
-#                [--recomp-exe FILE] [--tools-exe FILE]
+#                [--compiler g++|clang] [--pgo auto|on|off] [--retrain-pgo] [--vu1-memory-limit-gb N]
+#                [--normal-priority] [--install-deps] [--check-deps] [--recomp-exe FILE] [--tools-exe FILE]
 #
 #   --destination    where game/, build/, build-gen/ and vu1_captures/ go (default: next to this script). The launcher's
 #                    wizard uses it; the generated C++ still lands inside RustPortPS2/native.
 #   --jobs N         build processes (default: cores minus a reserve of 2, 1 or 0, at most one per 2 GB of RAM).
 #   --compiler       C++ compiler: g++ (default) or clang (clang++). Also settable via CXX=clang++ or GOW_COMPILER=clang.
+#   --pgo auto|on|off  speed profile (clang only): auto (default: use an existing profile if present), on (train it in the
+#                    optimization run and rebuild with it), or off. Also settable via GOW_PGO=auto|on|off.
+#   --retrain-pgo    train the speed profile again even when build/pgo/gow.profdata already exists.
 #   --vu1-memory-limit-gb N  RAM budget for the VU1 AOT generator in GB (default: 4, 0 = unlimited; same as install.ps1).
 #   --normal-priority  do not lower the CPU and I/O priority of the long steps (nice, ionice); by default they run lowered so the
 #                    PC stays usable while the game builds.
@@ -60,10 +63,21 @@ warn() { printf '\033[1;33m[warning]\033[0m %s\n' "$*"; }
 error() { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
 # --- System packages ----------------------------------------------------------------------------------------------
-# GOW-Port: C/C++ compiler selection. Defaults to g++/gcc; pass --compiler clang (or GOW_COMPILER=clang, or CXX=clang++)
+# GOW-Port: C/C++ compiler and PGO selection. Defaults to g++/gcc; pass --compiler clang (or GOW_COMPILER=clang, or CXX=clang++)
 # to build with clang. Switching the default to clang later only requires changing the fallback below.
+PGO="auto"
+RETRAIN_PGO=0
 compiler_family() {   # compiler_family NAME -> clang | gcc (anything that is not clang: g++, c++, g++-14, /usr/bin/c++...)
     case "$(basename "$1")" in *clang*) echo clang ;; *) echo gcc ;; esac
+}
+update_checks() {
+    local pgo_tool=""
+    if [ "${COMPILER_CHECK:-}" = "clang++" ] && { [ "$PGO" = "on" ] || [ "$RETRAIN_PGO" = 1 ]; }; then
+        pgo_tool=" llvm-profdata"
+    fi
+    # GOW-Port: what the build needs, as one list the script and the launcher (--check-deps) share. The programs are looked
+    # up in PATH and the libraries with pkg-config; PACKAGE_FOR maps each one to the package of the three families we know.
+    CHECKS="cmake ninja $COMPILER_CHECK$pgo_tool git pkg-config gl x11 xrandr xinerama xcursor xi xkbcommon wayland-client alsa"
 }
 set_compiler() {   # set_compiler NAME (g++ or clang; checked strictly, it comes from --compiler or GOW_COMPILER)
     case "$1" in
@@ -73,15 +87,21 @@ set_compiler() {   # set_compiler NAME (g++ or clang; checked strictly, it comes
     esac
     # A C compiler of the other family (CC=gcc with clang++) is replaced by the matching one.
     [ "$(compiler_family "$CC_BIN")" = "$(compiler_family "$CXX_BIN")" ] || { [ "$COMPILER_CHECK" = clang++ ] && CC_BIN=clang || CC_BIN=gcc; }
-    # GOW-Port: what the build needs, as one list the script and the launcher (--check-deps) share. The programs are looked
-    # up in PATH and the libraries with pkg-config; PACKAGE_FOR maps each one to the package of the three families we know.
-    CHECKS="cmake ninja $COMPILER_CHECK git pkg-config gl x11 xrandr xinerama xcursor xi xkbcommon wayland-client alsa"
+    update_checks
+}
+set_pgo() {   # set_pgo auto|on|off
+    case "$1" in
+        auto|on|off) PGO="$1" ;;
+        *) error "Unknown --pgo mode '$1' (expected auto, on or off)" ;;
+    esac
+    update_checks
 }
 # CXX is only a hint here (distributions and CI often set it to c++ or g++-N): it picks the family, never fails.
 if [ -n "${GOW_COMPILER:-}" ]; then set_compiler "$GOW_COMPILER"
 elif [ "$(compiler_family "${CXX:-g++}")" = clang ]; then set_compiler clang
 else set_compiler g++
 fi
+set_pgo "${GOW_PGO:-auto}"
 OS_RELEASE="${GOW_OS_RELEASE:-/etc/os-release}"
 
 distro_family() {   # arch | debian | fedora | unknown
@@ -104,6 +124,7 @@ package_for() {   # package_for FAMILY CHECK -> package name
         debian:ninja) echo ninja-build ;;           fedora:ninja) echo ninja-build ;;       arch:ninja) echo ninja ;;
         debian:g++) echo build-essential ;;         fedora:g++) echo gcc-c++ ;;             arch:g++) echo base-devel ;;
         debian:clang++) echo clang ;;               fedora:clang++) echo clang ;;           arch:clang++) echo clang ;;
+        debian:llvm-profdata) echo llvm ;;          fedora:llvm-profdata) echo llvm ;;      arch:llvm-profdata) echo llvm ;;
         debian:pkg-config) echo pkg-config ;;       fedora:pkg-config) echo pkgconf-pkg-config ;; arch:pkg-config) echo pkgconf ;;
         debian:gl) echo libgl-dev ;;                fedora:gl) echo mesa-libGL-devel ;;     arch:gl) echo libglvnd ;;
         debian:x11) echo libx11-dev ;;              fedora:x11) echo libX11-devel ;;        arch:x11) echo libx11 ;;
@@ -126,7 +147,7 @@ find_missing() {   # find_missing FAMILY
     command -v pkg-config >/dev/null 2>&1 || have_pkg_config=0
     for key in $CHECKS; do
         case "$key" in
-            cmake|ninja|g++|clang++|git|pkg-config) ! command -v "$key" >/dev/null 2>&1 || continue ;;
+            cmake|ninja|g++|clang++|llvm-profdata|git|pkg-config) ! command -v "$key" >/dev/null 2>&1 || continue ;;
             *) [ "$have_pkg_config" = 1 ] && pkg-config --exists "$key" 2>/dev/null && continue ;;
         esac
         MISSING_CHECKS+=("$key")
@@ -253,6 +274,8 @@ while [ $# -gt 0 ]; do
         --optimize) OPTIMIZE="yes"; if [[ "${2:-}" =~ ^[0-9]+$ ]]; then SECONDS_TO_RUN="$2"; shift; fi ;;
         --jobs) JOBS="${2:?--jobs needs a number}"; shift ;;
         --compiler) set_compiler "${2:?--compiler needs g++ or clang}"; shift ;;
+        --pgo) set_pgo "${2:?--pgo needs auto, on or off}"; shift ;;
+        --retrain-pgo) RETRAIN_PGO=1; update_checks ;;
         --vu1-memory-limit-gb) VU1_MEM_LIMIT_GB="${2:?--vu1-memory-limit-gb needs a number}"; shift ;;
         --normal-priority) LOW_PRIORITY=0 ;;
         --destination) DEST="${2:?--destination needs a folder}"; shift ;;
@@ -399,6 +422,13 @@ configure() {
     fi
     [ -f "$BUILD/CMakeCache.txt" ] || compiler=("-DCMAKE_C_COMPILER=$CC_BIN" "-DCMAKE_CXX_COMPILER=$CXX_BIN")
     local extra=()
+    if [ "${PGO_MODE:-}" = "generate" ]; then
+        extra+=("-DPS2X_PGO=generate")
+    elif [ "${PGO_MODE:-}" = "use" ]; then
+        extra+=("-DPS2X_PGO=use" "-DPS2X_PGO_PROFILE=$PGO_PROFILE")
+    else
+        extra+=("-DPS2X_PGO=")
+    fi
     if compgen -G "$VU1/*.bin" >/dev/null; then
         extra+=("-DPS2X_VU1_MICROCODE_DIR=$VU1" "-DPS2X_VU1_GENERATOR_SOURCE=$NATIVE/tools/vu1/generate_vu1.cpp"
                 "-DPS2X_TOOLS_EXE=$TOOLS" "-DPS2X_VU1_MAX_MEMORY_MB=$(( VU1_MEM_LIMIT_GB * 1024 ))")
@@ -422,6 +452,40 @@ configure() {
         "${extra[@]}" >/dev/null
 }
 
+# GOW-Port: PGO (decision D3: trained on this PC, never shipped). The profile stays in the build folder, like the generated code.
+PGO_DIR="$BUILD/pgo"
+PGO_PROFILE="$PGO_DIR/gow.profdata"
+PGO_POSSIBLE=0
+[ "$COMPILER_CHECK" = "clang++" ] && [ "$PGO" != "off" ] && PGO_POSSIBLE=1
+HAS_PGO_PROFILE=0
+[ -f "$PGO_PROFILE" ] && HAS_PGO_PROFILE=1
+TRAIN_PGO=0
+if [ "$PGO_POSSIBLE" = 1 ] && { { [ "$PGO" = "on" ] && [ "$HAS_PGO_PROFILE" = 0 ]; } || [ "$RETRAIN_PGO" = 1 ]; }; then
+    TRAIN_PGO=1
+fi
+USE_PGO=0
+if [ "$PGO_POSSIBLE" = 1 ] && { [ "$TRAIN_PGO" = 1 ] || [ "$HAS_PGO_PROFILE" = 1 ]; }; then
+    USE_PGO=1
+fi
+if [ "$TRAIN_PGO" = 1 ]; then
+    PGO_MODE="generate"
+elif [ "$USE_PGO" = 1 ]; then
+    PGO_MODE="use"
+else
+    PGO_MODE=""
+fi
+if [ "$COMPILER_CHECK" = "clang++" ]; then
+    if [ "$TRAIN_PGO" = 1 ]; then
+        echo "Speed profile (PGO): trained in the optimization run"
+    elif [ "$USE_PGO" = 1 ]; then
+        echo "Speed profile (PGO): the existing profile ($PGO_PROFILE)"
+    elif [ "$PGO" = "off" ]; then
+        echo "Speed profile (PGO): not trained yet (--pgo off)"
+    else
+        echo "Speed profile (PGO): not trained yet (pass --pgo on to train it)"
+    fi
+fi
+
 step "Configuring the build (the first time it downloads raylib, imgui and rlImGui)"
 configure
 step "Translating SCUS_973.99 to C++"
@@ -442,17 +506,21 @@ echo "$(ls "$GEN"/out/*.cpp | wc -l) C++ files in RustPortPS2/native/ps2xRuntime
 
 # --- 3. Game ------------------------------------------------------------------------------------------
 build_game() {
-    step "Building the game (the first time takes a while: ~6,400 files and an LTO link)"
+    local what="${1:-}"
+    step "Building the game${what} (the first time takes a while: ~6,400 files and an LTO link)"
     low_priority ninja -C "$BUILD" -j"$JOBS" ps2EntryRunner
 }
-configure
-build_game
-
-# --- 4. Optimization (native VU1 and IOP) -------------------------------------------------------------------------
-if [ "$OPTIMIZE" = "yes" ] || { [ "$OPTIMIZE" = "auto" ] && ! compgen -G "$VU1/*.bin" >/dev/null; }; then
-    step "Optimization: the game opens by itself for ${SECONDS_TO_RUN} s (do not touch the keyboard); the VU1 and IOP code is saved"
+run_optimization() {   # run_optimization [PROFILE_DIR]
+    local profile_dir="${1:-}" pgo_env=() label="is"
+    if [ -n "$profile_dir" ]; then
+        mkdir -p "$profile_dir"
+        rm -f "$profile_dir"/*.profraw
+        pgo_env=("LLVM_PROFILE_FILE=$profile_dir/gow-%p.profraw")
+        label="and the speed profile are"
+    fi
+    step "Optimization: the game opens by itself for ${SECONDS_TO_RUN} s (do not touch the keyboard); the VU1 and IOP code ${label} saved"
     mkdir -p "$VU1" "$GEN/iop_mods"
-    (cd "$NATIVE" && env GOW_VU1_CAPTURE="$VU1" PS2X_IOP_DUMP_MODULES="$GEN/iop_mods" GOW_SKIP_FMV=1 \
+    (cd "$NATIVE" && env "${pgo_env[@]}" GOW_VU1_CAPTURE="$VU1" PS2X_IOP_DUMP_MODULES="$GEN/iop_mods" GOW_SKIP_FMV=1 \
         GOW_PAD_TEST=1 GOW_PAD_TEST_NO_CAPTURE=1 GOW_MC0="$GEN/optimize.ps2" PS2X_GS_WORKER=1 GOW_GS_FINISH_ASYNC=1 \
         PC_CHEATS=god_mode \
         GOW_PAD_SCRIPT="5:start,12:x,20:x,28:x,40:square,41:square,42:square,44:triangle,48:lup*3,52:x,55:square,56:triangle,60:circle,64:r1,70:lleft*2,74:square,76:square,80:triangle,90:lup*4,96:x,100:square,104:l1,110:lright*2,120:square,125:triangle,140:lup*5,150:square,160:triangle,180:lup*5,200:square" \
@@ -461,6 +529,29 @@ if [ "$OPTIMIZE" = "yes" ] || { [ "$OPTIMIZE" = "auto" ] && ! compgen -G "$VU1/*
     if compgen -G "$GEN/iop_mods/*.bin" >/dev/null; then
         low_priority "$TOOLS" iop-gen "$GEN/iop_mods" "$NATIVE/ps2xIOP/src/native"
     fi
+}
+configure
+if [ "$TRAIN_PGO" = 1 ]; then
+    build_game " with instrumentation for the speed profile"
+else
+    build_game
+fi
+
+# --- 4. Optimization (native VU1 and IOP, and the PGO training) --------------------------------------------------
+if [ "$TRAIN_PGO" = 1 ]; then
+    run_optimization "$PGO_DIR"
+    if compgen -G "$PGO_DIR/*.profraw" >/dev/null; then
+        low_priority llvm-profdata merge -o "$PGO_PROFILE" "$PGO_DIR"/*.profraw
+        rm -f "$PGO_DIR"/*.profraw
+        PGO_MODE="use"
+    else
+        warn "The optimization run wrote no speed profile (did the game close early?): the game is built without PGO this time."
+        PGO_MODE=""
+    fi
+    configure
+    build_game
+elif [ "$OPTIMIZE" = "yes" ] || { [ "$OPTIMIZE" = "auto" ] && ! compgen -G "$VU1/*.bin" >/dev/null; }; then
+    run_optimization
     configure
     build_game
 fi

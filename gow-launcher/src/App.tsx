@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { CloseBlockedDialog, ErrorDialog, Hero, NavRail, sections, TitleBar, Toast, type SectionId } from './components/Shell';
+import {
+  CloseBlockedDialog, ErrorDialog, Hero, NavRail, ProfileConfirmDialog, ProfileOverlay, sections, TitleBar, Toast, type SectionId,
+} from './components/Shell';
 import { upper } from './lib/i18n';
 import { CheatsPage } from './pages/CheatsPage';
 import { ControlsPage } from './pages/ControlsPage';
@@ -23,6 +25,21 @@ const pages: Record<SectionId, () => React.JSX.Element> = {
   retro: RetroAchievementsPage,
 };
 
+/**
+ * GOW-Port: the parchment of the dialogs (`panel.webp`) and the red button (`button-red.webp`) are only used inside dialogs,
+ * so the window fetched and decoded them the first time a dialog opened, and that dialog was drawn for a while without its
+ * parchment and with a bare red button (the "Optimize now" confirmation made it the first thing many players open). Painted
+ * once here, tiny, almost transparent and under the title bar, they are ready before any dialog opens.
+ */
+function PrewarmDialogImages() {
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute left-0 top-0 flex opacity-[0.01]">
+      <div className="gow-panel h-[64px] w-[64px]" />
+      <div className="gow-button-red h-[24px] w-[24px]" />
+    </div>
+  );
+}
+
 function Panel() {
   const { t, wizardOpen, lang } = useApp();
   const [section, setSection] = useState<SectionId>('graphics');
@@ -31,6 +48,7 @@ function Panel() {
   const Icon = current.icon;
   return (
     <div className="gow-window flex h-full flex-col">
+      <PrewarmDialogImages />
       <TitleBar />
       <main className="flex min-h-0 flex-1 flex-col">
         <Hero />
@@ -56,6 +74,8 @@ function Panel() {
         </div>
       </main>
       <Toast />
+      <ProfileOverlay />
+      <ProfileConfirmDialog />
       <ErrorDialog />
       <CloseBlockedDialog />
       {wizardOpen && <Wizard />}

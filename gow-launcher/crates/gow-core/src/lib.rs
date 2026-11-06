@@ -1,6 +1,7 @@
 ﻿//! Launcher logic of the God of War (PS2) native port, without any UI. The Tauri app and the CLI are thin layers
 //! over this crate, so everything here can be tested with `cargo test`.
 
+pub mod activity;
 pub mod controller;
 pub mod credential;
 pub mod display;
@@ -21,6 +22,7 @@ pub mod optimizer;
 pub mod padmap;
 pub mod paths;
 pub mod process;
+pub mod proctree;
 pub mod rebuild;
 pub mod report;
 pub mod script;

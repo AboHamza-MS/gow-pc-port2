@@ -616,6 +616,40 @@ void gowSetHangReportExtra(void (*report)(PS2Runtime &))
     g_gowHangReportExtra.store(report, std::memory_order_release);
 }
 
+// GOW-Port: the hang after saving (0.3.x, Windows) was sampled with the EE spinning inside the animation controller update
+// 0x116EF0 (this = s1: +0x8 time, +0xC rate, +0x10 previous time, +0x38 animation, +0x58 vtable), in the loop at
+// 0x117358..0x117384 that walks the time from the previous value to the new one in steps of animation+0x70, calling the
+// vtable+0x14 method per step, until |target - x| <= step. It never ends if the step is zero or tiny, or if the times are so
+// large that adding the step no longer changes them. This prints, once per hang, what decides it: the live FPU registers of the
+// loop (f20 = x, f21 = step, f22 = target, f24 = signed step, f12 = previous), the controller's fields and the method called.
+// Read from the watchdog thread while the EE spins in that loop (it touches neither the thread lists nor the scheduler then):
+// the values can be a step apart, which does not matter for telling a zero step from an absorbed one.
+static void gowHangReportAnimationStep(PS2Runtime &runtime)
+{
+    const R5900Context *ctx = runtime.eeScheduler().currentContext();
+    const uint8_t *rdram = runtime.memory().getRDRAM();
+    if (!ctx || !rdram)
+        return;
+    auto bits = [](float value) { uint32_t b = 0u; std::memcpy(&b, &value, sizeof(b)); return b; };
+    auto word = [&](uint32_t address) { uint32_t v = 0u; std::memcpy(&v, rdram + (address & 0x01FFFFFCu), sizeof(v)); return v; };
+    auto real = [&](uint32_t address) { float v = 0.0f; std::memcpy(&v, rdram + (address & 0x01FFFFFCu), sizeof(v)); return v; };
+    auto half = [&](uint32_t address) { int16_t v = 0; std::memcpy(&v, rdram + (address & 0x01FFFFFEu), sizeof(v)); return v; };
+    const uint32_t self = static_cast<uint32_t>(_mm_cvtsi128_si32(ctx->r[17])) & 0x01FFFFFFu;
+    std::fprintf(stderr, "[gow-hang] animation step loop: pc=%08x x=%g (%08x) step=%g (%08x) target=%g (%08x) signed_step=%g previous=%g fcr31=%08x\n",
+                 ctx->pc, ctx->f[20], bits(ctx->f[20]), ctx->f[21], bits(ctx->f[21]), ctx->f[22], bits(ctx->f[22]), ctx->f[24], ctx->f[12],
+                 ctx->fcr31);
+    if (self == 0u)
+        return;
+    const uint32_t animation = word(self + 0x38u) & 0x01FFFFFFu, vtable = word(self + 0x58u) & 0x01FFFFFFu;
+    float delta = 0.0f;
+    std::memcpy(&delta, rdram + 0x29C64Cu, sizeof(delta));
+    std::fprintf(stderr, "[gow-hang] animation controller %08x: time=%g rate=%g previous=%g flags=%08x +0x1c=%g +0x24=%g animation=%08x step=%g length=%g "
+                         "method=%08x (this%+d) frame_delta=%g\n",
+                 self, real(self + 0x8u), real(self + 0xCu), real(self + 0x10u), word(self + 0x2Cu), real(self + 0x1Cu), real(self + 0x24u), animation,
+                 animation ? real(animation + 0x70u) : 0.0f, animation ? real(animation + 0x1Cu) : 0.0f, vtable ? word(vtable + 0x14u) : 0u,
+                 vtable ? half(vtable + 0x10u) : 0, delta);
+}
+
 // GOW-Port: what the EE is waiting for, printed by the hang watchdog before its sampling burst. Reads: the game's "GS done"
 // flag (0x29C7D0: 1 = waiting for the GS FINISH interrupt, 2 = done), the GS status and interrupt mask, the VBlank counter and
 // the guest threads of the kernel snapshot. A frame wait with the flag at 1 and CSR.FINISH (bit 1) clear means the FINISH was
@@ -658,6 +692,9 @@ static void gowHangReport(PS2Runtime &runtime, uint64_t vsyncStep, uint64_t fram
     for (const EeEventFlagSnapshot &eventFlag : snapshot.eventFlags)
         if (eventFlag.waiters != 0u)
             std::fprintf(stderr, "[gow-hang] event flag %d bits=%08x waiters=%u\n", eventFlag.id, eventFlag.bits, eventFlag.waiters);
+    for (const EeThreadSnapshot &thread : snapshot.threads)
+        if (thread.id == snapshot.runningThreadId && thread.pc >= 0x116EF0u && thread.pc < 0x117438u)
+            gowHangReportAnimationStep(runtime);
     if (void (*extra)(PS2Runtime &) = g_gowHangReportExtra.load(std::memory_order_acquire))
         extra(runtime);
 }

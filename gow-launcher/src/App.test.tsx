@@ -2,7 +2,8 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import { availableUpdate, createMockApi, setApi, type MockApi } from './lib/backend';
+import { buildHealth, shortenStep, stepLabel } from './components/Shell';
+import { availableUpdate, createMockApi, demoActivity, idleActivity, setApi, type MockApi } from './lib/backend';
 import type { UpdateState } from './lib/types';
 import { readBindings } from './lib/keys';
 
@@ -111,11 +112,19 @@ describe('speed profile offer', () => {
     const user = userEvent.setup();
     const start = vi.spyOn(api, 'profileStart');
     expect(await screen.findByText('Optimization available: more FPS')).toBeInTheDocument();
-    const base = { configured: true, compiling: false, captured: 1, compiled: 1, completionRatio: 1, buildProgress: -1, status: 'idle' as const, profileReady: false, profileSupported: true };
-    act(() => api.emit('optimizer', { ...base, compiling: true, status: 'compiling', profiling: true, buildProgress: 0.3 }));
+    const base = {
+      configured: true, compiling: false, captured: 1, compiled: 1, completionRatio: 1, buildProgress: -1, status: 'idle' as const,
+      profiling: false, profileReady: false, profileSupported: true, profileStage: 'none' as const, instrumented: false, activity: idleActivity,
+    };
+    act(() => api.emit('optimizer', { ...base, compiling: true, status: 'compiling', profiling: true, profileStage: 'building', buildProgress: 0.3 }));
     expect(await screen.findByText('Optimizing the game')).toBeInTheDocument();
     act(() => api.emit('optimizer', { ...base, profiling: false }));
+    // One click only opens the explanation; starting takes a second, deliberate one.
     await user.click(await screen.findByRole('button', { name: 'Optimize now' }));
+    expect(start).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/Do not touch the keyboard, mouse or controller/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Start optimization' }));
     expect(start).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.queryByText('Optimization available: more FPS')).not.toBeInTheDocument());
     act(() => api.emit('optimizer', { ...base, profiling: false }));
@@ -123,6 +132,147 @@ describe('speed profile offer', () => {
     expect(screen.queryByText('Optimization available: more FPS')).not.toBeInTheDocument();
     expect(window.localStorage.getItem('gow.profileOfferDismissed')).toBe('1');
     window.localStorage.removeItem('gow.profileOfferDismissed');
+  });
+
+  it('"Not now" in the explanation starts nothing', async () => {
+    api = createMockApi({ ready: true });
+    setApi(api);
+    window.localStorage.removeItem('gow.profileOfferDismissed');
+    render(<App />);
+    const user = userEvent.setup();
+    const start = vi.spyOn(api, 'profileStart');
+    await user.click(await screen.findByRole('button', { name: 'Optimize now' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Not now' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(start).not.toHaveBeenCalled();
+  });
+});
+
+describe('while "Optimize now" runs', () => {
+  it('locks PLAY behind the overlay and warns not to touch anything while the game is open by itself', async () => {
+    api = createMockApi({ ready: true, profile: 'training' });
+    setApi(api);
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: 'Optimization in progress' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('The game opened by itself: hands off');
+    expect(screen.getByRole('button', { name: 'OPTIMIZING' })).toBeDisabled();
+    // The current step is marked; the build steps show progress instead of the warning.
+    expect(screen.getByText('2. The game opens by itself for about 4 minutes').closest('li')).toHaveAttribute('aria-current', 'step');
+  });
+
+  it('shows the progress of the build steps and cancels only after confirming', async () => {
+    api = createMockApi({ ready: true, profile: 'finishing' });
+    setApi(api);
+    render(<App />);
+    const user = userEvent.setup();
+    const cancel = vi.spyOn(api, 'profileCancel');
+    const overlay = await screen.findByRole('dialog');
+    expect(within(overlay).queryByRole('alert')).not.toBeInTheDocument();
+    expect(within(overlay).getByRole('progressbar', { name: 'Optimization progress' })).toBeInTheDocument();
+    await user.click(within(overlay).getByRole('button', { name: 'Cancel optimization' }));
+    expect(cancel).not.toHaveBeenCalled();
+    await user.click(within(overlay).getByRole('button', { name: 'Keep optimizing' }));
+    await user.click(within(overlay).getByRole('button', { name: 'Cancel optimization' }));
+    await user.click(within(overlay).getByRole('button', { name: 'Yes, cancel' }));
+    expect(cancel).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Optimization in progress' })).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'PLAY' })).toBeEnabled();
+  });
+
+  it('asks before the window closes halfway', async () => {
+    api = createMockApi({ ready: true, profile: 'building' });
+    setApi(api);
+    render(<App />);
+    await screen.findByRole('heading', { name: 'Optimization in progress' });
+    act(() => api.emit('close-blocked', undefined));
+    expect(await screen.findByRole('heading', { name: 'The optimization is still running' })).toBeInTheDocument();
+  });
+});
+
+describe('build details (issue #32)', () => {
+  const bootBuilding = (build: 'working' | 'quiet' | 'stuck') => {
+    api = createMockApi({ ready: true, rebuildNeeded: true, build });
+    setApi(api);
+    return render(<App />);
+  };
+
+  it('says the build is working, what it does and what it printed last', async () => {
+    bootBuilding('working');
+    const user = userEvent.setup();
+    const openLog = vi.spyOn(api, 'openOptimizerLog');
+    await user.click((await screen.findAllByRole('button', { name: 'Details' }))[0]);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Working: the build is using 9.4 processor cores right now.')).toBeInTheDocument();
+    expect(within(dialog).getByText('512 of 1051')).toBeInTheDocument();
+    // The installer's step in the player's words, not its raw line.
+    expect(within(dialog).getByText('Compiling the game')).toBeInTheDocument();
+    // The file name stays, the build folders go.
+    expect(within(dialog).getByText('Building CXX object sub_00116EF0_0x116ef0.cpp.obj')).toBeInTheDocument();
+    expect(within(dialog).getByText(/\[512\/1051\] Building CXX object/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Open the full log' }));
+    expect(openLog).toHaveBeenCalledTimes(1);
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('explains a long silent step that still uses the processor', async () => {
+    bootBuilding('quiet');
+    await userEvent.setup().click((await screen.findAllByRole('button', { name: 'Details' }))[0]);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Working: the build is using 100% of one processor core right now.')).toBeInTheDocument();
+    expect(within(dialog).getByText(/print nothing until they finish/)).toBeInTheDocument();
+    expect(within(dialog).getByText('14 min ago')).toBeInTheDocument();
+  });
+
+  it('warns when nothing has used the processor or printed for a long time', async () => {
+    bootBuilding('stuck');
+    await userEvent.setup().click((await screen.findAllByRole('button', { name: 'Details' }))[0]);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/it may be stuck/)).toHaveTextContent('No processor use and no output for 24 min');
+    expect(within(dialog).queryByText(/print nothing until they finish/)).not.toBeInTheDocument();
+  });
+
+  it('is offered only while something compiles', async () => {
+    boot(true);
+    await screen.findByRole('button', { name: 'PLAY' });
+    expect(screen.queryByRole('button', { name: 'Details' })).not.toBeInTheDocument();
+  });
+
+  it('tells working, waiting and stuck apart', () => {
+    const now = 100 * 60_000;
+    const activity = demoActivity('working', now);
+    expect(buildHealth(activity, now)).toBe('working');
+    expect(buildHealth({ ...activity, cpuPercent: 1, lastBusyMs: now - 60_000 }, now)).toBe('waiting');
+    // Silent but busy is not stuck; idle but printing is not stuck either.
+    expect(buildHealth({ ...activity, cpuPercent: 1, lastBusyMs: now - 20 * 60_000, lastOutputMs: now - 1_000 }, now)).toBe('waiting');
+    expect(buildHealth({ ...activity, cpuPercent: 1, lastBusyMs: now - 20 * 60_000, lastOutputMs: now - 20 * 60_000 }, now)).toBe('stuck');
+    expect(buildHealth({ ...activity, cpuPercent: -1 }, now)).toBe('unknown');
+    expect(shortenStep('Generating vu1_generated/program0.cpp, vu1_generated/program1.cpp')).toBe('Generating program0.cpp, program1.cpp');
+    const t = (key: string) => `<${key}>`;
+    expect(stepLabel('Building the game with the speed profile (the first time takes a while)', t)).toBe('<buildStepProfiled>');
+    expect(stepLabel('Building the game (the first time takes a while)', t)).toBe('<buildStepBuild>');
+    expect(stepLabel('Optimization: the game opens by itself for 240 s', t)).toBe('<buildStepTraining>');
+    expect(stepLabel('Something new the installer prints', t)).toBe('Something new the installer prints');
+  });
+});
+
+describe('a training build left behind', () => {
+  it('locks PLAY, says why and offers the rebuild', async () => {
+    api = createMockApi({ ready: true, profile: 'leftover' });
+    setApi(api);
+    render(<App />);
+    const user = userEvent.setup();
+    const rebuild = vi.spyOn(api, 'rebuildStart');
+    expect(await screen.findByText('Slow test version installed: PLAY locked')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'FINISHING' })).toBeDisabled();
+    // The offer of "Optimize now" does not compete with it.
+    expect(screen.queryByText('Optimization available: more FPS')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Rebuild now' }));
+    expect(rebuild).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses the "--play" shortcut with the explanation', async () => {
+    await expect(createMockApi({ ready: true, profile: 'leftover' }).startGame()).rejects.toMatchObject({ key: 'errorInstrumented' });
   });
 });
 
@@ -150,7 +300,7 @@ describe('rebuild after an update', () => {
     expect(await screen.findByText('Game fixes waiting')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Rebuild' }));
     expect(start).toHaveBeenCalledTimes(1);
-    const snapshot = { profiling: false, profileReady: false, profileSupported: false, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.42, status: 'compiling' as const };
+    const snapshot = { profiling: false, profileReady: false, profileSupported: false, profileStage: 'none' as const, instrumented: false, activity: idleActivity, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.42, status: 'compiling' as const };
     act(() => api.emit('optimizer', snapshot));
     expect(await screen.findByText('Rebuilding the game: 42 %')).toBeInTheDocument();
     expect(screen.getByRole('progressbar', { name: 'Rebuild progress' })).toHaveAttribute('aria-valuenow', '42');
@@ -169,7 +319,7 @@ describe('rebuild after an update', () => {
     const user = userEvent.setup();
     const startGame = vi.spyOn(api, 'startGame');
     await screen.findByRole('button', { name: 'PLAY' });
-    act(() => api.emit('optimizer', { profiling: false, profileReady: false, profileSupported: false, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.3, status: 'compiling' }));
+    act(() => api.emit('optimizer', { profiling: false, profileReady: false, profileSupported: false, profileStage: 'none' as const, instrumented: false, activity: idleActivity, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.3, status: 'compiling' }));
     await user.click(screen.getByRole('button', { name: 'PLAY' }));
     // With "Also while playing" on (the mock's default) the rebuild keeps running: the dialog says the game can stutter.
     expect(await screen.findByText('The game is being rebuilt')).toBeInTheDocument();
@@ -215,7 +365,7 @@ describe('rebuild after an update', () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: 'Performance' }));
     expect(await screen.findByRole('button', { name: 'Rebuild now' })).toBeInTheDocument();
-    act(() => api.emit('optimizer', { profiling: false, profileReady: false, profileSupported: false, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.25, status: 'compiling' }));
+    act(() => api.emit('optimizer', { profiling: false, profileReady: false, profileSupported: false, profileStage: 'none' as const, instrumented: false, activity: idleActivity, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.25, status: 'compiling' }));
     expect(await screen.findAllByRole('progressbar', { name: 'Rebuild progress' })).toHaveLength(2);
     expect(screen.queryByRole('button', { name: 'Rebuild now' })).not.toBeInTheDocument();
   });
@@ -230,7 +380,7 @@ describe('rebuild after an update', () => {
     await user.click(screen.getByRole('button', { name: 'Rebuild now' }));
     expect(start).toHaveBeenCalledTimes(1);
     // The optimizer reports the rebuild running and then finished: the need is asked again and is gone.
-    const snapshot = { profiling: false, profileReady: false, profileSupported: false, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.5, status: 'compiling' as const };
+    const snapshot = { profiling: false, profileReady: false, profileSupported: false, profileStage: 'none' as const, instrumented: false, activity: idleActivity, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.5, status: 'compiling' as const };
     act(() => api.emit('optimizer', snapshot));
     act(() => api.emit('optimizer', { ...snapshot, compiling: false, buildProgress: -1, status: 'idle' }));
     await waitFor(() => expect(screen.queryByText('Rebuild the game to get the latest fixes')).not.toBeInTheDocument());
@@ -243,7 +393,7 @@ describe('rebuild after an update', () => {
     await user.click(await screen.findByRole('button', { name: 'Performance' }));
     expect(await screen.findByRole('button', { name: 'Rebuild now' })).toBeInTheDocument();
     expect(screen.queryByText('The last rebuild of the game failed')).not.toBeInTheDocument();
-    const snapshot = { profiling: false, profileReady: false, profileSupported: false, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.5, status: 'compiling' as const };
+    const snapshot = { profiling: false, profileReady: false, profileSupported: false, profileStage: 'none' as const, instrumented: false, activity: idleActivity, configured: true, compiling: true, captured: 10, compiled: 10, completionRatio: 1, buildProgress: 0.5, status: 'compiling' as const };
     act(() => api.emit('optimizer', snapshot));
     act(() => api.emit('optimizer', { ...snapshot, compiling: false, buildProgress: -1, status: 'error' }));
     expect(await screen.findByText('The last rebuild of the game failed')).toBeInTheDocument();
@@ -348,7 +498,7 @@ describe('installation wizard', () => {
     boot(false);
     const user = userEvent.setup();
     const install = vi.spyOn(api, 'installStart').mockImplementation(async () => {
-      api.emit('install-progress', { stage: 5, stageProgress: 0.5, recentLines: ['[1/2] x'] });
+      api.emit('install-progress', { stage: 5, stageProgress: 0.5, recentLines: ['[1/2] x'], activity: idleActivity });
       api.emit('install-done', { ok: true, cancelled: false, error: '', elf: 'C:\\g\\game\\SCUS_973.99', executable: 'C:\\g\\build\\ps2xRuntime\\gow-2005.exe', failureKind: null });
     });
     const complete = vi.spyOn(api, 'installComplete');
@@ -380,6 +530,38 @@ describe('installation wizard', () => {
       destination: 'C:\\GodOfWar-PC', elf: 'C:\\g\\game\\SCUS_973.99', executable: 'C:\\g\\build\\ps2xRuntime\\gow-2005.exe',
     }));
     await waitFor(() => expect(screen.queryByText('All set!')).not.toBeInTheDocument());
+  });
+
+  it('shows what the installation is doing, and never calls a slow download stuck', async () => {
+    boot(false);
+    const user = userEvent.setup();
+    vi.spyOn(api, 'installStart').mockResolvedValue(undefined);
+    const openLog = vi.spyOn(api, 'openInstallLog');
+    const next = () => screen.getByRole('button', { name: 'NEXT' });
+    await waitFor(() => expect(next()).toBeEnabled(), { timeout: 4000 });
+    await user.click(next());
+    await screen.findByText('Where to install');
+    await waitFor(() => expect(next()).toBeEnabled());
+    await user.click(next());
+    await screen.findByText('Required components');
+    await user.click(next());
+    await screen.findByText('Ready to install');
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'INSTALL' }));
+    // Nothing to show before the installer printed anything.
+    expect(screen.queryByRole('button', { name: 'Details' })).not.toBeInTheDocument();
+    // A download that has printed nothing for a long time, with an idle processor: waiting on the connection, not stuck.
+    const now = Date.now();
+    const download = { ...demoActivity('download', now), startedAtMs: now - 40 * 60_000, lastOutputMs: now - 30 * 60_000, lastBusyMs: now - 30 * 60_000 };
+    act(() => api.emit('install-progress', { stage: 0, stageProgress: -1, recentLines: download.recentLines, activity: download }));
+    await user.click(await screen.findByRole('button', { name: 'Details' }));
+    expect(await screen.findByText(/Downloading: this step waits on your internet connection/)).toBeInTheDocument();
+    expect(screen.getByText('Downloading the compiler (about 170 MB)')).toBeInTheDocument();
+    expect(screen.queryByText(/it may be stuck/)).not.toBeInTheDocument();
+    // The window follows the installation live, and its log is the installation's.
+    act(() => api.emit('install-progress', { stage: 5, stageProgress: 0.5, recentLines: [], activity: demoActivity('working') }));
+    expect(await screen.findByText('Working: the build is using 9.4 processor cores right now.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Open the full log' }));
+    expect(openLog).toHaveBeenCalledTimes(1);
   });
 
   it('applies a translation patch to the original ISO and installs the translated copy', async () => {
@@ -848,16 +1030,16 @@ describe('launcher update notice', () => {
   it('disables the button while an installation, an optimization or a texture pack runs', async () => {
     boot(true, availableUpdate());
     await screen.findByRole('button', { name: 'Update' });
-    act(() => api.emit('install-progress', { stage: 2, stageProgress: 0.1, recentLines: [] }));
+    act(() => api.emit('install-progress', { stage: 2, stageProgress: 0.1, recentLines: [], activity: idleActivity }));
     expect(screen.getByRole('button', { name: 'Update' })).toBeDisabled();
     expect(screen.getByText('Finish the installation first.')).toBeInTheDocument();
     act(() => api.emit('install-done', { ok: true, cancelled: false, error: '', elf: '', executable: '', failureKind: null }));
     expect(screen.getByRole('button', { name: 'Update' })).toBeEnabled();
 
-    act(() => api.emit('optimizer', { profiling: false, profileReady: false, profileSupported: false, configured: true, compiling: true, captured: 1, compiled: 1, completionRatio: 0.5, buildProgress: 0.2, status: 'compiling' }));
+    act(() => api.emit('optimizer', { profiling: false, profileReady: false, profileSupported: false, profileStage: 'none' as const, instrumented: false, activity: idleActivity, configured: true, compiling: true, captured: 1, compiled: 1, completionRatio: 0.5, buildProgress: 0.2, status: 'compiling' }));
     expect(screen.getByRole('button', { name: 'Update' })).toBeDisabled();
     expect(screen.getByText('Wait for the optimization to finish.')).toBeInTheDocument();
-    act(() => api.emit('optimizer', { profiling: false, profileReady: false, profileSupported: false, configured: true, compiling: false, captured: 1, compiled: 1, completionRatio: 1, buildProgress: -1, status: 'idle' }));
+    act(() => api.emit('optimizer', { profiling: false, profileReady: false, profileSupported: false, profileStage: 'none' as const, instrumented: false, activity: idleActivity, configured: true, compiling: false, captured: 1, compiled: 1, completionRatio: 1, buildProgress: -1, status: 'idle' }));
     expect(screen.getByRole('button', { name: 'Update' })).toBeEnabled();
 
     act(() => api.emit('texture-pack-progress', { stage: 'downloading', done: 1, total: 100, overall: 0.1 }));

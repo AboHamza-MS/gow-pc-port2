@@ -231,9 +231,18 @@ fn start_game(app: AppHandle, window: WebviewWindow, state: State<'_, AppState>)
     if state.game.lock().unwrap().is_some() {
         return Ok(());
     }
+    // GOW-Port: "Optimize now" opens its own game; a second one would cancel it (and the training build would be left behind).
+    if state.optimizer.snapshot().profiling {
+        return Err(CommandError { key: "errorProfiling".into(), detail: String::new() });
+    }
     // If a rebuild finished since last time, the active copy of the executable is updated before opening.
     state.optimizer.prepare_to_play();
     let settings = state.snapshot();
+    // GOW-Port: the instrumented training build of an interrupted "Optimize now" is several times slower than the game: it is
+    // never opened (the interface explains it and the optimizer rebuilds the game by itself).
+    if gow_core::optimizer::is_instrumented(Path::new(&settings.executable)) {
+        return Err(CommandError { key: "errorInstrumented".into(), detail: settings.executable.clone() });
+    }
     let options = StartOptions { vu1_capture: state.optimizer.capture_directory() };
     let finished_app = app.clone();
     // Written before the game starts, so a session that ends at once cannot be overwritten by a late "started".
@@ -823,6 +832,13 @@ fn profile_start(state: State<'_, AppState>) -> Result<(), String> {
     }
 }
 
+/// GOW-Port: the player cancelled "Optimize now" (after confirming). Its game closes with it; a training build already made is
+/// rebuilt into a normal one by the optimizer.
+#[tauri::command]
+fn profile_cancel(state: State<'_, AppState>) -> bool {
+    state.optimizer.cancel_profile()
+}
+
 // ---------------------------------------------------------------------------------------------- self-update
 
 #[tauri::command]
@@ -939,8 +955,10 @@ pub fn run() {
         .on_window_event(|window, event| {
             // A texture pack takes minutes to install and a close (the X, Alt+F4, the taskbar) would throw it away: the
             // window stays open and the interface asks the player first.
+            // GOW-Port: the same for "Optimize now": closing the launcher kills it, and the game it opened, halfway.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.app_handle().state::<AppState>().textures_running.load(Ordering::SeqCst) {
+                let state = window.app_handle().state::<AppState>();
+                if state.textures_running.load(Ordering::SeqCst) || state.optimizer.snapshot().profiling {
                     api.prevent_close();
                     let _ = window.emit("close-blocked", ());
                 }
@@ -1003,6 +1021,7 @@ pub fn run() {
             rebuild_state,
             rebuild_start,
             profile_start,
+            profile_cancel,
             update_state,
             update_install,
             update_open_release,

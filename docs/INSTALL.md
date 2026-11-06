@@ -199,6 +199,9 @@ install.cmd -Destination "D:\GodOfWar"               # keep the game data and th
 | `--optimize [seconds]` | Force it, optionally for a different duration (default 240 s) |
 | `--jobs N` | Parallel compiler processes. Default: the cores minus a reserve (2 from 8 cores, 1 from 4 to 7, none below), at most one per 2 GB of RAM. An explicit value skips the reserve |
 | `--compiler g++\|clang` | C++ compiler (`g++` by default; `clang` uses `clang`/`clang++`, also selectable via `CXX=clang++` or `GOW_COMPILER=clang`) |
+| `--pgo auto\|on\|off` | Speed profile (`clang` only, requires `llvm-profdata` from the `llvm` package when training). `auto` (default): use `build/pgo/gow.profdata` if already present. `on`: train it during the optimization run and rebuild with it. `off`: disable PGO |
+| `--retrain-pgo` | Train the speed profile again even when `build/pgo/gow.profdata` already exists |
+| `--vu1-memory-limit-gb N` | RAM cap for the VU1 generator in GB (default 4, `0` = unlimited) |
 | `--normal-priority` | Do not lower the CPU and I/O priority of the long steps (by default they run under `nice -n 10`, and `ionice -c 3` when it works) |
 | `--recomp-exe FILE` | Use a prebuilt `ps2_recomp` |
 | `--tools-exe FILE` | Use a prebuilt `ps2-tools` |

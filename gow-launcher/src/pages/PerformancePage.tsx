@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Activity, Cpu, Flame, Gauge, Gpu, Hourglass, Layers, MemoryStick, Microchip, RefreshCw, Rocket } from 'lucide-react';
+import { BuildDetailsButton } from '../components/Shell';
 import { GroupTitle, Note, ProgressBar, SecondaryButton, Select, SettingRow, Switch, type Option } from '../components/ui';
 import { useApp } from '../state/app';
 
@@ -13,7 +14,7 @@ export function selectedScale(internalResolution: string): number {
 }
 
 export function PerformancePage() {
-  const { settings, patch, optimizer, info, api, t, f, rebuild, rebuildBlocker, startRebuild, startProfile } = useApp();
+  const { settings, patch, optimizer, info, api, t, f, rebuild, rebuildBlocker, startRebuild, requestProfile } = useApp();
   const optimizing = settings.optimizationDestination.length > 0;
   const { graphicsCards, platform } = info;
   const gpuUnavailable = settings.gpu !== 'auto' && !graphicsCards.some((card) => card.id === settings.gpu);
@@ -54,6 +55,7 @@ export function PerformancePage() {
                   {optimizer.buildProgress >= 0 ? f('rebuildProgress', Math.min(100, Math.round(optimizer.buildProgress * 100))) : t('rebuildRunning')}
                 </span>
                 <ProgressBar label={t('rebuildProgressLabel')} fraction={optimizer.buildProgress} className="w-[220px]" />
+                <BuildDetailsButton />
               </div>
             ) : (
               <div className="mt-2.5 flex items-center gap-3">
@@ -127,15 +129,23 @@ export function PerformancePage() {
       <SettingRow
         hidden={!(optimizing && optimizer.profileSupported)}
         icon={Flame} title={t('profileTitle')}
-        description={t(optimizer.profiling ? 'profileRunningDesc' : optimizer.profileReady ? 'profileReadyDesc' : 'profileOfferDesc')}
+        description={t(
+          optimizer.profiling
+            ? 'profileRunningDesc'
+            : optimizer.instrumented
+              ? 'instrumentedDesc'
+              : optimizer.profileReady
+                ? 'profileReadyDesc'
+                : 'profileOfferDesc',
+        )}
       >
         {optimizer.profiling ? (
           <ProgressBar label={t('profileProgressLabel')} fraction={optimizer.buildProgress} className="w-[160px]" />
-        ) : optimizer.profileReady ? null : (
+        ) : optimizer.profileReady || optimizer.instrumented ? null : (
           <SecondaryButton
             disabled={optimizer.compiling || rebuildBlocker !== null}
             title={rebuildBlocker ? t(`rebuildBlocked_${rebuildBlocker}`) : undefined}
-            onClick={() => void startProfile()}
+            onClick={requestProfile}
           >
             {t('profileButton')}
           </SecondaryButton>

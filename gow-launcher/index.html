@@ -5,8 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>God Of War (2005): PC Launcher</title>
   </head>
-  <body>
-    <div id="root"></div>
+  <body style="margin: 0; background: #1a110b">
+    <!-- GOW-Port: shown until the interface's first render replaces it (the same spinner as BootSplash). -->
+    <div id="root">
+      <div style="height: 100vh; display: flex; align-items: center; justify-content: center">
+        <div style="width: 36px; height: 36px; border-radius: 50%; border: 3px solid #5a3d22; border-top-color: #e0b25c; animation: gow-boot-spin 0.9s linear infinite"></div>
+      </div>
+      <style>@keyframes gow-boot-spin { to { transform: rotate(360deg); } }</style>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

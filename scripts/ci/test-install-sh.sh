@@ -97,13 +97,20 @@ case "$report" in
     *) fail "the report is not what the launcher expects: $report" ;;
 esac
 
-echo "compiler selection (clang++)"
+echo "compiler selection (clang++) and PGO"
 set_compiler clang
 expect "clang sets CC_BIN" clang "$CC_BIN"
 expect "clang sets CXX_BIN" clang++ "$CXX_BIN"
 expect "clang updates CHECKS" "cmake ninja clang++ git pkg-config gl x11 xrandr xinerama xcursor xi xkbcommon wayland-client alsa" "$CHECKS"
 PATH="$fake" find_missing fedora
 expect "missing clang++ maps to clang package on fedora" "ninja-build clang pkgconf-pkg-config mesa-libGL-devel libX11-devel libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel libxkbcommon-devel wayland-devel alsa-lib-devel" "${MISSING_PACKAGES[*]}"
+set_pgo on
+expect "clang with --pgo on requires llvm-profdata" "cmake ninja clang++ llvm-profdata git pkg-config gl x11 xrandr xinerama xcursor xi xkbcommon wayland-client alsa" "$CHECKS"
+expect "debian llvm-profdata maps to llvm" llvm "$(package_for debian llvm-profdata)"
+expect "fedora llvm-profdata maps to llvm" llvm "$(package_for fedora llvm-profdata)"
+expect "arch llvm-profdata maps to llvm" llvm "$(package_for arch llvm-profdata)"
+set_pgo auto
+expect "restoring --pgo auto drops llvm-profdata from CHECKS" "cmake ninja clang++ git pkg-config gl x11 xrandr xinerama xcursor xi xkbcommon wayland-client alsa" "$CHECKS"
 set_compiler g++
 expect "restoring g++ resets CXX_BIN" g++ "$CXX_BIN"
 expect "c++ is the gcc family" gcc "$(compiler_family /usr/bin/c++)"

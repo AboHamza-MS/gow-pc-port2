@@ -66,8 +66,11 @@ Last reviewed: October 2026, against the code in this repository.
 
 ## Open problems
 
-- **Hang after saving (Windows):** after a save completes, a sequence of events can freeze the game. It has been
-  diagnosed down to the VIF/DMA path but not fixed. If it happens, the log ends in the middle of a save; see
+- **Hang after saving (Windows):** after a save completes, a sequence of events can freeze the game. It was first
+  traced to the VIF/DMA path; a 0.3.2 sample (clang build with the speed profile, early FINISH on) instead shows the game
+  spinning in the animation controller update `0x116EF0`, in the loop that walks an animation's time in fixed steps
+  (`0x117358..0x117384`), at the end of the save menus. Why that loop stops converging is not known yet: since this change the
+  hang report prints its values (`[gow-hang] animation step loop` / `animation controller`). Not fixed; see
   [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) for what to collect.
 - **Windows Release build:** the default installer configuration (no whole-program optimization, AVX2 off) has never
   been compared in game against the faster development build. Numbers measured in a development build may

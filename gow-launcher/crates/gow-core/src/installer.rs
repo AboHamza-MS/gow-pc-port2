@@ -4,11 +4,13 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
 
+use crate::activity::{unix_ms, BuildActivity};
 use crate::failure;
 use crate::game::EXECUTABLE_NAME;
 use crate::paths;
@@ -316,11 +318,14 @@ pub struct InstallProgress {
     pub stage_progress: f64,
     /// The last six output lines.
     pub recent_lines: Vec<String>,
+    /// GOW-Port (issue #32): what the installation is doing, for the wizard's details window (the processor its
+    /// processes use is read once a second while it runs).
+    pub activity: BuildActivity,
 }
 
 impl Default for InstallProgress {
     fn default() -> Self {
-        Self { stage: -1, stage_progress: -1.0, recent_lines: Vec::new() }
+        Self { stage: -1, stage_progress: -1.0, recent_lines: Vec::new(), activity: BuildActivity::started(0) }
     }
 }
 
@@ -350,6 +355,7 @@ impl ProgressTracker {
         if self.progress.recent_lines.len() > 6 {
             self.progress.recent_lines.remove(0);
         }
+        self.progress.activity.after_line(line, unix_ms());
         true
     }
 
@@ -469,7 +475,7 @@ pub fn install_arguments(request: &InstallRequest, destination: &str, windows: b
 /// ends.
 pub fn start(
     request: InstallRequest,
-    on_progress: impl Fn(&InstallProgress) + Send + 'static,
+    on_progress: impl Fn(&InstallProgress) + Send + Sync + 'static,
     on_done: impl FnOnce(InstallOutcome) + Send + 'static,
 ) -> std::io::Result<Installation> {
     let destination = if cfg!(windows) {
@@ -482,11 +488,16 @@ pub fn start(
         std::fs::create_dir_all(parent)?;
     }
     let log = Arc::new(Mutex::new(std::fs::File::create(&request.log_file)?));
-    let tracker = Arc::new(Mutex::new(ProgressTracker::default()));
+    let mut fresh = ProgressTracker::default();
+    fresh.progress.activity = BuildActivity::started(unix_ms());
+    let tracker = Arc::new(Mutex::new(fresh));
     let cancelled = Arc::new(Mutex::new(false));
 
-    let (line_tracker, line_log) = (Arc::clone(&tracker), Arc::clone(&log));
-    let (exit_tracker, exit_cancelled) = (Arc::clone(&tracker), Arc::clone(&cancelled));
+    let on_progress = Arc::new(on_progress);
+    let finished = Arc::new(AtomicBool::new(false));
+    let (line_tracker, line_log, line_progress) = (Arc::clone(&tracker), Arc::clone(&log), Arc::clone(&on_progress));
+    let (exit_tracker, exit_cancelled, exit_finished) =
+        (Arc::clone(&tracker), Arc::clone(&cancelled), Arc::clone(&finished));
     let run = script::run(
         ScriptOptions { script: request.script, arguments, below_normal_priority: false },
         move |line| {
@@ -494,15 +505,28 @@ pub fn start(
             let _ = writeln!(line_log.lock().unwrap(), "{line}");
             let mut tracker = line_tracker.lock().unwrap();
             if tracker.feed(line) {
-                on_progress(&tracker.progress);
+                line_progress(&tracker.progress);
             }
         },
         move |code| {
+            exit_finished.store(true, Ordering::SeqCst);
             let outcome =
                 outcome_for(&destination, code, *exit_cancelled.lock().unwrap(), &exit_tracker.lock().unwrap());
             on_done(outcome);
         },
     )?;
+    // GOW-Port (issue #32): once a second, the processor the installation uses; the snapshot also carries the lines that
+    // arrived meanwhile. A long silent step (the native VU1 code, the link) is told apart from a stall this way.
+    let (sample_tracker, sample_progress) = (Arc::clone(&tracker), Arc::clone(&on_progress));
+    crate::activity::spawn_tree_sampler(run.pid(), move |percent| {
+        if finished.load(Ordering::SeqCst) {
+            return false;
+        }
+        let mut tracker = sample_tracker.lock().unwrap();
+        tracker.progress.activity.after_sample(percent, unix_ms());
+        sample_progress(&tracker.progress);
+        true
+    });
     Ok(Installation { run, cancelled })
 }
 
@@ -607,6 +631,20 @@ mod tests {
         assert_eq!(tracker.progress.stage, 5);
         tracker.feed("==> Optimization");
         assert_eq!((tracker.progress.stage, tracker.progress.stage_progress), (6, -1.0));
+    }
+
+    #[test]
+    fn the_installation_reports_its_activity_for_the_details_window() {
+        let mut tracker = ProgressTracker::default();
+        assert_eq!(tracker.progress.activity.cpu_percent, -1.0);
+        tracker.feed("==> Downloading the compiler (llvm-mingw 20261020, about 170 MB)");
+        tracker.feed("==> Building the game (the first time takes a while: ~6,400 files)");
+        tracker.feed("[10/100] Building CXX object runner/a.cpp.obj");
+        let activity = &tracker.progress.activity;
+        assert_eq!(activity.step, "Building the game (the first time takes a while: ~6,400 files)");
+        assert_eq!((activity.files_done, activity.files_total), (10, 100));
+        assert!(activity.last_output_ms > 0);
+        assert_eq!(activity.recent_lines.len(), 3);
     }
 
     #[test]
