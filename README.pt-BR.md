@@ -11,6 +11,7 @@
 [![Linguagem](https://img.shields.io/badge/C%2B%2B-20%20%2B%20Rust-00599C)](docs/dev/ARCHITECTURE.md)
 [![Renderer](https://img.shields.io/badge/renderer-OpenGL%204.6-5586A4)](docs/dev/RENDERING.md)
 [![Licença](https://img.shields.io/badge/licen%C3%A7a-GPL--3.0-blue)](LICENSE)
+[![Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/QQmjMx7hz)
 
 </div>
 
