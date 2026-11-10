@@ -1,0 +1,38 @@
+name: Build and Release Windows Installer
+
+on:
+  push:
+    tags:
+      - 'v*' # سيعمل هذا الأكشن فقط عندما تقوم بعمل تاق لإصدار جديد مثل v1.0.0
+
+jobs:
+  build:
+    runs-on: windows-latest # تحديد بيئة العمل ويندوز
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # ---- [خطوة اختيارية: إعداد لغة البرمجة - مثال بايثون] ----
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-node-version: '3.x'
+
+    - name: Install Dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install pyinstaller
+
+    - name: Build EXE
+      run: |
+        pyinstaller --onefile main.py # تحويل المشروع لملف exe واحد
+    # -------------------------------------------------------
+
+    - name: Create Release
+      id: create_release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: dist/main.exe # المسار الذي تخرج فيه أداة البناء الملف النهائي
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
